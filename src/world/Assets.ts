@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BUILDINGS, ROADS, seeded } from './Map';
+import { BUILDINGS, GAME_CENTER, ROADS, TABLE, seeded } from './Map';
 
 type Shape = 'box' | 'sphere' | 'cylinder';
 type MaterialName = 'road' | 'pavement' | 'white' | 'ink' | 'glass' | 'metal' | 'wall0' | 'wall1' | 'wall2' | 'leaf';
@@ -257,5 +257,47 @@ export function buildMap(scene: THREE.Scene, kit: AssetKit): void {
   }
   for (const x of [-118, 118]) box('metal', x, 0.55, 0, 0.3, 1.1, 236);
   for (const z of [-118, 118]) box('metal', 0, 0.55, z, 236, 1.1, 0.3);
+  buildGameCenter(scene, kit, box);
   kit.flush(scene);
+}
+
+/** Game Center: open-air hall with ITTF table tennis court. Play axis = Z. */
+export function buildGameCenter(scene: THREE.Scene, kit: AssetKit, box?: (m: MaterialName, x: number, y: number, z: number, w: number, h: number, d: number) => void): void {
+  const gx = GAME_CENTER.x, gz = GAME_CENTER.z;
+  const put = box ?? ((m, x, y, z, w, h, d) => kit.stamp('box', m, x, y, z, w, h, d));
+  // Court apron + surrounding pad.
+  put('white', gx, 0.03, gz, 11, 0.08, 9);
+  put('glass', gx, 0.06, gz, 8.4, 0.06, 6.6);
+  // Table top: length (2.74) runs along play axis Z, width (1.525) across X.
+  // NOTE: TABLE.w = width (X), TABLE.d = length (Z) — matches the physics in TableTennis.ts.
+  put('wall2', gx, TABLE.h - 0.03, gz, TABLE.w, 0.06, TABLE.d);
+  // White edge lines + center line (along play axis Z).
+  const ly = TABLE.h + 0.005;
+  put('white', gx - TABLE.w / 2 + 0.02, ly, gz, 0.04, 0.012, TABLE.d);
+  put('white', gx + TABLE.w / 2 - 0.02, ly, gz, 0.04, 0.012, TABLE.d);
+  put('white', gx, ly, gz - TABLE.d / 2 + 0.02, TABLE.w, 0.012, 0.04);
+  put('white', gx, ly, gz + TABLE.d / 2 - 0.02, TABLE.w, 0.012, 0.04);
+  put('white', gx, ly, gz, 0.025, 0.012, TABLE.d);
+  // Legs + undercarriage.
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+    put('ink', gx + sx * (TABLE.w / 2 - 0.2), TABLE.h / 2 - 0.05, gz + sz * (TABLE.d / 2 - 0.3), 0.09, TABLE.h - 0.1, 0.09);
+  }
+  put('metal', gx, TABLE.h - 0.12, gz, TABLE.w - 0.3, 0.06, TABLE.d - 0.4);
+  // Net: spans 1.83m across X at z=gz, 15.25cm above table.
+  const netTop = TABLE.h + TABLE.netH;
+  put('ink', gx, TABLE.h + TABLE.netH / 2, gz, 1.83, TABLE.netH, 0.02);
+  put('white', gx, netTop + 0.008, gz, 1.83, 0.016, 0.03);
+  for (const sx of [-1, 1]) put('metal', gx + sx * 0.915, TABLE.h + TABLE.netH / 2, gz, 0.03, TABLE.netH + 0.06, 0.03);
+  // Low barriers around court (visual only, walk-through).
+  for (const [bx, bz, w, d] of [[gx, gz - 4.2, 9, 0.15], [gx, gz + 4.2, 9, 0.15], [gx - 5, gz, 0.15, 8.4], [gx + 5, gz, 0.15, 8.4]] as const) {
+    put('wall1', bx, 0.45, bz, w, 0.9, d);
+  }
+  // Corner floodlight poles + hall sign.
+  for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]] as const) {
+    kit.stamp('cylinder', 'ink', gx + sx * 5.4, 2.6, gz + sz * 4.6, 0.09, 5.2, 0.09);
+    put('white', gx + sx * 5.4, 5.1, gz + sz * 4.6, 0.7, 0.18, 0.5);
+  }
+  // Back wall with signage.
+  put('wall0', gx, 1.75, gz + 5.6, 12, 3.5, 0.4);
+  kit.sign(scene, 'GAME CENTER · TABLE TENNIS', gx, 2.9, gz + 5.35, 10, Math.PI);
 }

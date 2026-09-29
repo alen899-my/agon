@@ -13,6 +13,12 @@ export function physicsItems(state: WorldSnapshot | null): PhysicsItem[] {
     { id: 'parked', label: 'Parked cars solid', done: true, hint: '3 marked cars block' },
     { id: 'peds', label: 'Pedestrians flee + push', done: true, hint: 'Drive near a crowd' },
     { id: 'repair', label: 'Repair at South Station', done: (state?.damage ?? 0) === 0, hint: 'Damage caps top speed' },
+    { id: 'tt-gravity', label: 'Ball gravity + air drag', done: true, hint: '9.81 m/s², drag slows long shots' },
+    { id: 'tt-magnus', label: 'Magnus spin (topspin dips)', done: state?.tableFlags.topspin ?? false, hint: state?.tableFlags.topspin ? 'Topspin dipped ✓' : 'Hit TOP / swipe up' },
+    { id: 'tt-smash', label: 'Smash speed', done: state?.tableFlags.smash ?? false, hint: state?.tableFlags.smash ? 'Smashed ✓' : 'Shift+hit on high ball' },
+    { id: 'tt-net', label: 'Net + cord', done: state?.tableFlags.netCord ?? false, hint: state?.tableFlags.netCord ? 'Net cord seen ✓' : 'Clip the net tape' },
+    { id: 'tt-edge', label: 'Table + edge bounce', done: state?.tableFlags.edge ?? false, hint: state?.tableFlags.edge ? 'Edge! ✓' : 'Aim the white line' },
+    { id: 'tt-match', label: 'First to 11, win by 2', done: (state?.table?.you ?? 0) + (state?.table?.aiScore ?? 0) > 0, hint: state?.table ? `${state.table.you}–${state.table.aiScore}` : 'Enter the Game Center' },
   ];
 }
 export function PhysicsChecklist({ state }: { state: WorldSnapshot | null }) {

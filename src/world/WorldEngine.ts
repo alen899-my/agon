@@ -1,9 +1,11 @@
 import * as THREE from 'three';
 import { GameLoop } from '../game/GameLoop';
 import type { Theme } from '../game/State';
+import { ttSound, unlockAudio } from '../game/Sound';
 import { AssetKit, buildMap, type Stickman, type Vehicle } from './Assets';
-import { BUILDINGS, PLACES, seeded } from './Map';
+import { BUILDINGS, GAME_CENTER, PLACES, TABLE, seeded } from './Map';
 import { Simulation, type WorldAction, type WorldSnapshot } from './Simulation';
+import type { TTShot } from './TableTennis';
 
 export type QualityLevel = 'low' | 'balanced' | 'high' | 'ultra';
 const QUALITY_PIXEL: Record<QualityLevel, number> = { low: 1, balanced: 1.5, high: 2, ultra: 2.5 };
@@ -21,6 +23,12 @@ export class WorldEngine {
   private readonly sun = new THREE.DirectionalLight(0xffffff, 3);
   private readonly ambient = new THREE.HemisphereLight(0xffffff, 0x555555, 2.2);
   private readonly marker: THREE.Mesh;
+  private readonly ttBall: THREE.Mesh;
+  private readonly ttPaddleYou = new THREE.Group();
+  private readonly ttPaddleAi = new THREE.Group();
+  private readonly ttTrail: THREE.Line;
+  private ttTrailPos: Float32Array;
+  private lastTTEvents = 0;
   private readonly loop: GameLoop;
   private readonly people: { actor: Stickman }[] = [];
   private readonly traffic: Vehicle[] = [];
@@ -58,6 +66,25 @@ export class WorldEngine {
     }
     this.marker = new THREE.Mesh(new THREE.TorusGeometry(1.2, 0.07, 8, 48), new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false }));
     this.marker.rotation.x = -Math.PI / 2; this.marker.renderOrder = 5; this.scene.add(this.marker);
+    // Table tennis dynamic props (world-anchored at GAME_CENTER).
+    const ballMat = new THREE.MeshStandardMaterial({ color: 0xff6d1f, roughness: 0.35 });
+    this.ttBall = new THREE.Mesh(new THREE.SphereGeometry(TABLE ? 0.05 : 0.05, 20, 14), ballMat);
+    this.ttBall.castShadow = true; this.scene.add(this.ttBall);
+    const paddleFace = new THREE.CylinderGeometry(0.11, 0.11, 0.025, 24);
+    const faceMat = new THREE.MeshStandardMaterial({ color: 0xb3122e, roughness: 0.6 });
+    const handleMat = new THREE.MeshStandardMaterial({ color: 0x4a2f1d, roughness: 0.8 });
+    for (const [group, flip] of [[this.ttPaddleYou, 0], [this.ttPaddleAi, Math.PI]] as const) {
+      const face = new THREE.Mesh(paddleFace, faceMat); face.castShadow = true;
+      face.rotation.x = Math.PI / 2 + flip * 0;
+      const handle = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.16, 0.03), handleMat);
+      handle.position.y = -0.16;
+      group.add(face, handle); this.scene.add(group);
+    }
+    this.ttTrailPos = new Float32Array(14 * 3);
+    const trailGeo = new THREE.BufferGeometry();
+    trailGeo.setAttribute('position', new THREE.BufferAttribute(this.ttTrailPos, 3));
+    this.ttTrail = new THREE.Line(trailGeo, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55 }));
+    this.ttTrail.frustumCulled = false; this.scene.add(this.ttTrail);
     this.setTheme('light');
     this.loop = new GameLoop(dt => {
       this.simulation.update(dt); this.hudTime += dt;
@@ -66,7 +93,20 @@ export class WorldEngine {
     this.emit();
   }
   private emit(): void { this.publish(this.simulation.snapshot); }
-  begin(): void { this.simulation.begin(); this.emit(); }
+  begin(): void { unlockAudio(); this.simulation.begin(); this.emit(); }
+  enterTable(): void { unlockAudio(); this.simulation.enterTable(); this.lastTTEvents = this.simulation.table.events.length; this.emit(); }
+  rematch(): void { unlockAudio(); this.simulation.table.reset(); this.lastTTEvents = this.simulation.table.events.length; this.emit(); }
+  exitTable(): void { this.simulation.exitTable(); this.emit(); }
+  tableSwing(kind?: TTShot): void { this.simulation.tableSwing(kind); }
+  setTableX(x: number): void { if (this.simulation.mode === 'table') this.simulation.table.setPlayerX(x); }
+  swipeShot(dx: number, dy: number): void {
+    if (this.simulation.mode !== 'table') return;
+    // Swipe up fast = topspin/smash, down = chop, else drive. Horizontal aims via paddle offset.
+    this.simulation.table.movePlayer(dx * 0.6);
+    if (dy < -40) this.simulation.tableSwing(this.simulation.table.ball.y > 1.25 ? 'smash' : 'topspin');
+    else if (dy > 40) this.simulation.tableSwing('chop');
+    else if (Math.abs(dx) + Math.abs(dy) > 24) this.simulation.tableSwing('drive');
+  }
   start(): void { if (!this.suspended) this.loop.start(); }
   togglePause(): void { this.simulation.togglePause(); this.emit(); }
   toggleView(): void { this.simulation.toggleView(); this.emit(); }
@@ -176,12 +216,69 @@ export class WorldEngine {
       vehicle.group.position.set(p.x, 0.08, p.z); vehicle.group.rotation.y = -p.yaw;
       vehicle.update(p.speed, p.steer, dt, p.braking);
     });
+    // Table tennis sounds: play only fresh sim events.
+    const evts = sim.table.events;
+    if (evts.length !== this.lastTTEvents) {
+      for (let i = this.lastTTEvents; i < evts.length; i++) {
+        const e = evts[i];
+        if (e.kind === 'paddle' || e.kind === 'serve' || e.kind === 'table' || e.kind === 'net' || e.kind === 'edge' || e.kind === 'smash' || e.kind === 'topspin' || e.kind === 'point') ttSound(e.kind, e.speedKmh);
+      }
+      this.lastTTEvents = evts.length;
+    }
+    // Table tennis actors: ball, paddles, trail, player + AI placement.
+    const inTable = sim.mode === 'table';
+    this.ttBall.visible = inTable; this.ttPaddleYou.visible = inTable; this.ttPaddleAi.visible = inTable; this.ttTrail.visible = inTable;
+    if (inTable) {
+      const gx = GAME_CENTER.x, gz = GAME_CENTER.z;
+      const t = sim.table;
+      this.ttBall.position.set(gx + t.ball.x, t.ball.y, gz + t.ball.z);
+      const ballScale = 1 + Math.min(0.6, Math.hypot(t.vel.x, t.vel.y, t.vel.z) * 0.03);
+      this.ttBall.scale.setScalar(ballScale);
+      this.ttPaddleAi.position.set(gx + t.ai.x, t.ai.y, gz + t.ai.z);
+      this.ttPaddleAi.rotation.set(0.5 + t.swingAi * 1.1, Math.PI, t.ai.x * 0.3);
+      const trail = t.trail;
+      for (let i = 0; i < 14; i++) {
+        const p = trail[Math.max(0, trail.length - 14 + i)] ?? t.ball;
+        this.ttTrailPos[i * 3] = gx + p.x; this.ttTrailPos[i * 3 + 1] = p.y; this.ttTrailPos[i * 3 + 2] = gz + p.z;
+      }
+      this.ttTrail.geometry.attributes.position.needsUpdate = true;
+      // First-person: hide your own avatar (head would block the camera).
+      this.avatar.group.visible = false;
+      const opp = this.people[0];
+      if (opp) {
+        opp.actor.group.position.set(gx + t.ai.x * 0.9, 0.08, gz + t.ai.z - 0.55);
+        opp.actor.group.rotation.y = Math.PI;
+        opp.actor.animate({ phase: sim.time * 3, intensity: 0.25, airborne: false, dip: 0, idle: sim.time });
+      }
+    }
     // Camera kick on fresh impacts.
     if (sim.impact && sim.impact.at !== this.lastImpactAt) { this.lastImpactAt = sim.impact.at; this.shake = Math.min(1, sim.impact.speed / 40 + 0.35); }
     this.shake *= 0.9;
     const shakeX = this.shake * Math.sin(sim.time * 70) * 0.35, shakeY = this.shake * Math.cos(sim.time * 55) * 0.25;
     const waypoint = PLACES.find(p => p.id === sim.waypoint);
-    this.marker.visible = Boolean(waypoint); if (waypoint) this.marker.position.set(waypoint.x, 0.25, waypoint.z);
+    // Hide the waypoint ring during a match — it sits on the court otherwise.
+    this.marker.visible = Boolean(waypoint) && !inTable;
+    if (waypoint && !inTable) this.marker.position.set(waypoint.x, 0.25, waypoint.z);
+    if (inTable) {
+      const gx = GAME_CENTER.x, gz = GAME_CENTER.z;
+      const t = sim.table;
+      // First-person: eyes just behind your end, gaze tracks the ball.
+      this.camera.position.set(gx + t.player.x * 0.85 + shakeX, 1.72 + shakeY, gz + t.player.z + 0.45);
+      this.target.set(gx + t.ball.x * 0.55, Math.max(0.6, t.ball.y * 0.85), gz - 1.2);
+      this.camera.lookAt(this.target);
+      // Bat pinned into view: bottom-center, follows your lateral position,
+      // punches forward on every swing so hits feel connected.
+      this.direction.subVectors(this.target, this.camera.position).normalize();
+      this.desired.copy(this.camera.position)
+        .addScaledVector(this.direction, 0.62 - t.swingYou * 0.12)
+        .add(this.hit.set(t.player.x * 0.12, -0.3 + t.swingYou * 0.08, 0));
+      this.ttPaddleYou.position.copy(this.desired);
+      this.ttPaddleYou.lookAt(this.camera.position);
+      this.ttPaddleYou.rotateX(-0.35 - t.swingYou * 0.9);
+      this.sun.position.set(gx + 20, 65, gz + 15); this.sun.target.position.set(gx, 0, gz); this.sun.target.updateMatrixWorld();
+      this.renderer.render(this.scene, this.camera);
+      return;
+    }
     if (sim.phase === 'ready') {
       this.camera.position.set(69, 52, 78); this.camera.lookAt(-7, 0, -8);
     } else if (sim.view === 'first') {

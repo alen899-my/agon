@@ -11,7 +11,13 @@ export const PLACES: Place[] = [
   { id: 'homes', name: 'The Residences', category: 'NEIGHBORHOOD', x: -42, z: -27, description: 'Apartment blocks around a shared courtyard.' },
   { id: 'station', name: 'South Station', category: 'TRANSIT', x: 42, z: 27, description: 'The beginning of a journey. Platforms open to the sky.' },
   { id: 'works', name: 'The Foundry', category: 'INDUSTRIAL', x: -45, z: 65, description: 'Old workshops at the edge of the neighborhood.' },
+  { id: 'game-center', name: 'Game Center', category: 'SPORTS & ARCADE', x: -22, z: 48, description: 'Table tennis hall. Walk in to play a match.' },
 ];
+
+/** Game Center court anchor (off-road block between Civic Square and The Foundry). */
+export const GAME_CENTER = { x: -22, z: 48 };
+/** ITTF table dims in meters, centered on GAME_CENTER. w = width across X, d = length along play axis Z. */
+export const TABLE = { w: 1.525, d: 2.74, h: 0.76, netH: 0.1525 };
 
 export function buildings(): Building[] {
   const result: Building[] = [];
@@ -39,6 +45,8 @@ export const BUILDINGS = buildings();
 export const SOLIDS: Box[] = [...BUILDINGS,
   { x: -27, z: 23, w: 4, d: 4, h: 2.5 },
   { x: 43, z: -48, w: 7, d: 7, h: 0.8 },
+  // Table tennis table body blocks walking (players enter via E, not by walking through).
+  { x: GAME_CENTER.x, z: GAME_CENTER.z, w: TABLE.w, d: TABLE.d, h: TABLE.h },
 ];
 
 export interface Collider { x: number; z: number; r: number; kind: 'prop' | 'vehicle' | 'ped'; label?: string }
