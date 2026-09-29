@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GameLoop } from '../game/GameLoop';
+import type { Theme } from '../game/State';
 import { AssetKit, buildMap, type Stickman } from './Assets';
 import { BUILDINGS, PLACES, seeded, type Point } from './Map';
 import { routePoint, Simulation, type WorldAction, type WorldSnapshot } from './Simulation';
@@ -74,10 +75,47 @@ export class WorldEngine {
   look(dx: number, dy: number): void { if (!this.suspended) this.simulation.look(dx, dy); }
   clearInput(): void { this.simulation.clearInput(); }
   setSuspended(value: boolean): void { this.suspended = value; this.clearInput(); if (value) this.loop.stop(); else this.loop.start(); }
-  setTheme(theme: 'light' | 'dark'): void {
+  setTheme(theme: Theme): void {
+    const mats = this.kit.materials;
+    if (theme === 'color') {
+      // Real-life palette: asphalt, concrete, brick, glass blue, green trees.
+      mats.road.color.setHex(0x3c4046);
+      mats.pavement.color.setHex(0xb8b2a4);
+      mats.white.color.setHex(0xf7f4ec);
+      mats.ink.color.setHex(0x22252a);
+      mats.glass.color.setHex(0x5ea9dd);
+      mats.glass.roughness = 0.12; mats.glass.metalness = 0.45;
+      mats.metal.color.setHex(0x9aa1a9);
+      mats.wall0.color.setHex(0xe4c188);
+      mats.wall1.color.setHex(0xb65a41);
+      mats.wall2.color.setHex(0x6f87a3);
+      mats.leaf.color.setHex(0x43a047);
+      const sky = 0x87bfe8;
+      this.scene.background = new THREE.Color(sky); this.scene.fog = new THREE.Fog(sky, 100, 280);
+      this.sun.color.setHex(0xfff0d6); this.sun.intensity = 3;
+      this.ambient.color.setHex(0xcfe5ff); this.ambient.groundColor.setHex(0x8a9a7b); this.ambient.intensity = 1.6;
+      this.renderer.toneMappingExposure = 1.1;
+      if (this.marker) (this.marker.material as THREE.MeshBasicMaterial).color.setHex(0xe11d48);
+      return;
+    }
+    // Monochrome palettes (light / dark).
+    mats.road.color.setHex(0x373737);
+    mats.pavement.color.setHex(0x9b9b9b);
+    mats.white.color.setHex(0xf1f1f1);
+    mats.ink.color.setHex(0x181818);
+    mats.glass.color.setHex(0x414141);
+    mats.glass.roughness = 0.25; mats.glass.metalness = 0.35;
+    mats.metal.color.setHex(0x666666);
+    mats.wall0.color.setHex(0xd9d9d9);
+    mats.wall1.color.setHex(0xababab);
+    mats.wall2.color.setHex(0x737373);
+    mats.leaf.color.setHex(0x626262);
     const dark = theme === 'dark'; const color = dark ? 0x242424 : 0xdadada;
     this.scene.background = new THREE.Color(color); this.scene.fog = new THREE.Fog(color, 90, 255);
+    this.sun.color.setHex(0xffffff);
+    this.ambient.color.setHex(0xffffff); this.ambient.groundColor.setHex(0x555555);
     this.ambient.intensity = dark ? 1.1 : 2.2; this.sun.intensity = dark ? 1.5 : 3;
+    this.renderer.toneMappingExposure = 1.05;
     if (this.marker) (this.marker.material as THREE.MeshBasicMaterial).color.setHex(dark ? 0xffffff : 0x111111);
   }
   resize(width: number, height: number): void {

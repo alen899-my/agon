@@ -1,4 +1,4 @@
-export type Theme = 'light' | 'dark';
+export type Theme = 'light' | 'dark' | 'color';
 export type Action = 'left' | 'right' | 'jump' | 'punch';
 export type Phase = 'ready' | 'playing' | 'complete' | 'defeat';
 export const WORLD = { viewWidth: 1280, viewHeight: 720, ground: 520 } as const;

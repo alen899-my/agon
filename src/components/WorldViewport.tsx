@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 import { WorldEngine } from '../world/WorldEngine';
+import type { Theme } from '../game/State';
 import type { WorldAction, WorldSnapshot } from '../world/Simulation';
 
 const KEYS: Record<string, WorldAction> = { KeyW: 'forward', KeyS: 'back', KeyA: 'left', KeyD: 'right', ArrowUp: 'forward', ArrowDown: 'back', ArrowLeft: 'turnLeft', ArrowRight: 'turnRight', ShiftLeft: 'sprint', ShiftRight: 'sprint', Space: 'jump' };
-interface Props { engineRef: MutableRefObject<WorldEngine | null>; onSnapshot: (s: WorldSnapshot) => void; onMap: () => void; theme: 'light' | 'dark'; portrait: boolean }
+interface Props { engineRef: MutableRefObject<WorldEngine | null>; onSnapshot: (s: WorldSnapshot) => void; onMap: () => void; theme: Theme; portrait: boolean }
 
 export function WorldViewport({ engineRef, onSnapshot, onMap, theme, portrait }: Props) {
   const canvas = useRef<HTMLCanvasElement>(null);

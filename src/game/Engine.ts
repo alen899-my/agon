@@ -6,6 +6,7 @@ import { WORLD, type Action, type Snapshot, type Theme } from './State';
 const COLORS = {
   dark: { sky: '#111111', far: '#1b1b1b', mid: '#292929', ground: '#303030', edge: '#777777', ink: '#eeeeee', accent: '#ffffff', danger: '#ffffff', muted: '#999999' },
   light: { sky: '#ffffff', far: '#eeeeee', mid: '#dddddd', ground: '#cccccc', edge: '#777777', ink: '#111111', accent: '#000000', danger: '#000000', muted: '#666666' },
+  color: { sky: '#87bfe8', far: '#a8c5e0', mid: '#7d94ad', ground: '#5da75d', edge: '#3e6b3e', ink: '#22252a', accent: '#e11d48', danger: '#d7263d', muted: '#5a6b7a' },
 };
 type Palette = typeof COLORS.dark;
 
