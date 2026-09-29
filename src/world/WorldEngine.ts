@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import { GameLoop } from '../game/GameLoop';
 import type { Theme } from '../game/State';
-import { ttSound, unlockAudio } from '../game/Sound';
+import { bbSound, ttSound, unlockAudio } from '../game/Sound';
 import { AssetKit, buildMap, type Stickman, type Vehicle } from './Assets';
-import { BUILDINGS, GAME_CENTER, PLACES, TABLE, seeded } from './Map';
+import { BUILDINGS, GAME_CENTER, HOOP, PLACES, RIM, TABLE, seeded } from './Map';
 import { Simulation, type WorldAction, type WorldSnapshot } from './Simulation';
 import type { TTShot } from './TableTennis';
 
@@ -29,6 +29,11 @@ export class WorldEngine {
   private readonly ttTrail: THREE.Line;
   private ttTrailPos: Float32Array;
   private lastTTEvents = 0;
+  private readonly bbBall: THREE.Mesh;
+  private readonly bbRim: THREE.Mesh;
+  private readonly bbNet: THREE.LineSegments;
+  private bbNetPos: Float32Array;
+  private lastBBEvents = 0;
   private readonly loop: GameLoop;
   private readonly people: { actor: Stickman }[] = [];
   private readonly traffic: Vehicle[] = [];
@@ -85,6 +90,21 @@ export class WorldEngine {
     trailGeo.setAttribute('position', new THREE.BufferAttribute(this.ttTrailPos, 3));
     this.ttTrail = new THREE.Line(trailGeo, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55 }));
     this.ttTrail.frustumCulled = false; this.scene.add(this.ttTrail);
+    // Basketball dynamic props (world-anchored at HOOP).
+    const bbMat = new THREE.MeshStandardMaterial({ color: 0xe0621a, roughness: 0.55 });
+    this.bbBall = new THREE.Mesh(new THREE.SphereGeometry(0.12, 20, 14), bbMat);
+    this.bbBall.castShadow = true;
+    const seam = new THREE.Mesh(new THREE.TorusGeometry(0.12, 0.008, 8, 32), new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.8 }));
+    this.bbBall.add(seam); this.scene.add(this.bbBall);
+    this.bbRim = new THREE.Mesh(new THREE.TorusGeometry(RIM.r, RIM.tube, 10, 32), new THREE.MeshStandardMaterial({ color: 0xd23c1e, roughness: 0.4, metalness: 0.5 }));
+    this.bbRim.rotation.x = Math.PI / 2;
+    this.bbRim.position.set(HOOP.x, RIM.h, HOOP.z); this.bbRim.castShadow = true;
+    this.scene.add(this.bbRim);
+    this.bbNetPos = new Float32Array(8 * 2 * 3);
+    const netGeo = new THREE.BufferGeometry();
+    netGeo.setAttribute('position', new THREE.BufferAttribute(this.bbNetPos, 3));
+    this.bbNet = new THREE.LineSegments(netGeo, new THREE.LineBasicMaterial({ color: 0xf5f5f5, transparent: true, opacity: 0.85 }));
+    this.bbNet.frustumCulled = false; this.scene.add(this.bbNet);
     this.setTheme('light');
     this.loop = new GameLoop(dt => {
       this.simulation.update(dt); this.hudTime += dt;
@@ -96,6 +116,10 @@ export class WorldEngine {
   begin(): void { unlockAudio(); this.simulation.begin(); this.emit(); }
   enterTable(): void { unlockAudio(); this.simulation.enterTable(); this.lastTTEvents = this.simulation.table.events.length; this.emit(); }
   rematch(): void { unlockAudio(); this.simulation.table.reset(); this.lastTTEvents = this.simulation.table.events.length; this.emit(); }
+  enterBasket(): void { unlockAudio(); this.simulation.enterBasket(); this.lastBBEvents = this.simulation.basket.events.length; this.emit(); }
+  exitBasket(): void { this.simulation.exitBasket(); this.emit(); }
+  resetBasket(): void { unlockAudio(); this.simulation.basket.resetStats(); this.lastBBEvents = this.simulation.basket.events.length; this.emit(); }
+  basketTap(): void { unlockAudio(); if (this.simulation.mode === 'basket') this.simulation.basket.pressMeter(); }
   exitTable(): void { this.simulation.exitTable(); this.emit(); }
   tableSwing(kind?: TTShot): void { this.simulation.tableSwing(kind); }
   setTableX(x: number): void { if (this.simulation.mode === 'table') this.simulation.table.setPlayerX(x); }
@@ -251,14 +275,57 @@ export class WorldEngine {
         opp.actor.animate({ phase: sim.time * 3, intensity: 0.25, airborne: false, dip: 0, idle: sim.time });
       }
     }
+    // Basketball sounds + actors.
+    const inBasket = sim.mode === 'basket';
+    const bbEvts = sim.basket.events;
+    if (bbEvts.length !== this.lastBBEvents) {
+      for (let i = this.lastBBEvents; i < bbEvts.length; i++) {
+        const e = bbEvts[i];
+        bbSound(e.kind, e.speedKmh);
+      }
+      this.lastBBEvents = bbEvts.length;
+    }
+    this.bbBall.visible = inBasket; this.bbRim.visible = inBasket; this.bbNet.visible = inBasket;
+    if (inBasket) {
+      const b = sim.basket;
+      this.bbBall.position.set(HOOP.x + b.ball.x, b.ball.y, HOOP.z + b.ball.z);
+      this.bbBall.rotation.x += Math.max(0.02, b.snapshot.speedKmh * 0.002);
+      this.bbBall.rotation.z -= Math.max(0.01, b.snapshot.speedKmh * 0.001);
+      // Rim shake on contact, net sway on swish.
+      this.bbRim.position.set(
+        HOOP.x + Math.sin(sim.time * 55) * 0.03 * b.rimShake,
+        RIM.h + Math.abs(Math.cos(sim.time * 47)) * 0.02 * b.rimShake,
+        HOOP.z + Math.cos(sim.time * 52) * 0.03 * b.rimShake);
+      const sway = b.swish * Math.sin(sim.time * 28) * 0.06;
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        this.bbNetPos[i * 6] = HOOP.x + Math.cos(a) * RIM.r;
+        this.bbNetPos[i * 6 + 1] = RIM.h;
+        this.bbNetPos[i * 6 + 2] = HOOP.z + Math.sin(a) * RIM.r;
+        this.bbNetPos[i * 6 + 3] = HOOP.x + Math.cos(a) * 0.12 + sway;
+        this.bbNetPos[i * 6 + 4] = RIM.h - 0.42;
+        this.bbNetPos[i * 6 + 5] = HOOP.z + Math.sin(a) * 0.12;
+      }
+      this.bbNet.geometry.attributes.position.needsUpdate = true;
+      this.avatar.group.visible = false;
+    }
     // Camera kick on fresh impacts.
     if (sim.impact && sim.impact.at !== this.lastImpactAt) { this.lastImpactAt = sim.impact.at; this.shake = Math.min(1, sim.impact.speed / 40 + 0.35); }
     this.shake *= 0.9;
     const shakeX = this.shake * Math.sin(sim.time * 70) * 0.35, shakeY = this.shake * Math.cos(sim.time * 55) * 0.25;
     const waypoint = PLACES.find(p => p.id === sim.waypoint);
     // Hide the waypoint ring during a match — it sits on the court otherwise.
-    this.marker.visible = Boolean(waypoint) && !inTable;
-    if (waypoint && !inTable) this.marker.position.set(waypoint.x, 0.25, waypoint.z);
+    this.marker.visible = Boolean(waypoint) && !inTable && !inBasket;
+    if (waypoint && !inTable && !inBasket) this.marker.position.set(waypoint.x, 0.25, waypoint.z);
+    if (inBasket) {
+      // Fixed shooter POV: eyes on the rim, the ball arcs through your view.
+      this.camera.position.set(HOOP.x, 2.0, HOOP.z - 6.4);
+      this.target.set(HOOP.x, 2.5, HOOP.z);
+      this.camera.lookAt(this.target);
+      this.sun.position.set(HOOP.x + 20, 65, HOOP.z + 15); this.sun.target.position.set(HOOP.x, 0, HOOP.z); this.sun.target.updateMatrixWorld();
+      this.renderer.render(this.scene, this.camera);
+      return;
+    }
     if (inTable) {
       const gx = GAME_CENTER.x, gz = GAME_CENTER.z;
       const t = sim.table;

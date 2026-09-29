@@ -108,6 +108,14 @@ kbd { font: inherit; border: 1px solid var(--line); padding: 2px 4px; border-rad
 .tt-pad span { font-size: 20px !important; }
 .tt-pad.smash { border-color: var(--ink); border-width: 2px; }
 .tt-auto { align-self: center; background: var(--surface); border: 1px solid var(--line); padding: 8px 14px; font-size: 8px; letter-spacing: 1.5px; }
+.bb-meter { position: relative; width: 34px; height: 52px; border: 1px solid var(--ink); background: var(--surface); overflow: hidden; }
+.bb-meter i { position: absolute; bottom: 0; left: 0; right: 0; background: linear-gradient(to top, #2e7d32, #ffb300 70%, #c62828); }
+.bb-meter span { position: absolute; inset: 0; display: grid; place-items: center; font-size: 10px; font-weight: 700; mix-blend-mode: difference; color: #fff; }
+.bb-play { bottom: 160px; }
+.bb-shoot { border-width: 2px; }
+.bb-shoot.hot { background: var(--ink); color: var(--surface); }
+.bb-shoot.hot > span { animation: bb-pulse .3s infinite alternate; }
+@keyframes bb-pulse { from { transform: scale(1); } to { transform: scale(1.25); } }
 @media (orientation: landscape) and (max-height: 600px) {
   .tt-score { top: 48px; padding: 5px 12px; gap: 12px; } .tt-score b { font-size: 19px; }
   .tt-message { top: 96px; font-size: 8px; padding: 6px 10px; }

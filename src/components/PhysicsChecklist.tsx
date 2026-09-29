@@ -19,6 +19,10 @@ export function physicsItems(state: WorldSnapshot | null): PhysicsItem[] {
     { id: 'tt-net', label: 'Net + cord', done: state?.tableFlags.netCord ?? false, hint: state?.tableFlags.netCord ? 'Net cord seen ✓' : 'Clip the net tape' },
     { id: 'tt-edge', label: 'Table + edge bounce', done: state?.tableFlags.edge ?? false, hint: state?.tableFlags.edge ? 'Edge! ✓' : 'Aim the white line' },
     { id: 'tt-match', label: 'First to 11, win by 2', done: (state?.table?.you ?? 0) + (state?.table?.aiScore ?? 0) > 0, hint: state?.table ? `${state.table.you}–${state.table.aiScore}` : 'Enter the Game Center' },
+    { id: 'bb-shot', label: 'Shot arc + backspin lift', done: state?.basketFlags.played ?? false, hint: 'Tap to pump, tap to throw' },
+    { id: 'bb-rim', label: 'Rim rattle + glass bank', done: (state?.basket?.makes ?? 0) > 0 || (state?.basket?.attempts ?? 0) > 1, hint: state?.basket ? `${state.basket.makes}/${state.basket.attempts}` : 'Shoot hoops up north' },
+    { id: 'bb-swish', label: 'Clean swish', done: state?.basketFlags.swish ?? false, hint: state?.basketFlags.swish ? 'Nothing but net ✓' : 'Hit the sweet spot ~70%' },
+    { id: 'bb-streak', label: 'Streak of 3', done: state?.basketFlags.streak3 ?? false, hint: 'Three in a row' },
   ];
 }
 export function PhysicsChecklist({ state }: { state: WorldSnapshot | null }) {

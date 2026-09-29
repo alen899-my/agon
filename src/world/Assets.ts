@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BUILDINGS, GAME_CENTER, ROADS, TABLE, seeded } from './Map';
+import { BUILDINGS, FREE_THROW_DIST, GAME_CENTER, HOOP, RIM, ROADS, TABLE, seeded } from './Map';
 
 type Shape = 'box' | 'sphere' | 'cylinder';
 type MaterialName = 'road' | 'pavement' | 'white' | 'ink' | 'glass' | 'metal' | 'wall0' | 'wall1' | 'wall2' | 'leaf';
@@ -258,7 +258,50 @@ export function buildMap(scene: THREE.Scene, kit: AssetKit): void {
   for (const x of [-118, 118]) box('metal', x, 0.55, 0, 0.3, 1.1, 236);
   for (const z of [-118, 118]) box('metal', 0, 0.55, z, 236, 1.1, 0.3);
   buildGameCenter(scene, kit, box);
+  buildBasketballCourt(scene, kit, box);
   kit.flush(scene);
+}
+
+/** Basketball side court north of the table hall. Rim at HOOP, shooter ~4.2m south. */
+export function buildBasketballCourt(scene: THREE.Scene, kit: AssetKit, box?: (m: MaterialName, x: number, y: number, z: number, w: number, h: number, d: number) => void): void {
+  const hx = HOOP.x, hz = HOOP.z;
+  const put = box ?? ((m, x, y, z, w, h, d) => kit.stamp('box', m, x, y, z, w, h, d));
+  const cx = hx, cz = hz - 5.2; // court center
+  // Asphalt slab + border.
+  put('white', cx, 0.03, cz, 11, 0.08, 13);
+  put('road', cx, 0.06, cz, 10.2, 0.06, 12.2);
+  const ly = 0.1;
+  const line = (x: number, z: number, w: number, d: number) => put('white', x, ly, z, w, 0.012, d);
+  // Border rect (10.2 x 12.2).
+  line(cx, cz - 6.1 + 0.05, 10.2, 0.1); line(cx, cz + 6.1 - 0.05, 10.2, 0.1);
+  line(cx - 5.1 + 0.05, cz, 0.1, 12.2); line(cx + 5.1 - 0.05, cz, 0.1, 12.2);
+  // Painted key: 4.9 wide from baseline (hz+1) to free-throw line (hz-4.2).
+  const base = hz + 1, ft = hz - FREE_THROW_DIST;
+  line(cx - 2.45, (base + ft) / 2, 0.1, base - ft); line(cx + 2.45, (base + ft) / 2, 0.1, base - ft);
+  line(cx, base - 0.05, 5.0, 0.1);
+  // Free-throw line + shooter mark.
+  line(cx, ft, 5.0, 0.12);
+  line(cx, ft - 0.5, 0.3, 0.3);
+  // Three-point arc (radius 6.25 from rim) approximated with segments.
+  const R = 6.25;
+  let prevA = -1.1;
+  for (let i = 1; i <= 10; i++) {
+    const a = -1.1 + (2.2 * i) / 10;
+    const x1 = hx + Math.sin(prevA) * R, z1 = hz - Math.cos(prevA) * R;
+    const x2 = hx + Math.sin(a) * R, z2 = hz - Math.cos(a) * R;
+    const mx = (x1 + x2) / 2, mz = (z1 + z2) / 2;
+    const len = Math.hypot(x2 - x1, z2 - z1);
+    const yaw = Math.atan2(x2 - x1, z2 - z1);
+    kit.stamp('box', 'white', mx, ly, mz, 0.1, 0.012, len, yaw);
+    prevA = a;
+  }
+  // Stanchion pole + arm + backboard (rim itself is dynamic in WorldEngine for shake).
+  put('ink', hx, 1.95, hz + 0.9, 0.35, 3.9, 0.35);
+  put('metal', hx, 3.6, hz + 0.62, 0.18, 0.18, 0.6);
+  put('white', hx, (RIM.boardBottom + RIM.boardBottom + RIM.boardH) / 2, hz + RIM.boardZ, RIM.boardW, RIM.boardH, 0.08);
+  // Board inner square.
+  line(hx, hz + RIM.boardZ - 0.06, 0.7, 0.05);
+  kit.sign(scene, 'HOOPS · FREE THROW', hx + 4.2, 2.2, hz + 2.5, 7, -Math.PI / 2);
 }
 
 /** Game Center: open-air hall with ITTF table tennis court. Play axis = Z. */

@@ -29,9 +29,9 @@ export function WorldViewport({ engineRef, onSnapshot, onMap, theme, quality, po
       if (KEYS[event.code]) { event.preventDefault(); if (!event.repeat) engine.input(KEYS[event.code], true, event.code); }
       if (!event.repeat) {
         if (event.code === 'KeyV') engine.toggleView();
-        if (event.code === 'KeyE') { if (engine.simulation.mode === 'table') engine.tableSwing('drive'); else engine.interact(); }
-        if (event.code === 'KeyX' && engine.simulation.mode === 'table') engine.exitTable();
-        if (event.code === 'KeyR' && engine.simulation.mode === 'table') engine.rematch();
+        if (event.code === 'KeyE') { if (engine.simulation.mode === 'table') engine.tableSwing('drive'); else if (engine.simulation.mode === 'roam') engine.interact(); }
+        if (event.code === 'KeyX') { if (engine.simulation.mode === 'table') engine.exitTable(); else if (engine.simulation.mode === 'basket') engine.exitBasket(); }
+        if (event.code === 'KeyR') { if (engine.simulation.mode === 'table') engine.rematch(); else if (engine.simulation.mode === 'basket') engine.resetBasket(); }
         if (event.code === 'KeyM') props.current.onMap();
         if (event.code === 'KeyP' || event.code === 'Escape') engine.togglePause();
       }

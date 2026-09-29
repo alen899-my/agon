@@ -16,6 +16,11 @@ export const PLACES: Place[] = [
 
 /** Game Center court anchor (off-road block between Civic Square and The Foundry). */
 export const GAME_CENTER = { x: -22, z: 48 };
+/** Basketball hoop anchor: side court north of the table hall. Shooter stands ~4.2m south of the rim. */
+export const HOOP = { x: -22, z: 64.5 };
+export const FREE_THROW_DIST = 4.2;
+/** Rim/backboard dims in meters. */
+export const RIM = { h: 3.05, r: 0.225, tube: 0.02, boardW: 1.8, boardH: 1.05, boardBottom: 2.9, boardZ: 0.45 };
 /** ITTF table dims in meters, centered on GAME_CENTER. w = width across X, d = length along play axis Z. */
 export const TABLE = { w: 1.525, d: 2.74, h: 0.76, netH: 0.1525 };
 
@@ -47,6 +52,8 @@ export const SOLIDS: Box[] = [...BUILDINGS,
   { x: 43, z: -48, w: 7, d: 7, h: 0.8 },
   // Table tennis table body blocks walking (players enter via E, not by walking through).
   { x: GAME_CENTER.x, z: GAME_CENTER.z, w: TABLE.w, d: TABLE.d, h: TABLE.h },
+  // Basketball pole + stanchion (rim overhangs the court, walkable under it).
+  { x: HOOP.x, z: HOOP.z + 0.9, w: 0.5, d: 0.5, h: 3.9 },
 ];
 
 export interface Collider { x: number; z: number; r: number; kind: 'prop' | 'vehicle' | 'ped'; label?: string }

@@ -17,6 +17,15 @@ function blip(freq: number, dur: number, gain = 0.12, type: OscillatorType = 'si
   o.start(); o.stop(ac.currentTime + dur);
 }
 export function unlockAudio(): void { audio(); }
+export function bbSound(kind: string, speedKmh = 0): void {
+  if (kind === 'shoot') blip(300, 0.08, 0.1, 'triangle');
+  else if (kind === 'bounce') blip(140 + Math.min(120, speedKmh * 2), 0.09, 0.16, 'sine');
+  else if (kind === 'rim') { blip(220, 0.18, 0.16, 'square'); blip(330, 0.12, 0.1, 'square'); }
+  else if (kind === 'board') blip(120, 0.12, 0.16, 'sine');
+  else if (kind === 'swish') { blip(1200, 0.08, 0.08, 'sine'); setTimeout(() => blip(900, 0.12, 0.1, 'sine'), 70); }
+  else if (kind === 'score') { blip(523, 0.1, 0.12); setTimeout(() => blip(784, 0.14, 0.12), 100); }
+  else if (kind === 'rimout') blip(200, 0.15, 0.1, 'sawtooth');
+}
 export function ttSound(kind: string, speedKmh = 0): void {
   if (kind === 'paddle') blip(520 + Math.min(400, speedKmh * 6), 0.07, 0.14, 'triangle');
   else if (kind === 'smash') { blip(700, 0.09, 0.2, 'square'); blip(350, 0.12, 0.12, 'triangle'); }

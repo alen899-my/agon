@@ -1,5 +1,6 @@
-import { GAME_CENTER, intersects, LIMIT, PARKED_CARS, PLACES, PROPS, TRAFFIC_ROUTE, circleHit, seeded, type Point } from './Map';
+import { GAME_CENTER, HOOP, intersects, LIMIT, PARKED_CARS, PLACES, PROPS, TRAFFIC_ROUTE, circleHit, seeded, type Point } from './Map';
 import { TableTennisSim, type TTShot, type TTSnapshot } from './TableTennis';
+import { BasketballSim, type BBSnapshot } from './Basketball';
 
 export type WorldAction = 'forward' | 'back' | 'left' | 'right' | 'sprint' | 'jump' | 'turnLeft' | 'turnRight';
 export type View = 'third' | 'first';
@@ -7,7 +8,7 @@ export interface Impact { speed: number; with: string; at: number }
 export interface TrafficCar { x: number; z: number; yaw: number; speed: number; offset: number; base: number; steer: number; wheelSpin: number; braking: boolean; prevYaw: number }
 export interface Ped { x: number; z: number; yaw: number; route: Point[]; dist: number; speed: number; phase: number; seed: number; move: number; cur: number; scaredUntil: number }
 export interface SnapshotCar { x: number; z: number; yaw: number; speed: number; steer: number; wheelSpin: number; braking: boolean }
-export type PlayMode = 'roam' | 'table';
+export type PlayMode = 'roam' | 'table' | 'basket';
 export interface WorldSnapshot {
   phase: 'ready' | 'playing'; paused: boolean; view: View; driving: boolean;
   x: number; z: number; yaw: number; speed: number; distance: number;
@@ -17,8 +18,10 @@ export interface WorldSnapshot {
   stridePhase: number; moveBlend: number; airborne: boolean; landDip: number;
   traffic: (SnapshotCar)[];
   peds: { x: number; z: number; yaw: number; phase: number; moving: number }[];
-  mode: PlayMode; nearTable: boolean; table: TTSnapshot | null;
+  mode: PlayMode; nearTable: boolean; nearHoop: boolean; table: TTSnapshot | null;
   tableFlags: { topspin: boolean; smash: boolean; netCord: boolean; edge: boolean };
+  basket: BBSnapshot | null;
+  basketFlags: { played: boolean; swish: boolean; streak3: boolean };
 }
 const clamp = (n: number, low: number, high: number) => Math.max(low, Math.min(high, n));
 
@@ -58,9 +61,10 @@ export class Simulation {
   peds: Ped[] = [];
   // --- character locomotion: smoothed velocity, stride phase, landing dip ---
   pvx = 0; pvz = 0; stride = 0; moveBlend = 0; landDip = 0;
-  // --- game center: table tennis mode ---
+  // --- game center: table tennis + basketball modes ---
   mode: PlayMode = 'roam';
   table = new TableTennisSim();
+  basket = new BasketballSim();
   private savedPos = { x: 12, z: 34, yaw: -0.25 };
   private keys = new Map<string, WorldAction>();
   private stick = { x: 0, y: 0 };
@@ -77,6 +81,23 @@ export class Simulation {
   get active(): boolean { return this.phase === 'playing' && !this.paused; }
   get nearbyCar(): boolean { return Math.hypot(this.x - this.car.x, this.z - this.car.z) < 7; }
   get nearTable(): boolean { return Math.hypot(this.x - GAME_CENTER.x, this.z - GAME_CENTER.z) < 8; }
+  get nearHoop(): boolean { return Math.hypot(this.x - HOOP.x, this.z - (HOOP.z - 4.2)) < 7; }
+  enterBasket(): boolean {
+    if (!this.active || this.driving || this.mode !== 'roam' || !this.nearHoop) return false;
+    this.mode = 'basket';
+    this.savedPos = { x: this.x, z: this.z, yaw: this.yaw };
+    this.basket.setupHold();
+    this.clearInput();
+    return true;
+  }
+  exitBasket(): boolean {
+    if (this.mode !== 'basket') return false;
+    this.mode = 'roam';
+    this.x = this.savedPos.x; this.z = this.savedPos.z; this.yaw = this.savedPos.yaw;
+    this.previous = { x: this.x, z: this.z, y: this.y };
+    this.clearInput();
+    return true;
+  }
   enterTable(): boolean {
     if (!this.active || this.driving || this.mode === 'table' || !this.nearTable) return false;
     this.mode = 'table';
@@ -119,9 +140,11 @@ export class Simulation {
       stridePhase: this.stride, moveBlend: this.moveBlend, airborne: this.y > 0.02, landDip: Math.max(0, Math.min(1, this.landDip)),
       traffic: this.traffic.map(t => ({ x: t.x, z: t.z, yaw: t.yaw, speed: t.speed, steer: t.steer, wheelSpin: t.wheelSpin, braking: t.braking })),
       peds: this.peds.map(p => ({ x: p.x, z: p.z, yaw: p.yaw, phase: p.phase, moving: p.move })),
-      mode: this.mode, nearTable: this.nearTable,
+      mode: this.mode, nearTable: this.nearTable, nearHoop: this.nearHoop,
       table: this.mode === 'table' ? this.table.snapshot : null,
-      tableFlags: { ...this.table.flags } };
+      tableFlags: { ...this.table.flags },
+      basket: this.mode === 'basket' ? this.basket.snapshot : null,
+      basketFlags: { played: this.basket.attempts > 0, swish: this.basket.swishes > 0, streak3: this.basket.best >= 3 } };
   }
   begin(): void { this.phase = 'playing'; this.clearInput(); }
   clearInput(): void { this.keys.clear(); this.stick = { x: 0, y: 0 }; this.jumpPressed = false; this.pvx = 0; this.pvz = 0; }
@@ -144,8 +167,9 @@ export class Simulation {
   repair(): void { this.damage = 0; }
   interact(): boolean {
     if (!this.active) return false;
-    if (this.mode === 'table') return false;
+    if (this.mode !== 'roam') return false;
     if (!this.driving && this.nearTable) return this.enterTable();
+    if (!this.driving && this.nearHoop) return this.enterBasket();
     if (!this.driving) {
       if (!this.nearbyCar) return false;
       this.driving = true; this.x = this.car.x; this.z = this.car.z; this.y = this.vy = 0;
@@ -259,6 +283,14 @@ export class Simulation {
   update(dt: number): void {
     if (!this.active) return;
     this.time += dt; this.previous = { x: this.x, z: this.z, y: this.y };
+    // Basketball mode: tap-tap power meter (tap to pump, tap again to throw).
+    if (this.mode === 'basket') {
+      if (this.jumpPressed) this.basket.pressMeter();
+      this.jumpPressed = false;
+      this.basket.update(dt);
+      this.syncCrowd(dt);
+      return;
+    }
     // Table tennis mode: paddle movement + swings only; world keeps ambient life.
     if (this.mode === 'table') {
       const tSide = clamp(Number(this.held('right')) - Number(this.held('left')) + this.stick.x, -1, 1);

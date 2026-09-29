@@ -4,6 +4,7 @@ import { QualityToggle } from './components/QualityToggle';
 import { WorldViewport } from './components/WorldViewport';
 import { WorldControls } from './components/WorldControls';
 import { TableTennisControls } from './components/TableTennisControls';
+import { BasketballControls } from './components/BasketballControls';
 import { DistrictMap } from './components/DistrictMap';
 import { PhysicsChecklist } from './components/PhysicsChecklist';
 import { PLACES } from './world/Map';
@@ -90,7 +91,7 @@ export default function App() {
     <section className="world-stage" aria-label="Open world neighborhood">
       <WorldViewport engineRef={engine} onSnapshot={setState} onMap={toggleMap} theme={theme} quality={quality} portrait={portrait} />
       {fullscreen && <button className="fullscreen-exit" onClick={enterFullscreen} aria-label="Exit fullscreen">⛶ EXIT</button>}
-      <div className="location-card"><span className="eyebrow">{state?.mode === 'table' ? 'GAME CENTER / TABLE TENNIS' : 'DISTRICT 01 / FREE ROAM'}</span><h2>{ready ? 'The neighborhood.' : state?.mode === 'table' ? 'Game Center.' : state?.location}</h2><p>{ready ? 'A small place. A thousand directions.' : state?.mode === 'table' ? 'First to 11, win by 2. Good luck.' : state?.driving ? 'Behind the wheel. Make your own route.' : 'No hurry. Take the long way home.'}</p></div>
+      <div className="location-card"><span className="eyebrow">{state?.mode === 'table' ? 'GAME CENTER / TABLE TENNIS' : state?.mode === 'basket' ? 'GAME CENTER / HOOPS' : 'DISTRICT 01 / FREE ROAM'}</span><h2>{ready ? 'The neighborhood.' : state?.mode === 'table' ? 'Game Center.' : state?.mode === 'basket' ? 'The Blacktop.' : state?.location}</h2><p>{ready ? 'A small place. A thousand directions.' : state?.mode === 'table' ? 'First to 11, win by 2. Good luck.' : state?.mode === 'basket' ? 'No aim. Pure touch. Fill the meter.' : state?.driving ? 'Behind the wheel. Make your own route.' : 'No hurry. Take the long way home.'}</p></div>
       <div className="compass"><span>W</span><b>{heading}</b><span>E</span><i /></div>
       {!ready && <div className="exploration-count"><b>{state?.discovered.length ?? 0}<span> / 7</span></b><small>PLACES DISCOVERED</small></div>}
       {ready && <div className="world-intro">
@@ -117,9 +118,19 @@ export default function App() {
         {state?.mode === 'table' && state?.table && <div className="tt-message" role="status">{state.table.message}</div>}
         {state?.mode === 'table' && state?.table?.matchOver && <button className="interact-button" onClick={() => { engine.current?.rematch(); focus(); }}>REMATCH <kbd>R</kbd></button>}
         {state?.mode === 'table' && <button className="tt-exit" onClick={() => { engine.current?.exitTable(); focus(); }} aria-label="Exit table tennis">✕ EXIT <kbd>X</kbd></button>}
-        {state?.mode !== 'table' && (state?.nearbyCar || state?.driving || state?.nearTable) && <button className="interact-button" onClick={() => { if (state?.nearTable && !state?.driving) engine.current?.enterTable(); else engine.current?.interact(); focus(); }}>{state.driving ? 'EXIT VEHICLE' : state?.nearTable && !state?.nearbyCar ? 'PLAY TABLE TENNIS' : state?.nearTable ? 'PLAY TABLE TENNIS' : 'DRIVE THIS CAR'} <kbd>E</kbd></button>}
+        {state?.mode === 'basket' && state.basket && <div className="tt-score" role="status" aria-label={`Hoops ${state.basket.makes} of ${state.basket.attempts}`}>
+          <div><small>MAKES</small><b>{state.basket.makes}/{state.basket.attempts}</b></div>
+          <div className="tt-mid"><span>STREAK {state.basket.streak}</span><small>BEST {state.basket.best}</small></div>
+          <div className="bb-meter" aria-label={`Power ${Math.round(state.basket.power * 100)} percent`}><i style={{ height: `${Math.round(state.basket.power * 100)}%` }} /><span>{Math.round(state.basket.power * 100)}</span></div>
+        </div>}
+        {state?.mode === 'basket' && state?.basket?.message && <div className="tt-message" role="status">{state.basket.message}</div>}
+        {state?.mode === 'basket' && <button className="tt-exit" onClick={() => { engine.current?.exitBasket(); focus(); }} aria-label="Exit hoops">✕ EXIT <kbd>X</kbd></button>}
+        {state?.mode === 'roam' && state?.nearHoop && !state?.driving && <button className="interact-button bb-play" onClick={() => { engine.current?.enterBasket(); focus(); }}>SHOOT HOOPS <kbd>E</kbd></button>}
+        {state?.mode !== 'table' && state?.mode !== 'basket' && (state?.nearbyCar || state?.driving || state?.nearTable) && <button className="interact-button" onClick={() => { if (state?.nearTable && !state?.driving) engine.current?.enterTable(); else engine.current?.interact(); focus(); }}>{state.driving ? 'EXIT VEHICLE' : state?.nearTable && !state?.nearbyCar ? 'PLAY TABLE TENNIS' : state?.nearTable ? 'PLAY TABLE TENNIS' : 'DRIVE THIS CAR'} <kbd>E</kbd></button>}
         {state?.mode === 'table'
           ? <TableTennisControls disabled={!active} onSwing={shot => engine.current?.tableSwing(shot)} />
+          : state?.mode === 'basket'
+          ? <BasketballControls disabled={!active} pumping={state?.basket?.pumping ?? false} onTap={() => engine.current?.basketTap()} />
           : <WorldControls disabled={!active} driving={state?.driving ?? false} onStick={(x, y) => engine.current?.joystick(x, y)} onInput={(action, down, source) => engine.current?.input(action, down, source)} />}
       </>}
       {state?.paused && !mapOpen && <div className="pause-cover"><div><p className="eyebrow">THE CITY CAN WAIT</p><h2>A moment to yourself.</h2><button className="primary-button" onClick={() => { engine.current?.togglePause(); focus(); }}>KEEP EXPLORING <span>→</span></button></div></div>}
@@ -133,7 +144,7 @@ export default function App() {
       {physicsOpen && !ready && <div className="physics-cover"><div className="physics-sheet" role="dialog" aria-label="Physics checklist"><div className="map-heading"><div><p className="eyebrow">REALISTIC PHYSICS · ONE BY ONE</p><h2>Systems online.</h2></div><button className="control" onClick={() => setPhysicsOpen(false)} aria-label="Close physics">✕</button></div><PhysicsChecklist state={state} /><p className="map-caption">Drive into walls, traffic and crowds to tick crash events. Repair at South Station.</p></div></div>}
       {portrait && <div className="rotate-cover"><span className="rotate-symbol">↻</span><p className="eyebrow">MORE ROOM TO EXPLORE</p><h2>Turn your world.</h2><p>Rotate your phone to landscape.<br />Your neighborhood will be waiting.</p><button className="primary-button" onClick={enterFullscreen}>GO FULLSCREEN <span>⛶</span></button></div>}
     </section>
-    <footer className="district-footer"><span>{state?.mode === 'table' ? <>AUTO MOVE <i>●</i> · SPACE <i>HIT</i> · W <i>TOP</i> · S <i>CHOP</i> · SHIFT <i>SMASH</i></> : <>W A S D <i>MOVE</i> · SHIFT <i>SPRINT</i> · SPACE <i>JUMP</i></>}</span><span>{state?.mode === 'table' ? 'GAME CENTER — TABLE TENNIS' : 'STAGE 01 — THE NEIGHBORHOOD'}</span><span>{state?.distance ?? 0} m EXPLORED</span></footer>
+    <footer className="district-footer"><span>{state?.mode === 'table' ? <>AUTO MOVE <i>●</i> · SPACE <i>HIT</i> · W <i>TOP</i> · S <i>CHOP</i> · SHIFT <i>SMASH</i></> : state?.mode === 'basket' ? <>TAP SPACE <i>PUMP</i> · TAP AGAIN <i>THROW</i></> : <>W A S D <i>MOVE</i> · SHIFT <i>SPRINT</i> · SPACE <i>JUMP</i></>}</span><span>{state?.mode === 'table' ? 'GAME CENTER — TABLE TENNIS' : state?.mode === 'basket' ? 'GAME CENTER — HOOPS' : 'STAGE 01 — THE NEIGHBORHOOD'}</span><span>{state?.distance ?? 0} m EXPLORED</span></footer>
     {notice && <div className="notice" role="status">{notice}<button className="control" onClick={() => setNotice('')}>Dismiss</button></div>}
   </main>;
 }
