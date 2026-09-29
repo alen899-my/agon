@@ -1,25 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import { BasketballSim, BB } from './Basketball';
 
+const lane = new BasketballSim();
+lane.setSpot(4.2, 0); // one solved lane reused by all scan shots
 function shootAt(power: number): BasketballSim {
-  const s = new BasketballSim();
-  s.shoot(power);
+  lane.setupHold(true);
+  lane.shoot(power);
   for (let i = 0; i < 600; i++) {
-    s.update(1 / 60);
-    if (s.phase === 'done') break;
+    lane.update(1 / 60);
+    if (lane.phase === 'done') break;
   }
-  return s;
+  return lane;
 }
 /** Scan power 0..1 for makes; returns sorted list of swish powers. */
 function swishWindow(): number[] {
   const hits: number[] = [];
   for (let p = 0.2; p <= 0.95; p += 0.02) {
-    let makes = 0;
-    for (let rep = 0; rep < 3; rep++) {
-      const s = shootAt(p);
-      if (s.makes > 0) makes += 1;
-    }
-    if (makes >= 2) hits.push(Number(p.toFixed(2)));
+    const before = lane.makes;
+    shootAt(p);
+    if (lane.makes > before) hits.push(Number(p.toFixed(2)));
   }
   return hits;
 }
@@ -53,15 +52,39 @@ describe('basketball physics', () => {
     expect(s.boardTouched).toBe(true);
     expect(s.vel.z).toBeLessThan(0); // rebounding off the glass
   });
+  it('moves the green window with distance and solves per spot', () => {
+    const near = new BasketballSim(); near.setSpot(3.2, 0);
+    const far = new BasketballSim(); far.setSpot(6.0, 0);
+    const nearGreen = near.snapshot;
+    const farGreen = far.snapshot;
+    expect(farGreen.greenLo + farGreen.greenHi).toBeGreaterThan(nearGreen.greenLo + nearGreen.greenHi);
+    // Green sits inside the meter with real width.
+    expect(nearGreen.greenHi).toBeGreaterThan(nearGreen.greenLo);
+    expect(farGreen.greenLo).toBeGreaterThanOrEqual(0);
+    expect(farGreen.greenHi).toBeLessThanOrEqual(1);
+    // Stopping mid-green drops at any spot (majority of 5; release wobble varies).
+    for (const sim of [near, far]) {
+      const mid = (sim.snapshot.greenLo + sim.snapshot.greenHi) / 2;
+      let scored = 0;
+      for (let rep = 0; rep < 5; rep++) {
+        const before = sim.makes;
+        sim.setupHold(true); sim.shoot(mid);
+        for (let i = 0; i < 600 && sim.phase !== 'done'; i++) sim.update(1 / 60);
+        if (sim.makes > before) scored += 1;
+      }
+      expect(scored).toBeGreaterThanOrEqual(3);
+    }
+  });
   it('tracks makes, streaks and best across shots', () => {
     const window = swishWindow();
     expect(window.length).toBeGreaterThan(0);
     const sweet = window[Math.floor(window.length / 2)];
     const s = new BasketballSim();
+    s.setSpot(4.2, 0);
     s.shoot(sweet);
     for (let i = 0; i < 600 && s.phase !== 'done'; i++) s.update(1 / 60);
     expect(s.makes).toBe(1); expect(s.streak).toBe(1); expect(s.attempts).toBe(1);
-    s.setupHold(); s.shoot(0.1);
+    s.setupHold(true); s.shoot(0.1);
     for (let i = 0; i < 600 && s.phase !== 'done'; i++) s.update(1 / 60);
     expect(s.streak).toBe(0); expect(s.best).toBe(1); expect(s.attempts).toBe(2);
   });
@@ -80,6 +103,7 @@ describe('basketball physics', () => {
     const window = swishWindow();
     expect(window.length).toBeGreaterThan(0);
     const s = new BasketballSim();
+    s.setSpot(4.2, 0);
     s.shoot(window[Math.floor(window.length / 2)]);
     let sawBelowRim = false;
     for (let i = 0; i < 600; i++) {

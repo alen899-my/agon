@@ -7,6 +7,8 @@ export interface BBSnapshot {
   power: number; pumping: boolean; phase: BBPhase;
   makes: number; attempts: number; streak: number; best: number;
   message: string; rimShake: number; swish: number;
+  spot: { x: number; z: number }; spotLabel: string;
+  greenLo: number; greenHi: number;
 }
 export const BB = {
   GRAV: 9.81, DRAG: 0.12, MAGNUS: 0.12, BALL_R: 0.12,
@@ -14,6 +16,7 @@ export const BB = {
   BOARD_Z: 0.45, BOARD_W: 1.8, BOARD_BOT: 2.9, BOARD_TOP: 3.95,
   SPOT_Z: -4.2, HAND_Y: 1.9, ANGLE: 53 * Math.PI / 180, BACKSPIN: 2.5,
   CHARGE_RATE: 0.85,
+  SPOT_MIN: 3.0, SPOT_MAX: 6.25, SPOT_ANGLE: 50,
 } as const;
 
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
@@ -32,6 +35,11 @@ export class BasketballSim {
   phase: BBPhase = 'hold';
   makes = 0; attempts = 0; streak = 0; best = 0; swishes = 0;
   message = 'TAP SPACE / TAP SHOOT — TAP AGAIN TO THROW';
+  // Randomized per-shot challenge: where you stand, how fast the meter pumps, where green sits.
+  spot: { x: number; z: number } = { x: 0, z: -4.2 };
+  spotLabel = 'FREE THROW · 4.2M';
+  rate: number = BB.CHARGE_RATE;
+  greenCenter: number = 0.78; greenHalf: number = 0.065;
   doneTimer = 0;
   rimShake = 0; swish = 0;
   rimTouched = false; boardTouched = false; scored = false; resolved = false;
@@ -42,9 +50,68 @@ export class BasketballSim {
     this.makes = 0; this.attempts = 0; this.streak = 0; this.best = 0; this.swishes = 0;
     this.setupHold();
   }
-  setupHold(): void {
+  /** Fixed spot (used by tests); re-solves the green window for it. */
+  setSpot(dist: number, angleDeg: number): void {
+    const a = angleDeg * Math.PI / 180;
+    this.spot = { x: dist * Math.sin(a), z: -dist * Math.cos(a) };
+    this.labelSpot(dist, angleDeg);
+    this.solveGreen();
+  }
+  private labelSpot(dist: number, angleDeg: number): void {
+    const zone = Math.abs(angleDeg) < 12 ? 'TOP' : Math.abs(angleDeg) < 35 ? 'WING' : 'CORNER';
+    this.spotLabel = `${zone} · ${dist.toFixed(1)}M`;
+  }
+  private randomizeSpot(): void {
+    const dist = BB.SPOT_MIN + Math.random() * (BB.SPOT_MAX - BB.SPOT_MIN);
+    const angle = (Math.random() - 0.5) * 2 * BB.SPOT_ANGLE;
+    this.setSpot(dist, angle);
+  }
+  /** Find the meter power that drops clean for the current spot by probing the real physics. */
+  private solveGreen(): void {
+    const scores = (v: number): boolean => {
+      const probe = new BasketballSim();
+      probe.spot = { ...this.spot };
+      probe.phase = 'flight';
+      probe.ball = { x: this.spot.x, y: BB.HAND_Y, z: this.spot.z };
+      const d = Math.max(0.5, Math.hypot(this.spot.x, this.spot.z));
+      probe.vel = { x: -this.spot.x / d * v * Math.cos(BB.ANGLE), y: v * Math.sin(BB.ANGLE), z: -this.spot.z / d * v * Math.cos(BB.ANGLE) };
+      for (let i = 0; i < 450 && probe.phase === 'flight'; i++) probe.update(1 / 60);
+      return probe.makes > 0;
+    };
+    // Coarse scan, then refine around the first make.
+    let seed = -1;
+    for (let v = 5; v <= 12; v += 0.25) {
+      if (scores(v)) { seed = v; break; }
+    }
+    if (seed < 0) return;
+    const band: number[] = [];
+    for (let v = seed - 0.4; v <= seed + 0.4; v += 0.05) {
+      if (v >= 5 && v <= 12 && scores(v)) band.push(v);
+    }
+    if (band.length > 0) {
+      const mean = band.reduce((a, b) => a + b, 0) / band.length;
+      this.greenCenter = clamp((mean - 4.8) / 6.0, 0.05, 0.98);
+    }
+  }
+  private velocityFor(power: number, wobble: number): { x: number; y: number; z: number } {
+    const p = clamp(power, 0.05, 1);
+    const speed = 4.8 + p * 6.0;
+    const d = Math.max(0.5, Math.hypot(this.spot.x, this.spot.z));
+    const dx = -this.spot.x / d, dz = -this.spot.z / d; // toward the rim
+    const wob = (Math.random() - 0.5) * wobble;
+    return {
+      x: (dx * speed + -dz * wob) * Math.cos(BB.ANGLE),
+      y: speed * Math.sin(BB.ANGLE),
+      z: (dz * speed + dx * wob) * Math.cos(BB.ANGLE),
+    };
+  }
+  setupHold(keepSpot = false): void {
     this.phase = 'hold'; this.power = 0; this.chargeDir = 1; this.pumping = false;
-    this.ball = { x: 0, y: BB.HAND_Y, z: BB.SPOT_Z };
+    if (!keepSpot && (this.attempts > 0 || this.makes > 0)) this.randomizeSpot();
+    // Meter quickens as you heat up; green shrinks with the streak.
+    this.rate = Math.min(1.7, 0.75 + this.attempts * 0.03 + Math.random() * 0.15);
+    this.greenHalf = Math.max(0.03, 0.065 - this.streak * 0.004);
+    this.ball = { x: this.spot.x, y: BB.HAND_Y, z: this.spot.z };
     this.vel = { x: 0, y: 0, z: 0 };
     this.rimTouched = false; this.boardTouched = false; this.scored = false; this.resolved = false;
     this.maxY = BB.HAND_Y; this.doneTimer = 0;
@@ -58,16 +125,9 @@ export class BasketballSim {
   }
   shoot(power: number): void {
     if (this.phase !== 'hold') return;
-    const p = clamp(power, 0.05, 1);
-    const speed = 4.8 + p * 6.0;
     // Fixed aim at the rim; tiny release wobble keeps edge makes/misses organic.
-    const wob = (Math.random() - 0.5) * 0.05;
-    this.vel = {
-      x: wob * speed * 0.3,
-      y: speed * Math.sin(BB.ANGLE),
-      z: speed * Math.cos(BB.ANGLE),
-    };
-    this.ball = { x: wob * 0.1, y: BB.HAND_Y, z: BB.SPOT_Z };
+    this.vel = this.velocityFor(power, 0.05 * (4.8 + clamp(power, 0, 1) * 6.0) * 0.3);
+    this.ball = { x: this.spot.x, y: BB.HAND_Y, z: this.spot.z };
     this.phase = 'flight'; this.attempts += 1;
     this.maxY = BB.HAND_Y;
     this.rimTouched = false; this.boardTouched = false; this.scored = false; this.resolved = false;
@@ -78,7 +138,7 @@ export class BasketballSim {
     this.rimShake = Math.max(0, this.rimShake - dt * 3);
     this.swish = Math.max(0, this.swish - dt * 1.5);
     if (this.phase === 'hold' && this.pumping) {
-      this.power += this.chargeDir * BB.CHARGE_RATE * dt;
+      this.power += this.chargeDir * this.rate * dt;
       if (this.power >= 1) { this.power = 1; this.chargeDir = -1; }
       if (this.power <= 0) { this.power = 0; this.chargeDir = 1; }
       return;
@@ -166,7 +226,7 @@ export class BasketballSim {
         if (this.scored) { this.resolved = true; this.phase = 'done'; this.doneTimer = 1.2; }
         else this.onMiss(this.rimTouched ? 'RIM OUT' : this.boardTouched ? 'OFF THE BOARD' : 'WAY OFF');
       }
-      this.ball = { x: 0, y: 1, z: BB.SPOT_Z }; this.vel = { x: 0, y: 0, z: 0 };
+      this.ball = { x: this.spot.x, y: 1, z: this.spot.z }; this.vel = { x: 0, y: 0, z: 0 };
     }
   }
   private onScore(clean: boolean): void {
@@ -207,6 +267,9 @@ export class BasketballSim {
       power: this.power, pumping: this.pumping, phase: this.phase,
       makes: this.makes, attempts: this.attempts, streak: this.streak, best: this.best,
       message: this.message, rimShake: this.rimShake, swish: this.swish,
+      spot: { ...this.spot }, spotLabel: this.spotLabel,
+      greenLo: clamp(this.greenCenter - this.greenHalf, 0, 1),
+      greenHi: clamp(this.greenCenter + this.greenHalf, 0, 1),
     };
   }
 }
