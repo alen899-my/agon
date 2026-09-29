@@ -27,10 +27,12 @@ describe('basketball physics', () => {
   it('has a swish power window between short and long misses', () => {
     const window = swishWindow();
     expect(window.length).toBeGreaterThan(0); // a perfect release drops clean
-    const soft = shootAt(0.1);
-    expect(soft.makes).toBe(0); // falls short
-    const full = shootAt(1.0);
-    expect(full.makes).toBe(0); // sails long
+    const beforeSoft = lane.makes;
+    shootAt(0.1);
+    expect(lane.makes).toBe(beforeSoft); // falls short
+    const beforeFull = lane.makes;
+    shootAt(1.0);
+    expect(lane.makes).toBe(beforeFull); // sails long
   });
   it('loses energy on rim contact (restitution < 1)', () => {
     const s = new BasketballSim();
@@ -76,11 +78,10 @@ describe('basketball physics', () => {
     }
   });
   it('tracks makes, streaks and best across shots', () => {
-    const window = swishWindow();
-    expect(window.length).toBeGreaterThan(0);
-    const sweet = window[Math.floor(window.length / 2)];
     const s = new BasketballSim();
     s.setSpot(4.2, 0);
+    // Solver green center = max-margin swish.
+    const sweet = (s.snapshot.greenLo + s.snapshot.greenHi) / 2;
     s.shoot(sweet);
     for (let i = 0; i < 600 && s.phase !== 'done'; i++) s.update(1 / 60);
     expect(s.makes).toBe(1); expect(s.streak).toBe(1); expect(s.attempts).toBe(1);
@@ -100,11 +101,10 @@ describe('basketball physics', () => {
     expect(s.phase).toBe('flight'); expect(s.attempts).toBe(1);
   });
   it('drops through the net to the floor after a make', () => {
-    const window = swishWindow();
-    expect(window.length).toBeGreaterThan(0);
     const s = new BasketballSim();
     s.setSpot(4.2, 0);
-    s.shoot(window[Math.floor(window.length / 2)]);
+    const sweet = (s.snapshot.greenLo + s.snapshot.greenHi) / 2;
+    s.shoot(sweet);
     let sawBelowRim = false;
     for (let i = 0; i < 600; i++) {
       s.update(1 / 60);

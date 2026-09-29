@@ -318,8 +318,11 @@ export class WorldEngine {
     this.marker.visible = Boolean(waypoint) && !inTable && !inBasket;
     if (waypoint && !inTable && !inBasket) this.marker.position.set(waypoint.x, 0.25, waypoint.z);
     if (inBasket) {
-      // Fixed shooter POV: eyes on the rim, the ball arcs through your view.
-      this.camera.position.set(HOOP.x, 2.0, HOOP.z - 6.4);
+      // Shooter POV from the current random spot: stand behind the release point, eyes on the rim.
+      const s = sim.basket.spot;
+      const sd = Math.max(0.5, Math.hypot(s.x, s.z));
+      const cd = sd + 2.2;
+      this.camera.position.set(HOOP.x + (s.x / sd) * cd, 2.0, HOOP.z + (s.z / sd) * cd);
       this.target.set(HOOP.x, 2.5, HOOP.z);
       this.camera.lookAt(this.target);
       this.sun.position.set(HOOP.x + 20, 65, HOOP.z + 15); this.sun.target.position.set(HOOP.x, 0, HOOP.z); this.sun.target.updateMatrixWorld();

@@ -120,8 +120,8 @@ export default function App() {
         {state?.mode === 'table' && <button className="tt-exit" onClick={() => { engine.current?.exitTable(); focus(); }} aria-label="Exit table tennis">✕ EXIT <kbd>X</kbd></button>}
         {state?.mode === 'basket' && state.basket && <div className="tt-score" role="status" aria-label={`Hoops ${state.basket.makes} of ${state.basket.attempts}`}>
           <div><small>MAKES</small><b>{state.basket.makes}/{state.basket.attempts}</b></div>
-          <div className="tt-mid"><span>STREAK {state.basket.streak}</span><small>BEST {state.basket.best}</small></div>
-          <div className="bb-meter" aria-label={`Power ${Math.round(state.basket.power * 100)} percent`}><i style={{ height: `${Math.round(state.basket.power * 100)}%` }} /><span>{Math.round(state.basket.power * 100)}</span></div>
+          <div className="tt-mid"><span>{state.basket.spotLabel}</span><small>STREAK {state.basket.streak} · BEST {state.basket.best}</small></div>
+          <div className="bb-meter" aria-label={`Power ${Math.round(state.basket.power * 100)} percent`}><i style={{ height: `${Math.round(state.basket.power * 100)}%` }} /><em className="bb-green" style={{ bottom: `${Math.round(state.basket.greenLo * 100)}%`, height: `${Math.max(2, Math.round((state.basket.greenHi - state.basket.greenLo) * 100))}%` }} /><span>{Math.round(state.basket.power * 100)}</span></div>
         </div>}
         {state?.mode === 'basket' && state?.basket?.message && <div className="tt-message" role="status">{state.basket.message}</div>}
         {state?.mode === 'basket' && <button className="tt-exit" onClick={() => { engine.current?.exitBasket(); focus(); }} aria-label="Exit hoops">✕ EXIT <kbd>X</kbd></button>}

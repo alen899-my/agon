@@ -110,6 +110,7 @@ kbd { font: inherit; border: 1px solid var(--line); padding: 2px 4px; border-rad
 .tt-auto { align-self: center; background: var(--surface); border: 1px solid var(--line); padding: 8px 14px; font-size: 8px; letter-spacing: 1.5px; }
 .bb-meter { position: relative; width: 34px; height: 52px; border: 1px solid var(--ink); background: var(--surface); overflow: hidden; }
 .bb-meter i { position: absolute; bottom: 0; left: 0; right: 0; background: linear-gradient(to top, #2e7d32, #ffb300 70%, #c62828); }
+.bb-green { position: absolute; left: 0; right: 0; background: rgba(0, 230, 80, .5); border-top: 1px solid #00e650; border-bottom: 1px solid #00e650; }
 .bb-meter span { position: absolute; inset: 0; display: grid; place-items: center; font-size: 10px; font-weight: 700; mix-blend-mode: difference; color: #fff; }
 .bb-play { bottom: 160px; }
 .bb-shoot { border-width: 2px; }
