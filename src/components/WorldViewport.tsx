@@ -1,21 +1,21 @@
 import { useEffect, useRef, useState, type MutableRefObject } from 'react';
-import { WorldEngine } from '../world/WorldEngine';
+import { WorldEngine, type QualityLevel } from '../world/WorldEngine';
 import type { Theme } from '../game/State';
 import type { WorldAction, WorldSnapshot } from '../world/Simulation';
 
 const KEYS: Record<string, WorldAction> = { KeyW: 'forward', KeyS: 'back', KeyA: 'left', KeyD: 'right', ArrowUp: 'forward', ArrowDown: 'back', ArrowLeft: 'turnLeft', ArrowRight: 'turnRight', ShiftLeft: 'sprint', ShiftRight: 'sprint', Space: 'jump' };
-interface Props { engineRef: MutableRefObject<WorldEngine | null>; onSnapshot: (s: WorldSnapshot) => void; onMap: () => void; theme: Theme; portrait: boolean }
+interface Props { engineRef: MutableRefObject<WorldEngine | null>; onSnapshot: (s: WorldSnapshot) => void; onMap: () => void; theme: Theme; quality: QualityLevel; portrait: boolean }
 
-export function WorldViewport({ engineRef, onSnapshot, onMap, theme, portrait }: Props) {
+export function WorldViewport({ engineRef, onSnapshot, onMap, theme, quality, portrait }: Props) {
   const canvas = useRef<HTMLCanvasElement>(null);
-  const props = useRef({ onSnapshot, onMap, theme, portrait }); props.current = { onSnapshot, onMap, theme, portrait };
+  const props = useRef({ onSnapshot, onMap, theme, quality, portrait }); props.current = { onSnapshot, onMap, theme, quality, portrait };
   const [error, setError] = useState('');
   useEffect(() => {
     const element = canvas.current!;
     let engine: WorldEngine;
     try { engine = new WorldEngine(element, s => props.current.onSnapshot(s)); }
     catch { setError('This map needs WebGL 2. Enable hardware acceleration or try a compatible browser.'); return; }
-    engineRef.current = engine; engine.setTheme(props.current.theme);
+    engineRef.current = engine; engine.setTheme(props.current.theme); engine.applyQuality(props.current.quality);
     const resize = () => { const bounds = element.getBoundingClientRect(); engine.resize(bounds.width, bounds.height); };
     const observer = new ResizeObserver(resize); observer.observe(element);
     window.addEventListener('resize', resize); resize();
@@ -61,6 +61,7 @@ export function WorldViewport({ engineRef, onSnapshot, onMap, theme, portrait }:
     };
   }, [engineRef]);
   useEffect(() => engineRef.current?.setTheme(theme), [theme, engineRef]);
+  useEffect(() => engineRef.current?.applyQuality(quality), [quality, engineRef]);
   useEffect(() => engineRef.current?.setSuspended(document.hidden || portrait), [portrait, engineRef]);
   return <><canvas ref={canvas} tabIndex={0} className="world-canvas" aria-label="3D neighborhood. WASD to move, drag to look, V to switch camera, E to use car." />
     {error && <div className="world-error" role="alert"><h2>Unable to render the map</h2><p>{error}</p><button className="primary-button" onClick={() => location.reload()}>RELOAD</button></div>}</>;

@@ -1,27 +1,38 @@
 ﻿import { useEffect, useRef, useState } from 'react';
 import { ThemeToggle } from './components/ThemeToggle';
+import { QualityToggle } from './components/QualityToggle';
 import { WorldViewport } from './components/WorldViewport';
 import { WorldControls } from './components/WorldControls';
 import { DistrictMap } from './components/DistrictMap';
+import { PhysicsChecklist } from './components/PhysicsChecklist';
 import { PLACES } from './world/Map';
 import type { Theme } from './game/State';
-import type { WorldEngine } from './world/WorldEngine';
+import type { WorldEngine, QualityLevel } from './world/WorldEngine';
 import type { WorldSnapshot } from './world/Simulation';
 
 function initialTheme(): Theme {
   try { const saved = localStorage.getItem('agon-theme'); if (saved === 'light' || saved === 'dark' || saved === 'color') return saved; } catch { /* Optional storage. */ }
   return 'light';
 }
+function initialQuality(): QualityLevel {
+  try {
+    const saved = localStorage.getItem('agon-quality');
+    if (saved === 'low' || saved === 'balanced' || saved === 'high' || saved === 'ultra') return saved;
+  } catch { /* Optional storage. */ }
+  return 'balanced';
+}
 const portraitQuery = '(orientation: portrait) and (max-width: 1000px)';
 export default function App() {
   const engine = useRef<WorldEngine | null>(null);
   const [state, setState] = useState<WorldSnapshot | null>(null);
   const [theme, setTheme] = useState<Theme>(initialTheme);
+  const [quality, setQuality] = useState<QualityLevel>(initialQuality);
   const [portrait, setPortrait] = useState(() => matchMedia(portraitQuery).matches);
   const [mapOpen, setMapOpen] = useState(false);
   const resumeAfterMap = useRef(false);
   const [notice, setNotice] = useState('');
   const [fullscreen, setFullscreen] = useState(false);
+  const [physicsOpen, setPhysicsOpen] = useState(false);
   useEffect(() => {
     const media = matchMedia(portraitQuery);
     const rotate = () => setPortrait(media.matches);
@@ -35,6 +46,9 @@ export default function App() {
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#111111' : '#f4f4f4');
     try { localStorage.setItem('agon-theme', theme); } catch { /* Optional storage. */ }
   }, [theme]);
+  useEffect(() => {
+    try { localStorage.setItem('agon-quality', quality); } catch { /* Optional storage. */ }
+  }, [quality]);
   const focus = () => document.querySelector<HTMLCanvasElement>('canvas')?.focus();
   const toggleMap = () => {
     if (!mapOpen) { resumeAfterMap.current = engine.current?.simulation.active ?? false; if (resumeAfterMap.current) engine.current?.togglePause(); }
@@ -65,13 +79,15 @@ export default function App() {
       <nav aria-label="Game settings">
         <button className="control" onClick={enterFullscreen} aria-label={fullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}>⛶</button>
         <ThemeToggle theme={theme} onChange={setTheme} />
+        <QualityToggle quality={quality} onChange={setQuality} />
         <button className="control" onClick={() => engine.current?.toggleView()} aria-label="Switch camera view">{state?.view === 'first' ? '1ST PERSON' : '3RD PERSON'} <kbd>V</kbd></button>
         <button className="control" onClick={toggleMap} aria-expanded={mapOpen}>MAP <kbd>M</kbd></button>
+        <button className="control" onClick={() => setPhysicsOpen(!physicsOpen)} aria-expanded={physicsOpen} aria-label="Physics checklist">⚙ PHYSICS</button>
         <button className="control" disabled={ready || mapOpen} onClick={() => { engine.current?.togglePause(); focus(); }} aria-label={state?.paused ? 'Resume' : 'Pause'}>{state?.paused ? '▶' : 'Ⅱ'}</button>
       </nav>
     </header>
     <section className="world-stage" aria-label="Open world neighborhood">
-      <WorldViewport engineRef={engine} onSnapshot={setState} onMap={toggleMap} theme={theme} portrait={portrait} />
+      <WorldViewport engineRef={engine} onSnapshot={setState} onMap={toggleMap} theme={theme} quality={quality} portrait={portrait} />
       {fullscreen && <button className="fullscreen-exit" onClick={enterFullscreen} aria-label="Exit fullscreen">⛶ EXIT</button>}
       <div className="location-card"><span className="eyebrow">DISTRICT 01 / FREE ROAM</span><h2>{ready ? 'The neighborhood.' : state?.location}</h2><p>{ready ? 'A small place. A thousand directions.' : state?.driving ? 'Behind the wheel. Make your own route.' : 'No hurry. Take the long way home.'}</p></div>
       <div className="compass"><span>W</span><b>{heading}</b><span>E</span><i /></div>
@@ -86,6 +102,10 @@ export default function App() {
       {!ready && <>
         <div className="look-hint">{state?.view === 'first' ? 'FIRST PERSON' : 'THIRD PERSON'}<span>DRAG THE WORLD TO LOOK AROUND</span></div>
         {state?.view === 'first' && <div className="crosshair" aria-hidden="true">+</div>}
+        {state?.driving && <div className={`damage-bar${(state?.damage ?? 0) > 60 ? ' critical' : ''}`} aria-label={`Car damage ${state?.damage ?? 0} percent`}><i style={{ width: `${state?.damage ?? 0}%` }} /><span>DMG {state?.damage ?? 0}%</span></div>}
+        {state?.driving && state?.frontBlocked && <div className="front-warning" role="status">⚠ {state.frontDistance}m AHEAD</div>}
+        {state?.impact && <div className="crash-flash" role="status">CRASH · {state.impact.speed} KM/H vs {state.impact.with.toUpperCase()}</div>}
+        {state?.skidding && <div className="skid-note" aria-hidden="true">DRIFT</div>}
         <button className="minimap-button" onClick={toggleMap} aria-label="Open district map"><DistrictMap state={state} theme={theme} /><div><b>{state?.driving ? `${state.speed} KM/H` : 'YOUR NEIGHBORHOOD'}</b><span>↗</span></div></button>
         <div className="destination"><span>◇</span><div><b>{destination?.name ?? 'Choose a destination'}</b><small>{distance !== null ? `${distance} m away` : 'Open the map to set a waypoint'}</small></div></div>
         {(state?.nearbyCar || state?.driving) && <button className="interact-button" onClick={() => { engine.current?.interact(); focus(); }}>{state.driving ? 'EXIT VEHICLE' : 'DRIVE THIS CAR'} <kbd>E</kbd></button>}
@@ -99,6 +119,7 @@ export default function App() {
         </button>)}</div></div>
         <p className="map-caption">Select a place to set a waypoint. Walk or drive there to discover it.</p>
       </div></div>}
+      {physicsOpen && !ready && <div className="physics-cover"><div className="physics-sheet" role="dialog" aria-label="Physics checklist"><div className="map-heading"><div><p className="eyebrow">REALISTIC PHYSICS · ONE BY ONE</p><h2>Systems online.</h2></div><button className="control" onClick={() => setPhysicsOpen(false)} aria-label="Close physics">✕</button></div><PhysicsChecklist state={state} /><p className="map-caption">Drive into walls, traffic and crowds to tick crash events. Repair at South Station.</p></div></div>}
       {portrait && <div className="rotate-cover"><span className="rotate-symbol">↻</span><p className="eyebrow">MORE ROOM TO EXPLORE</p><h2>Turn your world.</h2><p>Rotate your phone to landscape.<br />Your neighborhood will be waiting.</p><button className="primary-button" onClick={enterFullscreen}>GO FULLSCREEN <span>⛶</span></button></div>}
     </section>
     <footer className="district-footer"><span>W A S D <i>MOVE</i> · SHIFT <i>SPRINT</i> · SPACE <i>JUMP</i></span><span>STAGE 01 — THE NEIGHBORHOOD</span><span>{state?.distance ?? 0} m EXPLORED</span></footer>

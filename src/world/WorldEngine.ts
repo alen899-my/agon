@@ -1,9 +1,13 @@
 import * as THREE from 'three';
 import { GameLoop } from '../game/GameLoop';
 import type { Theme } from '../game/State';
-import { AssetKit, buildMap, type Stickman } from './Assets';
-import { BUILDINGS, PLACES, seeded, type Point } from './Map';
-import { routePoint, Simulation, type WorldAction, type WorldSnapshot } from './Simulation';
+import { AssetKit, buildMap, type Stickman, type Vehicle } from './Assets';
+import { BUILDINGS, PLACES, seeded } from './Map';
+import { Simulation, type WorldAction, type WorldSnapshot } from './Simulation';
+
+export type QualityLevel = 'low' | 'balanced' | 'high' | 'ultra';
+const QUALITY_PIXEL: Record<QualityLevel, number> = { low: 1, balanced: 1.5, high: 2, ultra: 2.5 };
+const QUALITY_SHADOW: Record<QualityLevel, number> = { low: 512, balanced: 1024, high: 2048, ultra: 4096 };
 
 export class WorldEngine {
   readonly simulation = new Simulation();
@@ -12,14 +16,17 @@ export class WorldEngine {
   private readonly camera = new THREE.PerspectiveCamera(60, 1, 0.12, 340);
   private readonly kit: AssetKit;
   private readonly avatar: Stickman;
-  private readonly car: THREE.Group;
+  private readonly car: Vehicle;
+  private readonly parked: Vehicle[] = [];
   private readonly sun = new THREE.DirectionalLight(0xffffff, 3);
   private readonly ambient = new THREE.HemisphereLight(0xffffff, 0x555555, 2.2);
   private readonly marker: THREE.Mesh;
   private readonly loop: GameLoop;
-  private readonly people: { actor: Stickman; route: Point[]; offset: number; speed: number }[] = [];
-  private readonly traffic: { mesh: THREE.Group; offset: number; speed: number }[] = [];
-  private readonly trafficRoute = [{ x: -76, z: -76 }, { x: 76, z: -76 }, { x: 76, z: 76 }, { x: -76, z: 76 }];
+  private readonly people: { actor: Stickman }[] = [];
+  private readonly traffic: Vehicle[] = [];
+  private prevSpeed = 0; private shake = 0; private lastImpactAt = -10; private prevSimTime = 0;
+  private quality: QualityLevel = 'balanced'; private pixelCap = QUALITY_PIXEL.balanced;
+  private lastW = 1; private lastH = 1;
   private readonly cameraBoxes = BUILDINGS.map(b => new THREE.Box3(new THREE.Vector3(b.x - b.w / 2 - 0.35, 0, b.z - b.d / 2 - 0.35), new THREE.Vector3(b.x + b.w / 2 + 0.35, b.h + 0.5, b.z + b.d / 2 + 0.35)));
   private target = new THREE.Vector3(); private desired = new THREE.Vector3(); private direction = new THREE.Vector3(); private hit = new THREE.Vector3(); private ray = new THREE.Ray();
   private suspended = false; private disposed = false; private hudTime = 0;
@@ -36,25 +43,20 @@ export class WorldEngine {
     Object.assign(this.sun.shadow.camera, { left: -44, right: 44, top: 44, bottom: -44, near: 1, far: 150 });
     this.sun.shadow.bias = -0.0004; this.sun.shadow.normalBias = 0.1;
     this.avatar = this.kit.stickman(true); this.scene.add(this.avatar.group);
-    this.car = this.kit.car(); this.scene.add(this.car);
+    this.car = this.kit.car(); this.scene.add(this.car.group);
     const random = seeded(8008);
     for (let i = 0; i < 16; i++) {
-      const east = i % 2 === 0, north = i % 4 < 2;
-      const x1 = east ? 13 : -73, x2 = east ? 73 : -13;
-      const z1 = north ? -73 : 13, z2 = north ? -13 : 73;
-      const route = [{ x: x1, z: z1 }, { x: x2, z: z1 }, { x: x2, z: z2 }, { x: x1, z: z2 }];
-      if (i % 3 === 0) route.reverse();
       const actor = this.kit.stickman(false, i); actor.group.scale.setScalar(0.9 + random() * 0.15);
-      this.scene.add(actor.group); this.people.push({ actor, route, offset: random() * 240, speed: 0.9 + random() * 0.6 });
+      this.scene.add(actor.group); this.people.push({ actor });
     }
     for (let i = 0; i < 6; i++) {
-      const mesh = this.kit.car(i === 0 ? 'bus' : i % 3 === 0 ? 'van' : 'car', i % 2 === 0);
-      this.scene.add(mesh); this.traffic.push({ mesh, offset: i * 100 + 25, speed: 7 });
+      const vehicle = this.kit.car(i === 0 ? 'bus' : i % 3 === 0 ? 'van' : 'car', i % 2 === 0);
+      this.scene.add(vehicle.group); this.traffic.push(vehicle);
     }
     for (const [x, z, type] of [[-11, -38, 'van'], [11, -54, 'car'], [55, 12, 'car']] as const) {
-      const parked = this.kit.car(type, true); parked.position.set(x, 0, z); this.scene.add(parked);
+      const parked = this.kit.car(type, true); parked.group.position.set(x, 0, z); this.scene.add(parked.group); this.parked.push(parked);
     }
-    this.marker = new THREE.Mesh(new THREE.TorusGeometry(1.2, 0.07, 6, 32), new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false }));
+    this.marker = new THREE.Mesh(new THREE.TorusGeometry(1.2, 0.07, 8, 48), new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false }));
     this.marker.rotation.x = -Math.PI / 2; this.marker.renderOrder = 5; this.scene.add(this.marker);
     this.setTheme('light');
     this.loop = new GameLoop(dt => {
@@ -119,9 +121,27 @@ export class WorldEngine {
     if (this.marker) (this.marker.material as THREE.MeshBasicMaterial).color.setHex(dark ? 0xffffff : 0x111111);
   }
   resize(width: number, height: number): void {
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
-    this.renderer.setSize(Math.max(1, width), Math.max(1, height), false);
-    this.camera.aspect = Math.max(1, width) / Math.max(1, height); this.camera.updateProjectionMatrix();
+    this.lastW = Math.max(1, width); this.lastH = Math.max(1, height);
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.pixelCap));
+    this.renderer.setSize(this.lastW, this.lastH, false);
+    this.camera.aspect = this.lastW / this.lastH; this.camera.updateProjectionMatrix();
+  }
+  /** Graphics quality for high-spec devices. Live-applied: pixel ratio, shadow resolution, shadows on/off. */
+  applyQuality(q: QualityLevel): void {
+    this.quality = q; this.pixelCap = QUALITY_PIXEL[q];
+    this.sun.shadow.mapSize.set(QUALITY_SHADOW[q], QUALITY_SHADOW[q]);
+    if (this.sun.shadow.map) { this.sun.shadow.map.dispose(); this.sun.shadow.map = null; }
+    const enable = q !== 'low';
+    if (this.renderer.shadowMap.enabled !== enable) {
+      this.renderer.shadowMap.enabled = enable;
+      const seen = new Set<THREE.Material>();
+      this.scene.traverse(o => {
+        const mesh = o as THREE.Mesh;
+        const mats = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : [];
+        for (const m of mats as THREE.Material[]) if (m && !seen.has(m)) { seen.add(m); m.needsUpdate = true; }
+      });
+    }
+    this.resize(this.lastW, this.lastH);
   }
   private render = (alpha: number): void => {
     if (this.disposed) return;
@@ -129,25 +149,43 @@ export class WorldEngine {
     const x = THREE.MathUtils.lerp(sim.previous.x, sim.x, alpha), z = THREE.MathUtils.lerp(sim.previous.z, sim.z, alpha), y = THREE.MathUtils.lerp(sim.previous.y, sim.y, alpha);
     this.avatar.group.position.set(x, y + 0.08, z); this.avatar.group.rotation.y = -sim.facing;
     // Model forward is -Z; a positive world yaw turns it toward +X.
-    this.avatar.animate(sim.distance * 2, sim.pace > 0.2 && !sim.driving);
+    const gaitI = sim.driving ? 0 : sim.moveBlend * THREE.MathUtils.clamp(sim.pace / 4.6, 0, 1.2);
+    const bob = gaitI > 0.02 ? Math.abs(Math.sin(sim.stride)) * 0.045 * Math.min(1, gaitI) : Math.sin(sim.time * 2.2) * 0.006;
+    this.avatar.group.position.y += bob;
+    this.avatar.animate({ phase: sim.stride, intensity: gaitI, airborne: sim.y > 0.02 && !sim.driving, dip: sim.landDip, idle: sim.time });
     this.avatar.group.visible = !sim.driving && sim.view === 'third';
-    this.car.position.set(sim.car.x, 0.08, sim.car.z); this.car.rotation.y = -sim.car.yaw;
-    this.car.visible = !(sim.driving && sim.view === 'first');
-    for (const person of this.people) {
-      const point = routePoint(person.route, person.offset + sim.time * person.speed);
+    // Car body feel: pitch under accel/brake, roll in corners, bounce on crash.
+    const dt = Math.max(0.001, Math.min(0.05, sim.time - this.prevSimTime || 0.016));
+    this.prevSimTime = sim.time;
+    const accel = sim.driving ? (sim.car.speed - this.prevSpeed) * 8 : 0;
+    this.prevSpeed = sim.car.speed;
+    this.car.group.position.set(sim.car.x, 0.08, sim.car.z); this.car.group.rotation.y = -sim.car.yaw;
+    this.car.update(sim.car.speed, sim.car.steer, dt, sim.car.braking, {
+      pitch: THREE.MathUtils.clamp(-accel * 0.012, -0.06, 0.08),
+      roll: sim.skidding ? Math.sin(sim.time * 20) * 0.02 : -sim.car.steer * Math.min(0.05, Math.abs(sim.car.speed) * 0.003),
+    });
+    this.car.group.visible = !(sim.driving && sim.view === 'first');
+    // Ped + traffic positions are owned by the simulation (braking / collisions).
+    this.people.forEach((person, i) => {
+      const point = sim.peds[i]; if (!point) return;
       person.actor.group.position.set(point.x, 0.08, point.z); person.actor.group.rotation.y = -point.yaw;
-      person.actor.animate(sim.time * person.speed * 3, sim.active);
-    }
-    for (const traffic of this.traffic) {
-      const p = routePoint(this.trafficRoute, traffic.offset + sim.time * traffic.speed);
-      traffic.mesh.position.set(p.x, 0.08, p.z); traffic.mesh.rotation.y = -p.yaw;
-    }
+      person.actor.animate({ phase: point.phase, intensity: point.move, airborne: false, dip: 0, idle: sim.time + i * 1.7 });
+    });
+    this.traffic.forEach((vehicle, i) => {
+      const p = sim.traffic[i]; if (!p) return;
+      vehicle.group.position.set(p.x, 0.08, p.z); vehicle.group.rotation.y = -p.yaw;
+      vehicle.update(p.speed, p.steer, dt, p.braking);
+    });
+    // Camera kick on fresh impacts.
+    if (sim.impact && sim.impact.at !== this.lastImpactAt) { this.lastImpactAt = sim.impact.at; this.shake = Math.min(1, sim.impact.speed / 40 + 0.35); }
+    this.shake *= 0.9;
+    const shakeX = this.shake * Math.sin(sim.time * 70) * 0.35, shakeY = this.shake * Math.cos(sim.time * 55) * 0.25;
     const waypoint = PLACES.find(p => p.id === sim.waypoint);
     this.marker.visible = Boolean(waypoint); if (waypoint) this.marker.position.set(waypoint.x, 0.25, waypoint.z);
     if (sim.phase === 'ready') {
       this.camera.position.set(69, 52, 78); this.camera.lookAt(-7, 0, -8);
     } else if (sim.view === 'first') {
-      this.camera.position.set(x, y + (sim.driving ? 1.85 : 1.84), z);
+      this.camera.position.set(x + shakeX, y + (sim.driving ? 1.85 : 1.84) + shakeY, z);
       this.target.set(x + Math.sin(sim.yaw) * 10, this.camera.position.y - Math.sin(sim.pitch) * 10, z - Math.cos(sim.yaw) * 10);
       this.camera.lookAt(this.target);
     } else {
@@ -157,7 +195,9 @@ export class WorldEngine {
       this.direction.subVectors(this.desired, this.target); let cameraDistance = this.direction.length(); this.direction.normalize();
       this.ray.set(this.target, this.direction);
       for (const box of this.cameraBoxes) if (this.ray.intersectBox(box, this.hit)) cameraDistance = Math.min(cameraDistance, Math.max(0.45, this.hit.distanceTo(this.target) - 0.3));
-      this.camera.position.copy(this.target).addScaledVector(this.direction, cameraDistance); this.camera.lookAt(this.target);
+      this.camera.position.copy(this.target).addScaledVector(this.direction, cameraDistance);
+      this.camera.position.x += shakeX; this.camera.position.y += shakeY;
+      this.camera.lookAt(this.target);
     }
     this.sun.position.set(x + 35, 65, z + 25); this.sun.target.position.set(x, 0, z); this.sun.target.updateMatrixWorld();
     this.renderer.render(this.scene, this.camera);

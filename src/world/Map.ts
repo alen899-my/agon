@@ -41,6 +41,44 @@ export const SOLIDS: Box[] = [...BUILDINGS,
   { x: 43, z: -48, w: 7, d: 7, h: 0.8 },
 ];
 
+export interface Collider { x: number; z: number; r: number; kind: 'prop' | 'vehicle' | 'ped'; label?: string }
+/** Street furniture + parked cars that now block movement (Phase 0 colliders). */
+export const PARKED_CARS: Collider[] = [
+  { x: -11, z: -38, r: 2.4, kind: 'vehicle', label: 'parked-van' },
+  { x: 11, z: -54, r: 2.2, kind: 'vehicle', label: 'parked-car' },
+  { x: 55, z: 12, r: 2.2, kind: 'vehicle', label: 'parked-car' },
+];
+const LAMPS: Collider[] = [];
+for (const x of [-12, 12]) for (let z = -67; z < 80; z += 24) LAMPS.push({ x, z, r: 0.35, kind: 'prop', label: 'lamp' });
+export const PROPS: Collider[] = [
+  ...LAMPS,
+  { x: -27, z: 23, r: 3.2, kind: 'prop', label: 'sculpture' },
+  { x: 43, z: -48, r: 3.8, kind: 'prop', label: 'fountain' },
+  { x: -36, z: 32, r: 1.2, kind: 'prop', label: 'bench' },
+  { x: -20, z: 32, r: 1.2, kind: 'prop', label: 'bench' },
+  { x: 31, z: -56, r: 1.2, kind: 'prop', label: 'bench' },
+  { x: 49, z: -56, r: 1.2, kind: 'prop', label: 'bench' },
+  { x: 26, z: 26, r: 1.2, kind: 'prop', label: 'bench' },
+  { x: 27, z: -39, r: 0.6, kind: 'prop', label: 'tree' },
+  { x: 28, z: -60, r: 0.6, kind: 'prop', label: 'tree' },
+  { x: 51, z: -62, r: 0.6, kind: 'prop', label: 'tree' },
+  { x: 53, z: -38, r: 0.6, kind: 'prop', label: 'tree' },
+  { x: 36, z: -63, r: 0.6, kind: 'prop', label: 'tree' },
+  { x: -42, z: 16, r: 0.6, kind: 'prop', label: 'tree' },
+  { x: -43, z: 31, r: 0.6, kind: 'prop', label: 'tree' },
+  { x: -15, z: 16, r: 0.6, kind: 'prop', label: 'tree' },
+  { x: 20, z: 62, r: 0.6, kind: 'prop', label: 'tree' },
+  { x: 56, z: 24, r: 0.6, kind: 'prop', label: 'tree' },
+  { x: 30, z: 62, r: 0.5, kind: 'prop', label: 'canopy-pillar' },
+  { x: 42, z: 62, r: 0.5, kind: 'prop', label: 'canopy-pillar' },
+  { x: 54, z: 62, r: 0.5, kind: 'prop', label: 'canopy-pillar' },
+];
+export const TRAFFIC_ROUTE = [{ x: -76, z: -76 }, { x: 76, z: -76 }, { x: 76, z: 76 }, { x: -76, z: 76 }];
+export function circleHit(ax: number, az: number, ar: number, bx: number, bz: number, br: number): boolean {
+  const dx = ax - bx, dz = az - bz, r = ar + br;
+  return dx * dx + dz * dz < r * r;
+}
+
 export function intersects(x: number, z: number, radius: number, boxes: readonly Box[] = SOLIDS): boolean {
   return boxes.some(box => {
     const cx = Math.max(box.x - box.w / 2, Math.min(x, box.x + box.w / 2));

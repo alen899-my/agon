@@ -3,14 +3,26 @@ import { BUILDINGS, ROADS, seeded } from './Map';
 
 type Shape = 'box' | 'sphere' | 'cylinder';
 type MaterialName = 'road' | 'pavement' | 'white' | 'ink' | 'glass' | 'metal' | 'wall0' | 'wall1' | 'wall2' | 'leaf';
-export interface Stickman { group: THREE.Group; arms: THREE.Group[]; legs: THREE.Group[]; animate: (stride: number, moving: boolean) => void }
+export interface GaitState { phase: number; intensity: number; airborne: boolean; dip: number; idle: number }
+export interface Stickman {
+  group: THREE.Group; hips: THREE.Group; torso: THREE.Group; head: THREE.Group;
+  arms: THREE.Group[]; elbows: THREE.Group[]; legs: THREE.Group[]; knees: THREE.Group[]; feet: THREE.Mesh[];
+  animate: (s: GaitState) => void;
+}
+export interface Vehicle {
+  group: THREE.Group; body: THREE.Group;
+  spins: THREE.Object3D[]; frontSteer: THREE.Group[];
+  brakeMat: THREE.MeshStandardMaterial; headMat: THREE.MeshStandardMaterial;
+  spin: number;
+  update: (speed: number, steer: number, dt: number, braking: boolean, bodyTilt?: { pitch: number; roll: number }) => void;
+}
 
 /** One asset kit. All copies share geometry/materials; static copies are GPU-instanced. */
 export class AssetKit {
   readonly geometry = {
     box: new THREE.BoxGeometry(1, 1, 1),
-    sphere: new THREE.SphereGeometry(1, 12, 8),
-    cylinder: new THREE.CylinderGeometry(1, 1, 1, 10),
+    sphere: new THREE.SphereGeometry(1, 20, 14),
+    cylinder: new THREE.CylinderGeometry(1, 1, 1, 16),
   };
   readonly materials: Record<MaterialName, THREE.MeshStandardMaterial> = {
     road: new THREE.MeshStandardMaterial({ color: 0x373737, roughness: 1 }),
@@ -51,10 +63,10 @@ export class AssetKit {
     parent.add(mesh); return mesh;
   }
   sign(scene: THREE.Scene, text: string, x: number, y: number, z: number, width: number, yaw = 0): void {
-    const canvas = document.createElement('canvas'); canvas.width = 512; canvas.height = 96;
+    const canvas = document.createElement('canvas'); canvas.width = 1024; canvas.height = 192;
     const ctx = canvas.getContext('2d')!;
-    ctx.fillStyle = '#181818'; ctx.fillRect(0, 0, 512, 96);
-    ctx.fillStyle = '#ffffff'; ctx.font = '600 42px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(text, 256, 50, 480);
+    ctx.fillStyle = '#181818'; ctx.fillRect(0, 0, 1024, 192);
+    ctx.fillStyle = '#ffffff'; ctx.font = '600 84px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(text, 512, 100, 960);
     const texture = new THREE.CanvasTexture(canvas); texture.colorSpace = THREE.SRGBColorSpace;
     const material = new THREE.MeshBasicMaterial({ map: texture }); const geometry = new THREE.PlaneGeometry(width, width * 96 / 512);
     const mesh = new THREE.Mesh(geometry, material); mesh.position.set(x, y, z); mesh.rotation.y = yaw; scene.add(mesh);
@@ -62,46 +74,109 @@ export class AssetKit {
   }
   stickman(player = false, variation = 0): Stickman {
     const group = new THREE.Group(); const material: MaterialName = player ? 'ink' : variation % 3 === 0 ? 'wall2' : variation % 3 === 1 ? 'ink' : 'wall1';
-    this.mesh(group, 'cylinder', material, 0, 1.25, 0, 0.17, 0.65, 0.13);
-    this.mesh(group, 'sphere', material, 0, 1.9, 0, 0.235, 0.26, 0.23);
-    this.mesh(group, 'cylinder', material, 0, 1.64, 0, 0.065, 0.2, 0.065);
-    const arms: THREE.Group[] = [], legs: THREE.Group[] = [];
+    // Hips root -> pelvis, torso chain, jointed arms/legs with knees + elbows.
+    const hips = new THREE.Group(); hips.position.set(0, 0.95, 0); group.add(hips);
+    this.mesh(hips, 'cylinder', material, 0, 0.02, 0, 0.16, 0.22, 0.13);
+    const torso = new THREE.Group(); torso.position.set(0, 0.08, 0); hips.add(torso);
+    this.mesh(torso, 'cylinder', material, 0, 0.32, 0, 0.17, 0.6, 0.13);
+    const head = new THREE.Group(); head.position.set(0, 0.62, 0); torso.add(head);
+    this.mesh(head, 'cylinder', material, 0, 0.04, 0, 0.06, 0.12, 0.06);
+    this.mesh(head, 'sphere', material, 0, 0.24, 0, 0.23, 0.26, 0.23);
+    const arms: THREE.Group[] = [], elbows: THREE.Group[] = [], legs: THREE.Group[] = [], knees: THREE.Group[] = [], feet: THREE.Mesh[] = [];
     for (const side of [-1, 1]) {
-      const arm = new THREE.Group(); arm.position.set(side * 0.24, 1.52, 0); group.add(arm); arms.push(arm);
-      this.mesh(arm, 'cylinder', material, 0, -0.31, 0, 0.065, 0.62, 0.065);
-      this.mesh(arm, 'sphere', material, 0, -0.65, 0, 0.075, 0.09, 0.075);
-      const leg = new THREE.Group(); leg.position.set(side * 0.12, 0.95, 0); group.add(leg); legs.push(leg);
-      this.mesh(leg, 'cylinder', material, 0, -0.4, 0, 0.075, 0.8, 0.075);
-      this.mesh(leg, 'box', material, 0, -0.86, -0.065, 0.16, 0.15, 0.3);
+      const shoulder = new THREE.Group(); shoulder.position.set(side * 0.235, 0.52, 0); torso.add(shoulder); arms.push(shoulder);
+      this.mesh(shoulder, 'cylinder', material, 0, -0.15, 0, 0.06, 0.3, 0.06);
+      const elbow = new THREE.Group(); elbow.position.set(0, -0.3, 0); shoulder.add(elbow); elbows.push(elbow);
+      this.mesh(elbow, 'cylinder', material, 0, -0.14, 0, 0.055, 0.28, 0.055);
+      this.mesh(elbow, 'sphere', material, 0, -0.3, 0, 0.07, 0.09, 0.07);
+      const hip = new THREE.Group(); hip.position.set(side * 0.11, -0.02, 0); hips.add(hip); legs.push(hip);
+      this.mesh(hip, 'cylinder', material, 0, -0.21, 0, 0.075, 0.42, 0.075);
+      const knee = new THREE.Group(); knee.position.set(0, -0.44, 0); hip.add(knee); knees.push(knee);
+      this.mesh(knee, 'cylinder', material, 0, -0.2, 0, 0.065, 0.4, 0.065);
+      const foot = this.mesh(knee, 'box', material, 0, -0.42, -0.06, 0.14, 0.09, 0.28); feet.push(foot);
     }
     if (player) {
-      this.mesh(group, 'box', 'white', 0, 1.97, -0.208, 0.34, 0.065, 0.045);
-      this.mesh(group, 'box', 'wall1', 0, 1.25, 0.18, 0.31, 0.42, 0.18);
+      this.mesh(torso, 'box', 'white', 0, 0.35, -0.075, 0.2, 0.3, 0.02);
+      this.mesh(head, 'box', 'white', 0, 0.38, -0.08, 0.26, 0.05, 0.18);
     }
-    return { group, arms, legs, animate: (stride, moving) => {
-      const swing = moving ? Math.sin(stride) * 0.6 : 0;
-      legs[0].rotation.x = swing; legs[1].rotation.x = -swing;
-      arms[0].rotation.x = -swing * 0.8; arms[1].rotation.x = swing * 0.8;
+    return { group, hips, torso, head, arms, elbows, legs, knees, feet, animate: s => {
+      const I = Math.max(0, Math.min(1.2, s.intensity));
+      hips.position.y = 0.95 - s.dip * 0.09;
+      if (s.airborne) {
+        // Jump pose: front knee up, back leg trails, arms out for balance.
+        legs[0].rotation.x = -0.55; knees[0].rotation.x = 0.95; feet[0].rotation.x = 0.3;
+        legs[1].rotation.x = 0.38; knees[1].rotation.x = 0.5; feet[1].rotation.x = -0.2;
+        arms[0].rotation.set(0.15, 0, -0.6); arms[1].rotation.set(0.15, 0, 0.6);
+        elbows[0].rotation.x = -0.45; elbows[1].rotation.x = -0.45;
+        torso.rotation.set(0.12, 0, 0); head.rotation.set(-0.1, 0, 0);
+        return;
+      }
+      const sw0 = Math.sin(s.phase), sw1 = Math.sin(s.phase + Math.PI);
+      const moving = I > 0.03;
+      // Thigh swing + knee flexion on the passing leg + foot compensation.
+      legs[0].rotation.x = sw0 * 0.6 * I; legs[1].rotation.x = sw1 * 0.6 * I;
+      const k0 = (0.08 + Math.max(0, Math.sin(s.phase + Math.PI / 2)) * 0.85) * I + s.dip * 0.6;
+      const k1 = (0.08 + Math.max(0, Math.sin(s.phase + Math.PI * 1.5)) * 0.85) * I + s.dip * 0.6;
+      knees[0].rotation.x = k0; knees[1].rotation.x = k1;
+      feet[0].rotation.x = -(legs[0].rotation.x + k0) * 0.55; feet[1].rotation.x = -(legs[1].rotation.x + k1) * 0.55;
+      // Counter-swing arms with soft elbows.
+      arms[0].rotation.set(sw1 * 0.45 * I, 0, -0.04); arms[1].rotation.set(sw0 * 0.45 * I, 0, 0.04);
+      elbows[0].rotation.x = -(0.25 + 0.3 * I); elbows[1].rotation.x = -(0.25 + 0.3 * I);
+      // Torso lean + counter-rotation, head stabilizes the gaze.
+      torso.rotation.set(0.05 + 0.09 * I + s.dip * 0.12, sw0 * 0.07 * I, 0);
+      head.rotation.set(-(0.05 + 0.09 * I) * 0.8, -sw0 * 0.04 * I, 0);
+      if (!moving) {
+        // Idle: breathing, weight sway, relaxed arms.
+        const breath = Math.sin(s.idle * 2.2) * 0.5 + 0.5;
+        torso.scale.y = 1 + breath * 0.008;
+        hips.rotation.y = Math.sin(s.idle * 0.6) * 0.03;
+        arms[0].rotation.x = Math.sin(s.idle * 1.7) * 0.03; arms[1].rotation.x = Math.sin(s.idle * 1.7 + 1) * 0.03;
+      } else { torso.scale.y = 1; hips.rotation.y = 0; }
     } };
   }
-  car(kind: 'car' | 'van' | 'bus' = 'car', dark = false): THREE.Group {
-    const group = new THREE.Group(); const length = kind === 'bus' ? 7 : kind === 'van' ? 4.8 : 4.3;
-    const body = dark ? 'wall2' : 'white';
-    this.mesh(group, 'box', body, 0, 0.8, 0, 1.9, 0.7, length);
+  car(kind: 'car' | 'van' | 'bus' = 'car', dark = false): Vehicle {
+    const group = new THREE.Group(); const body = new THREE.Group(); group.add(body);
+    const length = kind === 'bus' ? 7 : kind === 'van' ? 4.8 : 4.3;
+    const bodyMat = dark ? 'wall2' : 'white';
+    this.mesh(body, 'box', bodyMat, 0, 0.8, 0, 1.9, 0.7, length);
     const cabinLength = kind === 'car' ? 2.4 : length - 0.6;
     const cabinHeight = kind === 'car' ? 0.75 : 1.4;
-    this.mesh(group, 'box', 'glass', 0, 1.15 + cabinHeight / 2, 0.1, 1.7, cabinHeight, cabinLength);
-    this.mesh(group, 'box', body, 0, 1.15 + cabinHeight, 0.1, 1.85, 0.15, cabinLength + 0.15);
+    this.mesh(body, 'box', 'glass', 0, 1.15 + cabinHeight / 2, 0.1, 1.7, cabinHeight, cabinLength);
+    this.mesh(body, 'box', bodyMat, 0, 1.15 + cabinHeight, 0.1, 1.85, 0.15, cabinLength + 0.15);
+    // Dedicated lamp materials per vehicle so brake glow doesn't leak across cars.
+    const brakeMat = new THREE.MeshStandardMaterial({ color: 0x7a1010, roughness: 0.4, emissive: 0xff1a1a, emissiveIntensity: 0.25 });
+    const headMat = new THREE.MeshStandardMaterial({ color: 0xf5f2df, roughness: 0.3, emissive: 0xfff6c9, emissiveIntensity: 0.35 });
+    this.extra.push(brakeMat, headMat);
+    const spins: THREE.Object3D[] = []; const frontSteer: THREE.Group[] = [];
+    const WHEEL_R = 0.4;
     for (const side of [-1, 1]) {
       for (const z of [-length * 0.32, length * 0.32]) {
-        const wheel = this.mesh(group, 'cylinder', 'ink', side, 0.48, z, 0.4, 0.22, 0.4); wheel.rotation.z = Math.PI / 2;
-        const hub = this.mesh(group, 'cylinder', 'metal', side * 1.13, 0.48, z, 0.17, 0.02, 0.17); hub.rotation.z = Math.PI / 2;
+        // Steer pivot (front wheels yaw) -> spin pivot (rolls with speed) -> tyre + hub.
+        const steer = new THREE.Group(); steer.position.set(side, 0.48, z); group.add(steer);
+        const spin = new THREE.Group(); steer.add(spin);
+        const tyre = new THREE.Mesh(this.geometry.cylinder, this.materials.ink);
+        tyre.scale.set(WHEEL_R, 0.22, WHEEL_R); tyre.rotation.z = Math.PI / 2;
+        tyre.castShadow = tyre.receiveShadow = true; spin.add(tyre);
+        const hub = new THREE.Mesh(this.geometry.cylinder, this.materials.metal);
+        hub.scale.set(0.17, 0.24, 0.17); hub.rotation.z = Math.PI / 2; spin.add(hub);
+        spins.push(spin);
+        if (z < 0) frontSteer.push(steer); // front = -Z (headlight end)
       }
-      this.mesh(group, 'box', 'white', side * 0.6, 0.86, -length / 2 - 0.02, 0.35, 0.2, 0.06);
-      this.mesh(group, 'box', 'ink', side * 0.6, 0.86, length / 2 + 0.02, 0.32, 0.14, 0.06);
-      this.mesh(group, 'box', body, side * 0.86, 1.6, 0.1, 0.08, cabinHeight, 0.15);
+      const head = new THREE.Mesh(this.geometry.box, headMat);
+      head.position.set(side * 0.6, 0.86, -length / 2 - 0.02); head.scale.set(0.35, 0.2, 0.06); body.add(head);
+      const tail = new THREE.Mesh(this.geometry.box, brakeMat);
+      tail.position.set(side * 0.6, 0.86, length / 2 + 0.02); tail.scale.set(0.32, 0.14, 0.06); body.add(tail);
+      this.mesh(body, 'box', bodyMat, side * 0.86, 1.6, 0.1, 0.08, cabinHeight, 0.15);
     }
-    return group;
+    const vehicle: Vehicle = { group, body, spins, frontSteer, brakeMat, headMat, spin: 0,
+      update: (speed, steer, dt, braking, bodyTilt) => {
+        vehicle.spin += (speed * dt) / WHEEL_R;
+        for (const s of spins) s.rotation.x = vehicle.spin;
+        for (const f of frontSteer) f.rotation.y = -steer * 0.45;
+        brakeMat.emissiveIntensity = braking ? 2.2 : 0.25;
+        if (bodyTilt) { body.rotation.x = bodyTilt.pitch; body.rotation.z = bodyTilt.roll; body.position.y = 0; }
+      } };
+    return vehicle;
   }
   dispose(): void {
     Object.values(this.geometry).forEach(g => g.dispose()); Object.values(this.materials).forEach(m => m.dispose()); this.extra.forEach(item => item.dispose());
