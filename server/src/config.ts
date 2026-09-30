@@ -7,15 +7,16 @@ const schema = z.object({
     .string()
     .min(1, 'CLIENT_URL is required')
     .transform((raw, ctx) => {
-      const origins = raw
+      const items = raw
         .split(',')
         .map((o) => o.trim())
         .filter(Boolean);
-      for (const origin of origins) {
+      const origins: string[] = [];
+      for (const item of items) {
         try {
-          new URL(origin);
+          origins.push(new URL(item).origin);
         } catch {
-          ctx.addIssue({ code: z.ZodIssueCode.custom, message: `bad origin: ${origin}` });
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: `bad origin: ${item}` });
           return z.NEVER;
         }
       }
@@ -23,7 +24,7 @@ const schema = z.object({
         ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'at least one origin required' });
         return z.NEVER;
       }
-      return origins;
+      return [...new Set(origins)];
     }),
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
   JWT_SECRET: z.string().min(16, 'JWT_SECRET must be at least 16 characters'),
