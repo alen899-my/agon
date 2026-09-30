@@ -9,6 +9,8 @@ export type View = 'third' | 'first';
 export interface Impact { speed: number; with: string; at: number }
 export interface TrafficCar { kind: VehicleKind; x: number; z: number; yaw: number; speed: number; offset: number; base: number; steer: number; wheelSpin: number; braking: boolean; prevYaw: number }
 export interface ParkedVehicle { kind: VehicleKind; x: number; z: number; yaw: number }
+/** Map dot for a far-away room member (1 Hz, no full transform). */
+export interface RemoteDot { id: string; x: number; z: number; driving: boolean }
 export interface VehicleTarget { type: 'player' | 'parked' | 'traffic'; index: number; kind: VehicleKind; x: number; z: number; yaw: number; speed: number; dist: number; enterable: boolean; reason: string | null }
 export interface Ped { x: number; z: number; yaw: number; route: Point[]; dist: number; speed: number; phase: number; seed: number; move: number; cur: number; scaredUntil: number }
 export interface SnapshotCar { x: number; z: number; yaw: number; speed: number; steer: number; wheelSpin: number; braking: boolean }
@@ -22,6 +24,9 @@ export interface WorldSnapshot {
   vehicleKind: VehicleKind; acceleration: number; crashed: boolean; skidding: boolean; car: SnapshotCar;
   transition: number;
   parked: ParkedVehicle[];
+  /** Private server presence. Null in solo. Filled by WorldEngine, not the sim. */
+  room: { code: string; members: number } | null;
+  dots: RemoteDot[];
   stridePhase: number; moveBlend: number; airborne: boolean; landDip: number;
   traffic: (SnapshotCar)[];
   peds: { x: number; z: number; yaw: number; phase: number; moving: number }[];
@@ -210,6 +215,8 @@ export class Simulation {
       car: { x: this.car.x, z: this.car.z, yaw: this.car.yaw, speed: this.car.speed, steer: this.car.steer, wheelSpin: this.car.wheelSpin, braking: this.car.braking },
       transition: this.transition,
       parked: this.parked.map(p => ({ ...p })),
+      room: null,
+      dots: [],
       stridePhase: this.stride, moveBlend: this.moveBlend, airborne: this.y > 0.02, landDip: Math.max(0, Math.min(1, this.landDip)),
       traffic: this.traffic.map(t => ({ x: t.x, z: t.z, yaw: t.yaw, speed: t.speed, steer: t.steer, wheelSpin: t.wheelSpin, braking: t.braking })),
       peds: this.peds.map(p => ({ x: p.x, z: p.z, yaw: p.yaw, phase: p.phase, moving: p.move })),

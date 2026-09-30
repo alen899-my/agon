@@ -1,4 +1,4 @@
-﻿@import "tailwindcss";
+@import "tailwindcss";
 @custom-variant dark (&:where(.dark, .dark *));
 :root { font-family: Arial, ui-sans-serif, system-ui, sans-serif; color: #191919; background: #f4f4f4; --shell: #f4f4f4; --surface: #fff; --ink: #191919; --muted: #666; --line: #d6d6d6; --accent: #111; --accent-ink: #fff; --pad: #e8e8e8; }
 :root.dark { color: #ededed; background: #111; --shell: #111; --surface: #1d1d1d; --ink: #ededed; --muted: #aaa; --line: #444; --accent: #fff; --accent-ink: #111; --pad: #333; }
@@ -8,17 +8,25 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 button:disabled { opacity: .4; cursor: default; }
 button:focus-visible, canvas:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--ink); outline-offset: -3px; }
 button, canvas { touch-action: manipulation; }
-.district-shell { height: 100dvh; display: flex; flex-direction: column; padding: 0 max(20px, env(safe-area-inset-right)) 0 max(20px, env(safe-area-inset-left)); }
-.district-header { height: 76px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-shrink: 0; }
-.wordmark { display: flex; align-items: center; gap: 14px; font-size: 34px; letter-spacing: -2px; font-weight: 800; }
-.wordmark > span { font-size: 28px; }
+.district-shell { height: 100dvh; display: flex; flex-direction: column; padding: 0 max(10px, env(safe-area-inset-right)) 0 max(10px, env(safe-area-inset-left)); }
+@media (min-width: 600px) { .district-shell { padding: 0 max(20px, env(safe-area-inset-right)) 0 max(20px, env(safe-area-inset-left)); } }
+.district-header { height: auto; min-height: 56px; display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-shrink: 0; padding-top: 6px; padding-bottom: 6px; flex-wrap: wrap; }
+@media (min-width: 600px) { .district-header { height: 76px; padding-top: 0; padding-bottom: 0; flex-wrap: nowrap; } }
+.wordmark { display: flex; align-items: center; gap: 10px; font-size: 28px; letter-spacing: -2px; font-weight: 800; flex-shrink: 0; }
+@media (min-width: 600px) { .wordmark { font-size: 34px; gap: 14px; } }
+.wordmark > span { font-size: 24px; }
+@media (min-width: 600px) { .wordmark > span { font-size: 28px; } }
 .wordmark > div { font-size: 8px; font-weight: 500; letter-spacing: 2px; line-height: 1.6; border-left: 1px solid var(--line); padding-left: 14px; }
 .header-center { display: flex; align-items: center; gap: 8px; font-size: 8px; letter-spacing: 1.5px; color: var(--muted); }
 .tiny-dot { width: 5px; height: 5px; background: var(--ink); border-radius: 100%; }
-nav { display: flex; gap: 7px; }
-.control { min-height: 42px; padding: 0 12px; color: var(--ink); border: 1px solid var(--line); border-radius: 5px; background: var(--surface); font-size: 10px; letter-spacing: .3px; }
+nav { display: flex; gap: 5px; flex-wrap: wrap; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+nav::-webkit-scrollbar { display: none; }
+@media (min-width: 600px) { nav { gap: 7px; flex-wrap: nowrap; overflow-x: visible; } }
+.control { min-height: 36px; padding: 0 9px; color: var(--ink); border: 1px solid var(--line); border-radius: 5px; background: var(--surface); font-size: 9px; letter-spacing: .3px; }
+@media (min-width: 600px) { .control { min-height: 42px; padding: 0 12px; font-size: 10px; } }
 .control:hover { background: var(--pad); }
 kbd { font: inherit; border: 1px solid var(--line); padding: 2px 4px; border-radius: 3px; margin-left: 7px; color: var(--muted); font-size: 9px; }
+@media (max-width: 599px) { kbd { display: none; } }
 .world-stage { position: relative; flex: 1; min-height: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: #ccc; isolation: isolate; }
 .world-stage:fullscreen, .world-stage:-webkit-full-screen { width: 100vw; height: 100vh; max-width: none; border: 0; border-radius: 0; background: #000; }
 .district-shell:fullscreen { padding: 0; background: #000; }
@@ -35,12 +43,168 @@ kbd { font: inherit; border: 1px solid var(--line); padding: 2px 4px; border-rad
 .compass span { color: var(--muted); } .compass b { font-weight: 600; } .compass i { position: absolute; top: 32px; left: calc(50% - 1px); height: 7px; width: 2px; background: var(--ink); }
 .exploration-count { position: absolute; top: 23px; right: 24px; background: var(--surface); border: 1px solid var(--line); padding: 15px 18px; text-align: right; }
 .exploration-count b { font-size: 25px; font-weight: 500; } .exploration-count b span { font-size: 17px; color: var(--muted); } .exploration-count small { display: block; font-size: 7px; letter-spacing: 1px; margin-top: 4px; }
-.world-intro { position: absolute; top: 27%; left: 24px; padding: 28px; background: var(--surface); border: 1px solid var(--line); }
-.world-intro h1 { font-size: clamp(43px, 5.3vw, 76px); font-weight: 800; line-height: .94; letter-spacing: -4px; margin: 20px 0; }
-.world-intro > p:not(.eyebrow) { color: var(--muted); font-size: 12px; line-height: 1.8; margin-bottom: 23px; }
-.primary-button { display: inline-flex; align-items: center; justify-content: space-between; gap: 40px; background: var(--accent); color: var(--accent-ink); min-height: 46px; padding: 0 18px; font-size: 10px; font-weight: 600; letter-spacing: 1px; border: 0; border-radius: 3px; }
-.primary-button > span { font-size: 20px; } .primary-button:hover { opacity: .85; }
-.intro-tags { display: flex; gap: 17px; margin-top: 24px; font-size: 7px; letter-spacing: .8px; color: var(--muted); }
+/* ── Intro panel: centered game start screen ───────────────────────────── */
+.world-intro {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  /* CSS grid: card is constrained to 400px, centered both axes */
+  display: grid;
+  grid-template-columns: minmax(0, 400px);
+  align-content: center;
+  justify-content: center;
+  place-items: start stretch;
+  gap: 0;
+  padding: 16px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  /* dark scrim — world peeks through behind the card */
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+
+/* All direct children sit inside a card feel */
+.world-intro > .eyebrow { margin-bottom: 0; }
+.world-intro > h1 {
+  font-size: clamp(38px, 9vw, 72px);
+  font-weight: 800;
+  line-height: .92;
+  letter-spacing: clamp(-2px, -0.5vw, -4px);
+  margin: 14px 0 16px;
+  color: #fff;
+  text-shadow: 0 2px 20px rgba(0,0,0,0.4);
+}
+.world-intro > .eyebrow {
+  font-size: 8px;
+  letter-spacing: 2px;
+  color: rgba(255,255,255,0.55);
+  font-weight: 600;
+}
+.world-intro > p:not(.eyebrow) {
+  color: rgba(255,255,255,0.65);
+  font-size: clamp(11px, 2.5vw, 13px);
+  line-height: 1.75;
+  margin: 0 0 22px;
+}
+/* Mode tabs */
+.mode-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 18px;
+}
+.mode-tabs button {
+  flex: 1;
+  min-height: 44px;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: rgba(255,255,255,0.55);
+  background: rgba(255,255,255,0.07);
+  border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 4px;
+  padding: 0 6px;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.mode-tabs button:hover { background: rgba(255,255,255,0.13); color: #fff; }
+.mode-tabs button.on {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+/* Name / server-code row — always vertical */
+.name-row {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  margin-bottom: 14px;
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  font-weight: 700;
+  color: rgba(255,255,255,0.7);
+}
+.name-row input {
+  width: 100%;
+  min-height: 50px;
+  padding: 0 16px;
+  font-size: 16px;
+  letter-spacing: .3px;
+  color: var(--ink);
+  background: #fff;
+  border: 1px solid rgba(255,255,255,0.3);
+  border-radius: 4px;
+  outline: none;
+}
+.name-row input:focus {
+  border-color: var(--ink);
+  box-shadow: 0 0 0 3px rgba(255,255,255,0.25);
+}
+.name-note {
+  font-size: 10px !important;
+  color: rgba(255,255,255,0.55) !important;
+  margin-bottom: 12px !important;
+}
+/* Room code panel */
+.room-code-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  background: rgba(255,255,255,0.08);
+  border: 1px dashed rgba(255,255,255,0.35);
+  border-radius: 4px;
+}
+.room-code-panel span { font-size: 8px; letter-spacing: 1.5px; color: rgba(255,255,255,0.5); font-weight: 600; }
+.room-code-panel b { font-size: clamp(22px, 6vw, 30px); letter-spacing: clamp(4px, 1.5vw, 8px); font-weight: 800; color: #fff; }
+.room-code-panel .control { margin-left: auto; background: rgba(255,255,255,0.12); border-color: rgba(255,255,255,0.25); color: #fff; }
+/* Primary CTA button */
+.primary-button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  min-height: 52px;
+  padding: 0 20px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  border: 0;
+  border-radius: 4px;
+  transition: opacity .15s, transform .1s;
+}
+.primary-button > span { font-size: 22px; }
+.primary-button:hover:not(:disabled) { opacity: .88; transform: translateY(-1px); }
+.primary-button:active:not(:disabled) { transform: translateY(0); }
+/* Tags row */
+.intro-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  margin-top: 20px;
+  font-size: 7px;
+  letter-spacing: 1px;
+  color: rgba(255,255,255,0.4);
+}
+/* ── Larger screens: wider card ────────────────────────────────────────── */
+@media (min-width: 600px) {
+  .world-intro {
+    grid-template-columns: minmax(0, 460px);
+    padding: 24px;
+  }
+  .world-intro > h1 { font-size: clamp(48px, 5.5vw, 72px); letter-spacing: -3.5px; margin: 18px 0 18px; }
+  .mode-tabs button { font-size: 9px; min-height: 42px; }
+  .name-row input { min-height: 48px; font-size: 15px; }
+  .primary-button { min-height: 54px; font-size: 11px; }
+}
+.room-chip { position: absolute; top: 12px; right: 12px; z-index: 6; display: flex; align-items: center; gap: 10px; padding: 9px 12px; font-size: 10px; font-weight: 700; letter-spacing: 1.5px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+.room-chip button { border: 1px solid var(--line); background: transparent; color: var(--ink); border-radius: 6px; min-width: 28px; min-height: 28px; font-size: 11px; }
+@media (max-width: 640px) { .room-chip { top: 8px; right: 8px; font-size: 8px; padding: 7px 9px; } }
 .minimap-button { position: absolute; right: 24px; bottom: 125px; width: 170px; padding: 5px; background: var(--surface); border: 1px solid var(--line); color: var(--ink); }
 .district-map { display: block; width: 100%; height: auto; }
 .minimap-button > div { display: flex; justify-content: space-between; font-size: 7px; padding: 9px 4px 3px; letter-spacing: .6px; } .minimap-button b { font-weight: 500; }
@@ -71,7 +235,12 @@ kbd { font: inherit; border: 1px solid var(--line); padding: 2px 4px; border-rad
 .rotate-cover { position: absolute; inset: 0; z-index: 30; background: var(--shell); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 25px; }
 .rotate-symbol { font-size: 70px; margin-bottom: 20px; } .rotate-cover h2 { font-size: 35px; font-weight: 600; letter-spacing: -1px; margin: 14px 0; } .rotate-cover p:not(.eyebrow) { font-size: 13px; color: var(--muted); line-height: 1.8; margin-bottom: 25px; }
 .world-error { background: var(--surface); z-index: 40; display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 30px; text-align: center; gap: 20px; } .world-error h2 { font-size: 26px; } .world-error p { font-size: 13px; }
-.district-footer { display: flex; justify-content: space-between; height: 35px; align-items: center; gap: 10px; font-size: 7px; letter-spacing: 1px; color: var(--muted); flex-shrink: 0; } .district-footer i { font-style: normal; color: var(--ink); }
+.district-footer { display: flex; justify-content: space-between; height: auto; min-height: 28px; align-items: center; gap: 6px; font-size: 7px; letter-spacing: 1px; color: var(--muted); flex-shrink: 0; padding: 4px 0; overflow: hidden; }
+.district-footer > span:first-child { display: none; }
+.district-footer > span:last-child { white-space: nowrap; flex-shrink: 0; }
+.district-footer > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (min-width: 700px) { .district-footer { height: 35px; padding: 0; gap: 10px; } .district-footer > span:first-child { display: block; } }
+.district-footer i { font-style: normal; color: var(--ink); }
 .notice { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 50; display: flex; align-items: center; gap: 15px; padding: 14px; background: var(--surface); border: 1px solid var(--line); font-size: 12px; max-width: 90%; }
 .damage-bar { position: absolute; left: 24px; bottom: 150px; width: 170px; height: 22px; background: var(--surface); border: 1px solid var(--line); font-size: 9px; letter-spacing: 1px; display: flex; align-items: center; }
 .damage-bar i { display: block; height: 100%; background: #2e7d32; }
@@ -129,7 +298,17 @@ kbd { font: inherit; border: 1px solid var(--line); padding: 2px 4px; border-rad
   .district-header { height: 47px; } .wordmark { font-size: 25px; gap: 7px; } .wordmark > div { font-size: 6px; padding-left: 9px; } .control { min-height: 34px; padding: 0 10px; font-size: 8px; } nav { gap: 5px; } kbd { display: none; }
   .district-footer { height: 22px; font-size: 6px; } .district-footer > span:first-child { display: none; }
   .location-card { top: 12px; left: 12px; min-width: 180px; padding: 9px 12px; } .location-card h2 { font-size: 16px; margin: 5px 0 0; } .location-card p { display: none; } .eyebrow { font-size: 6px; } .compass { top: 12px; width: 95px; padding: 8px 12px; } .compass i { top: 30px; }
-  .world-intro { top: 83px; left: 12px; padding: 14px 18px; } .world-intro h1 { font-size: 35px; letter-spacing: -1.8px; margin: 10px 0; } .world-intro > p:not(.eyebrow) { font-size: 9px; margin-bottom: 12px; line-height: 1.5; } .intro-tags { display: none; } .primary-button { min-height: 40px; font-size: 8px; }
+  .world-intro { inset: 0; grid-template-columns: minmax(0, 360px); padding: 10px; }
+  .world-intro h1 { font-size: 30px; letter-spacing: -1.5px; margin: 8px 0; }
+  .world-intro > p:not(.eyebrow) { font-size: 9px; margin-bottom: 10px; line-height: 1.5; }
+  .intro-tags { display: none; }
+  .primary-button { width: 100%; min-height: 40px; font-size: 8px; display: flex; gap: 24px; }
+  .name-row { flex-direction: column; align-items: stretch; gap: 6px; margin-bottom: 10px; }
+  .name-row input { min-height: 38px; font-size: 13px; }
+  .mode-tabs button { min-height: 36px; font-size: 7px; letter-spacing: .5px; }
+  .mode-tabs { gap: 4px; margin-bottom: 10px; }
+  .room-code-panel { padding: 8px 10px; gap: 8px; margin-bottom: 10px; }
+  .room-code-panel b { font-size: 18px; letter-spacing: 3px; }
   .exploration-count { top: 12px; right: 12px; padding: 9px 12px; } .exploration-count b { font-size: 17px; } .exploration-count small { font-size: 6px; }
   .destination { top: 74px; left: 12px; padding: 6px 10px; gap: 6px; } .destination > span { font-size: 18px; } .destination b { font-size: 9px; } .destination small { font-size: 7px; }
   .world-controls { bottom: max(10px, env(safe-area-inset-bottom)); left: 16px; right: 12px; } .joystick { height: 86px; width: 86px; } .stick-knob { width: 34px; height: 34px; top: 25px; left: 25px; } .stick-guides { font-size: 70px; } .control-caption { display: none; } .round-pad { width: 52px; height: 52px; } .round-pad > span { font-size: 22px; } .round-pad small { font-size: 6px; }

@@ -42,7 +42,8 @@ export function WorldViewport({ engineRef, onSnapshot, onMap, theme, quality, po
       if ((event.code === 'Space' || event.code === 'Enter') && target.closest('button')) return;
       if (KEYS[event.code]) { event.preventDefault(); if (!event.repeat) engine.input(KEYS[event.code], true, event.code); }
       if (!event.repeat) {
-        if (event.code === 'Enter' && engine.simulation.phase === 'ready') engine.begin();
+        // Enter-to-start is intentionally absent: a name is required, so entry
+        // goes through the intro form (Enter inside the name field submits it).
         if (event.code === 'KeyN') engine.cycleVehicle();
         if (event.code === 'KeyV') engine.toggleView();
         if (event.code === 'KeyE') { if (engine.simulation.mode === 'table') engine.tableSwing('drive'); else if (engine.simulation.mode === 'roam') engine.interact(); }
@@ -71,7 +72,7 @@ export function WorldViewport({ engineRef, onSnapshot, onMap, theme, quality, po
   useEffect(() => engineRef.current?.setTheme(theme), [theme, engineRef]);
   useEffect(() => engineRef.current?.applyQuality(quality), [quality, engineRef]);
   useEffect(() => { engineRef.current?.setSuspended(document.hidden || portrait || blocked); cameraInput.current?.refresh(); }, [portrait, blocked, engineRef]);
-  return <><canvas ref={canvas} tabIndex={0} className="world-canvas" data-look-state={lookStatus} aria-label="3D neighborhood. WASD or arrows to move, click once to capture mouse or trackpad look, Escape to release, touch swipe to look, Q/C to turn camera, Space to jump or handbrake, V for cockpit, E to enter or steal any stopped car, N to cycle 16 stopped vehicles, Enter to start." />
+  return <><canvas ref={canvas} tabIndex={0} className="world-canvas" data-look-state={lookStatus} aria-label="3D neighborhood. WASD or arrows to move, click once to capture mouse or trackpad look, Escape to release, touch swipe to look, Q/C to turn camera, Space to jump or handbrake, V for cockpit, E to enter or steal any stopped car, N to cycle 16 stopped vehicles. Type your name on the intro screen to start." />
     {lookEnabled && <div className="capture-look desktop-look">
       {lookStatus === 'locked' ? <span>LOOK ACTIVE | ESC RELEASES CURSOR</span> : <button onClick={() => cameraInput.current?.request()} aria-label="Capture mouse or trackpad look">
         {lookStatus === 'fallback' ? 'CAPTURE UNAVAILABLE | HOVER TO LOOK | Q / C CAMERA | CLICK TO RETRY' : 'CLICK TO LOOK | MOUSE / TRACKPAD | ESC TO RELEASE'}

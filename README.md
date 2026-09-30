@@ -110,6 +110,30 @@ The canvas uses a fixed **1280 × 720** virtual viewport. Uniform scaling and ce
 
 Canvas vectors and solid black, white, and neutral gray provide the entire visual style: no colored accents, downloaded image assets, textures, gradients, or shadows. Tailwind remains configured with a root `.dark` variant; matching CSS variables and Canvas palettes provide monochrome light/dark themes. Character details use contrasting trim, and trap shapes and warning symbols distinguish hazards without color.
 
+## Backend — name-only auth + Postgres (Neon)
+
+`server/` is a standard Express + TypeScript API (routes / controllers /
+services / middleware / config / db). Auth is minimal: enter a display name,
+first use creates the player, returning names sign back in (JWT, 30 days).
+While walking, your name floats above your head; it hides in cars, cockpit,
+and minigames. The game works offline too — it falls back to a local guest tag.
+
+```powershell
+cd "D:\New Projects\agon\server"
+copy .env.example .env   # fill DATABASE_URL + a long JWT_SECRET
+npm.cmd install
+npm.cmd run dev          # :4000, migrates Postgres on boot
+```
+
+Endpoints: `GET /health`, `POST /api/auth/login {"name":"Ava"}`,
+`GET /api/auth/me`, `GET /api/players/:id` (Bearer token). Errors use
+`{ error: { code, message } }`.
+
+Frontend wiring: `VITE_API_URL` (defaults to `http://localhost:4000`).
+The intro screen logs in with the typed name and stores the session in
+`localStorage` (`agon-session`). Never commit `server/.env` — it holds the
+Neon credentials and is git-ignored.
+
 ## Tests and production build
 
 ```powershell

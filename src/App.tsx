@@ -1,5 +1,7 @@
 import { DEFAULT_LOOK, readLookSettings } from './game/CameraInput';
 import { VEHICLES } from './world/Vehicles';
+import { ApiRequestError, createRoom as apiCreateRoom, joinRoom as apiJoinRoom, leaveRoom as apiLeaveRoom, login as apiLogin } from './api/client';
+import { loadSession, saveSession } from './api/session';
 ﻿import { useEffect, useRef, useState } from 'react';
 import { ThemeToggle } from './components/ThemeToggle';
 import { QualityToggle } from './components/QualityToggle';
@@ -39,6 +41,14 @@ export default function App() {
   const [physicsOpen, setPhysicsOpen] = useState(false);
   const [lookOpen, setLookOpen] = useState(false);
   const [lookSettings, setLookSettings] = useState(readLookSettings);
+  const [name, setName] = useState(() => loadSession()?.name ?? '');
+  const [entering, setEntering] = useState(false);
+  const [enterNote, setEnterNote] = useState('');
+  const [mode, setMode] = useState<'solo' | 'create' | 'join'>('solo');
+  const [roomCode, setRoomCode] = useState('');
+  const [createdCode, setCreatedCode] = useState('');
+  const [copied, setCopied] = useState(false);
+  const pendingToken = useRef<{ token: string } | null>(null);
   useEffect(() => { try { localStorage.setItem('agon-look', JSON.stringify(lookSettings)); } catch { /* Optional storage. */ } }, [lookSettings]);
   useEffect(() => {
     const media = matchMedia(portraitQuery);
@@ -57,6 +67,101 @@ export default function App() {
     try { localStorage.setItem('agon-quality', quality); } catch { /* Optional storage. */ }
   }, [quality]);
   const focus = () => document.querySelector<HTMLCanvasElement>('canvas')?.focus();
+  /** Entry: name required. Solo explores; create mints a code; join redeems one. */
+  const enterWorld = async () => {
+    if (!state || entering) return;
+    const display = name.trim().replace(/\s+/g, ' ');
+    if (!display) {
+      setEnterNote('Name is required to enter the district.');
+      return;
+    }
+    const code = roomCode.trim().toUpperCase().replace(/[\s-]+/g, '');
+    if (mode === 'join' && code.length !== 6) {
+      setEnterNote('Enter the 6-character server code.');
+      return;
+    }
+    setEntering(true); setEnterNote('');
+    const beginAs = (tag: string) => {
+      engine.current?.setPlayerName(tag);
+      engine.current?.begin(); focus();
+    };
+    try {
+      // Create step 2: code already minted, just open presence and go.
+      if (mode === 'create' && createdCode && pendingToken.current) {
+        await engine.current?.joinRoomSession(pendingToken.current.token, createdCode).catch((error) => {
+          setEnterNote(error instanceof Error ? `${error.message} Exploring without live sync.` : 'Exploring without live sync.');
+        });
+        beginAs(display);
+        return;
+      }
+      const { token, player } = await apiLogin(display);
+      if (mode === 'solo') {
+        const prev = loadSession();
+        if (prev?.roomCode && prev.token) void apiLeaveRoom(prev.token, prev.roomCode).catch(() => undefined);
+        saveSession({ token, name: player.name, id: player.id });
+        pendingToken.current = null; setCreatedCode('');
+        beginAs(player.name);
+        return;
+      }
+      if (mode === 'create') {
+        const { room } = await apiCreateRoom(token);
+        pendingToken.current = { token };
+        saveSession({ token, name: player.name, id: player.id, roomCode: room.code });
+        setCreatedCode(room.code); setCopied(false);
+        engine.current?.setPlayerName(player.name);
+        return; // stay in the intro: show the share-code panel
+      }
+      const { room } = await apiJoinRoom(token, code);
+      pendingToken.current = { token };
+      saveSession({ token, name: player.name, id: player.id, roomCode: room.code });
+      await engine.current?.joinRoomSession(token, room.code).catch((error) => {
+        setEnterNote(error instanceof Error ? `${error.message} Exploring without live sync.` : 'Exploring without live sync.');
+      });
+      beginAs(player.name);
+    } catch (error) {
+      if (error instanceof ApiRequestError && error.status !== 0) {
+        setEnterNote(error.message); // bad code, full/expired room, rejected name — stay in the form
+        return;
+      }
+      // Offline: typed name as a local tag, solo world.
+      const prev = loadSession();
+      saveSession({ token: '', name: display, id: prev?.id ?? 'offline' });
+      pendingToken.current = null; setCreatedCode('');
+      setEnterNote(error instanceof Error ? `${error.message} Playing solo.` : 'Playing solo.');
+      beginAs(display);
+    } finally {
+      setEntering(false);
+    }
+  };
+  /** Leaves the private server but stays in the world solo. */
+  const leaveServer = async () => {
+    const sess = loadSession();
+    if (sess?.roomCode && sess.token) {
+      try {
+        await apiLeaveRoom(sess.token, sess.roomCode);
+      } catch {
+        /* Presence already gone or offline — local state still clears. */
+      }
+    }
+    engine.current?.leaveRoomSession();
+    const cur = loadSession();
+    if (cur) saveSession({ token: cur.token, name: cur.name, id: cur.id });
+    focus();
+  };
+  const copyCode = async () => {
+    if (!createdCode) return;
+    try {
+      await navigator.clipboard.writeText(createdCode);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setCopied(false);
+    }
+  };
+  const switchMode = (next: 'solo' | 'create' | 'join') => {
+    setMode(next); setEnterNote(''); setCreatedCode(''); setCopied(false);
+    pendingToken.current = null;
+  };
   const toggleMap = () => {
     if (!mapOpen) { resumeAfterMap.current = engine.current?.simulation.active ?? false; if (resumeAfterMap.current) engine.current?.togglePause(); }
     else if (resumeAfterMap.current && engine.current?.simulation.paused) engine.current.togglePause();
@@ -100,7 +205,20 @@ export default function App() {
         <p className="eyebrow">THE FIRST BLOCK OF SOMETHING BIGGER</p>
         <h1>OUTSIDE.<br />IS YOURS.</h1>
         <p>A living little district, built from simple things.<br />Walk its streets. Meet its rhythm. Find your place.</p>
-        <button className="primary-button" disabled={!state} onClick={() => { engine.current?.begin(); focus(); }}>EXPLORE DISTRICT <span>↗</span></button>
+        <div className="mode-tabs" role="tablist" aria-label="Play mode">
+          {(['solo', 'create', 'join'] as const).map(m => <button key={m} role="tab" aria-selected={mode === m} className={mode === m ? 'on' : ''}
+            onClick={() => switchMode(m)}>{m === 'solo' ? 'SOLO' : m === 'create' ? 'CREATE SERVER' : 'JOIN SERVER'}</button>)}
+        </div>
+        <label className="name-row"><span>YOUR NAME</span><input value={name} maxLength={24} autoComplete="off" spellCheck={false} placeholder="e.g. Ava" aria-label="Your display name"
+          disabled={entering || (mode === 'create' && !!createdCode)}
+          onChange={event => setName(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void enterWorld(); }} /></label>
+        {mode === 'join' && <label className="name-row"><span>SERVER CODE</span><input value={roomCode} maxLength={7} autoComplete="off" spellCheck={false} placeholder="K7Q2MD" aria-label="Server code"
+          disabled={entering} style={{ textTransform: 'uppercase' }}
+          onChange={event => setRoomCode(event.target.value.toUpperCase())} onKeyDown={event => { if (event.key === 'Enter') void enterWorld(); }} /></label>}
+        {mode === 'create' && createdCode && <div className="room-code-panel" role="status"><span>SHARE THIS CODE</span><b>{createdCode}</b><button className="control" onClick={() => void copyCode()}>{copied ? 'COPIED ✓' : 'COPY'}</button></div>}
+        {enterNote && <p className="name-note" role="status">{enterNote}</p>}
+        <button className="primary-button" disabled={!state || entering || !name.trim() || (mode === 'join' && roomCode.trim().length < 6)} onClick={() => void enterWorld()}>
+          {mode === 'solo' ? 'EXPLORE DISTRICT' : mode === 'create' ? (createdCode ? 'ENTER WORLD' : 'CREATE SERVER') : 'JOIN WORLD'} <span>↗</span></button>
         <div className="intro-tags"><span>7 LOCATIONS</span><span>2 PERSPECTIVES</span><span>NO RUSH</span></div>
       </div>}
       {!ready && <>
@@ -108,6 +226,7 @@ export default function App() {
           <button className="hud-map" onClick={toggleMap} aria-label="Open district map"><DistrictMap state={state} theme={theme} /></button>
           <div className="hud-speed" aria-label="Speed"><b>{state?.speed ?? 0}<small>KM/H</small></b><span>{VEHICLES[state.vehicleKind].name} · {state.acceleration.toFixed(1)} m/s^2{(state?.damage ?? 0) > 0 ? ` · DMG ${state?.damage}%` : ''}</span><button className="hud-cycle" disabled={!active || Math.abs(state?.car.speed ?? 0) > 0.2} onClick={() => { engine.current?.cycleVehicle(); focus(); }} aria-label="Next vehicle">⇄</button></div>
         </div>}
+        {state?.room && <div className="room-chip" role="status" aria-label="Private server">SERVER {state.room.code} · {state.room.members}<button onClick={() => void leaveServer()} aria-label="Leave server">✕</button></div>}
         {state?.view === 'first' && <div className="crosshair" aria-hidden="true">+</div>}
         {state?.impact && <div className="crash-flash" role="status">CRASH · {state.impact.speed} KM/H vs {state.impact.with.toUpperCase()}</div>}
         {state?.mode === 'table' && state.table && <div className="tt-score" role="status" aria-label={`Table tennis score you ${state.table.you} AI ${state.table.aiScore}`}>

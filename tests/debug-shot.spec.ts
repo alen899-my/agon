@@ -2,6 +2,7 @@ import { test } from '@playwright/test';
 
 test('debug avatar visibility', async ({ page }) => {
   await page.goto('/');
+  await page.getByLabel('Your display name').fill('Ava');
   await page.getByRole('button', { name: 'EXPLORE DISTRICT' }).click();
   await page.waitForTimeout(800);
   await page.screenshot({ path: 'test-results/debug-0-spawn.png' });

@@ -17,6 +17,8 @@ export function DistrictMap({ state, large = false, theme = 'light' }: { state: 
     <g transform={`translate(${state?.x ?? 12} ${state?.z ?? 34}) rotate(${(state?.yaw ?? 0) * 180 / Math.PI})`}>
       <circle r="7" fill="#ffffff" /><path d="M0-6 4 4 0 2-4 4Z" fill="#000000" />
     </g>
+    {(state?.dots ?? []).map(d => <circle key={d.id} cx={d.x} cy={d.z} r={2.4}
+      fill={d.driving ? '#111111' : '#ffffff'} stroke="#111111" strokeWidth="0.8" />)}
     <text x="110" y="-108" fontSize="10" fontFamily="Arial" fontWeight="bold" fill="#111">N</text>
   </svg>;
 }

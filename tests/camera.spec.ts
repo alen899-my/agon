@@ -7,7 +7,7 @@ test.beforeEach(async ({ page }) => {
 
 test('captured look releases for map, Escape, pause and focus loss', async ({ page, isMobile }) => {
   test.skip(isMobile, 'Pointer lock is for mouse and trackpad input');
-  await page.goto('/'); await page.getByRole('button', { name: 'EXPLORE DISTRICT' }).click();
+  await page.goto('/'); await page.getByLabel('Your display name').fill('Ava'); await page.getByRole('button', { name: 'EXPLORE DISTRICT' }).click();
   const canvas = page.locator('canvas');
   const capture = async () => {
     const box = (await canvas.boundingBox())!;
@@ -32,7 +32,7 @@ test('captured look releases for map, Escape, pause and focus loss', async ({ pa
 });
 
 test('camera preferences persist and the settings overlay suspends movement', async ({ page }) => {
-  await page.goto('/'); await page.getByRole('button', { name: 'EXPLORE DISTRICT' }).click();
+  await page.goto('/'); await page.getByLabel('Your display name').fill('Ava'); await page.getByRole('button', { name: 'EXPLORE DISTRICT' }).click();
   await page.getByRole('button', { name: 'Camera controls and sensitivity' }).click();
   await page.getByRole('slider', { name: 'Mouse and trackpad sensitivity' }).focus();
   await page.keyboard.press('End');
@@ -53,7 +53,7 @@ test('capture rejection falls back without errors or a held mouse button', async
   await page.addInitScript(() => {
     HTMLCanvasElement.prototype.requestPointerLock = () => Promise.reject(new DOMException('Not available', 'NotSupportedError'));
   });
-  await page.goto('/'); await page.getByRole('button', { name: 'EXPLORE DISTRICT' }).click();
+  await page.goto('/'); await page.getByLabel('Your display name').fill('Ava'); await page.getByRole('button', { name: 'EXPLORE DISTRICT' }).click();
   const canvas = page.locator('canvas'), box = (await canvas.boundingBox())!;
   await canvas.click({ position: { x: box.width / 2, y: box.height / 2 } });
   await expect(canvas).toHaveAttribute('data-look-state', 'fallback');

@@ -1,5 +1,6 @@
 import { VEHICLE_KINDS, VEHICLES, type VehicleKind } from './Vehicles';
 import * as THREE from 'three';
+import { RealtimeClient, type RemoteDot, type RemotePos } from '../api/realtime';
 import { GameLoop } from '../game/GameLoop';
 import type { Theme } from '../game/State';
 import { bbSound, ttSound, unlockAudio } from '../game/Sound';
@@ -12,6 +13,44 @@ export type QualityLevel = 'low' | 'balanced' | 'high' | 'ultra';
 const QUALITY_PIXEL: Record<QualityLevel, number> = { low: 1, balanced: 1.5, high: 2, ultra: 2.5 };
 const QUALITY_SHADOW: Record<QualityLevel, number> = { low: 512, balanced: 1024, high: 2048, ultra: 4096 };
 
+/** Max rendered friend ghosts (nearest-first); the rest stay as map dots. */
+const MAX_GHOSTS = 24;
+/** Ghosts silent longer than this are removed (server prunes at ~3 s too). */
+const GHOST_TIMEOUT_MS = 3500;
+
+/** Draws a pill name tag onto a 256x72 canvas. Shared by the local + ghost tags. */
+function drawNameTag(canvas: HTMLCanvasElement, texture: THREE.CanvasTexture, name: string): void {
+  const ctx = canvas.getContext('2d')!;
+  ctx.clearRect(0, 0, 256, 72);
+  if (name) {
+    const label = name.length > 14 ? `${name.slice(0, 13)}…` : name;
+    ctx.fillStyle = 'rgba(10, 10, 12, 0.72)';
+    if (typeof ctx.roundRect === 'function') { ctx.beginPath(); ctx.roundRect(28, 8, 200, 52, 14); ctx.fill(); }
+    else ctx.fillRect(28, 8, 200, 52);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.65)'; ctx.lineWidth = 2; ctx.stroke();
+    let size = 30;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    do {
+      ctx.font = `600 ${size}px Arial, sans-serif`;
+      size -= 2;
+    } while (ctx.measureText(label).width > 178 && size > 12);
+    ctx.fillStyle = '#ffffff'; ctx.fillText(label, 128, 36);
+  }
+  texture.needsUpdate = true;
+}
+
+interface Ghost {
+  id: string;
+  actor: Stickman;
+  tag: THREE.Sprite;
+  tagCanvas: HTMLCanvasElement;
+  tagTexture: THREE.CanvasTexture;
+  vehicle: Vehicle | null;
+  vehicleKind: VehicleKind | null;
+  x: number; y: number; z: number; yaw: number; facing: number;
+  stride: number;
+}
+
 export class WorldEngine {
   readonly simulation = new Simulation();
   private readonly renderer: THREE.WebGLRenderer;
@@ -19,6 +58,10 @@ export class WorldEngine {
   private readonly camera = new THREE.PerspectiveCamera(60, 1, 0.12, 340);
   private readonly kit: AssetKit;
   private readonly avatar: Stickman;
+  private playerName = '';
+  private readonly nameCanvas: HTMLCanvasElement;
+  private readonly nameTexture: THREE.CanvasTexture;
+  private readonly nameTag: THREE.Sprite;
   private car: Vehicle;
   private readonly fleet = new Map<VehicleKind, Vehicle>();
   private readonly parked: Vehicle[] = [];
@@ -41,6 +84,16 @@ export class WorldEngine {
   private lastBBEvents = 0;
   private readonly loop: GameLoop;
   private readonly people: { actor: Stickman }[] = [];
+  /** Private-server presence. Null in solo. Remotes render as ghosts (Phase 4). */
+  private realtime: RealtimeClient | null = null;
+  private realtimeRoom: string | null = null;
+  private realtimeMembers = 0;
+  private realtimeDots: RemoteDot[] = [];
+  private readonly remotes = new Map<string, { name: string; pos: RemotePos; updatedAt: number }>();
+  /** Rendered friend ghosts (nearest MAX_GHOSTS) + pooled ghost vehicles by kind. */
+  private readonly ghosts = new Map<string, Ghost>();
+  private readonly ghostVehiclePool = new Map<VehicleKind, Vehicle[]>();
+  private ghostSeed = 0;
   private shake = 0; private lastImpactAt = -10; private prevSimTime = 0;
   private quality: QualityLevel = 'balanced'; private pixelCap = QUALITY_PIXEL.balanced;
   private lastW = 1; private lastH = 1;
@@ -60,6 +113,12 @@ export class WorldEngine {
     Object.assign(this.sun.shadow.camera, { left: -44, right: 44, top: 44, bottom: -44, near: 1, far: 150 });
     this.sun.shadow.bias = -0.0004; this.sun.shadow.normalBias = 0.1;
     this.avatar = this.kit.stickman(true); this.scene.add(this.avatar.group);
+    // Floating name tag shown above your head while walking (GTA-style player tag).
+    this.nameCanvas = document.createElement('canvas'); this.nameCanvas.width = 256; this.nameCanvas.height = 72;
+    this.nameTexture = new THREE.CanvasTexture(this.nameCanvas); this.nameTexture.colorSpace = THREE.SRGBColorSpace;
+    const nameMat = new THREE.SpriteMaterial({ map: this.nameTexture, transparent: true, depthTest: false, opacity: 0.95 });
+    this.nameTag = new THREE.Sprite(nameMat); this.nameTag.scale.set(1.9, 0.53, 1);
+    this.nameTag.renderOrder = 10; this.nameTag.visible = false; this.scene.add(this.nameTag);
     for (const kind of VEHICLE_KINDS) {
       const vehicle = this.kit.car(kind, kind === 'sport' || kind === 'suv');
       vehicle.group.visible = false; this.fleet.set(kind, vehicle); this.scene.add(vehicle.group);
@@ -116,7 +175,203 @@ export class WorldEngine {
     }, this.render);
     this.emit();
   }
-  private emit(): void { this.publish(this.simulation.snapshot); }
+  private emit(): void {
+    const sim = this.simulation;
+    if (this.realtime?.connected && sim.phase === 'playing') {
+      this.realtime.sendPos({
+        x: sim.x, z: sim.z, y: sim.y, yaw: sim.yaw, facing: sim.facing,
+        driving: sim.driving, vehicleKind: sim.vehicleKind,
+        speed: sim.driving ? sim.car.speed : sim.pace,
+      });
+    }
+    this.publish({
+      ...sim.snapshot,
+      room: this.realtimeRoom ? { code: this.realtimeRoom, members: this.realtimeMembers } : null,
+      dots: this.realtimeDots,
+    });
+  }
+  /**
+   * Joins a private server's presence channel. Resolves once the server
+   * welcomes us; rejects on code/auth/socket failure so the form can explain.
+   */
+  joinRoomSession(token: string, code: string): Promise<void> {
+    this.leaveRoomSession();
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const done = (fn: () => void): void => {
+        if (!settled) {
+          settled = true;
+          fn();
+        }
+      };
+      const client = new RealtimeClient(token, code, {
+        onWelcome: (_room, _you, roster) => {
+          this.realtimeRoom = code;
+          this.realtimeMembers = roster.length;
+          this.emit();
+          done(resolve);
+        },
+        onRoster: (roster) => {
+          this.realtimeMembers = roster.length;
+          this.emit();
+        },
+        onPos: (id, name, pos) => {
+          this.remotes.set(id, { name, pos, updatedAt: performance.now() });
+        },
+        onDots: (players) => {
+          this.realtimeDots = players;
+          this.emit();
+        },
+        onError: (_code, message) => done(() => reject(new Error(message))),
+        onClose: () => {
+          this.realtimeRoom = null;
+          this.realtimeMembers = 0;
+          this.realtimeDots = [];
+          this.remotes.clear();
+          this.emit();
+          done(() => reject(new Error('Lost connection to the server.')));
+        },
+      });
+      this.realtime = client;
+      client.connect();
+    });
+  }
+  /** Leaves presence (stays in the world solo). Membership rows are left for REST /leave. */
+  leaveRoomSession(): void {
+    this.realtime?.dispose();
+    this.realtime = null;
+    this.realtimeRoom = null;
+    this.realtimeMembers = 0;
+    this.realtimeDots = [];
+    this.remotes.clear();
+    for (const id of [...this.ghosts.keys()]) this.removeGhost(id);
+    this.emit();
+  }
+  private acquireGhostVehicle(kind: VehicleKind): Vehicle {
+    const vehicle = this.ghostVehiclePool.get(kind)?.pop();
+    if (vehicle) {
+      if (!vehicle.group.parent) this.scene.add(vehicle.group);
+      vehicle.group.visible = true;
+      return vehicle;
+    }
+    const fresh = this.kit.car(kind, false);
+    this.scene.add(fresh.group);
+    return fresh;
+  }
+  private releaseGhostVehicle(ghost: Ghost): void {
+    if (!ghost.vehicle || !ghost.vehicleKind) return;
+    ghost.vehicle.group.visible = false;
+    const pooled = this.ghostVehiclePool.get(ghost.vehicleKind) ?? [];
+    if (pooled.length < 4) {
+      pooled.push(ghost.vehicle);
+      this.ghostVehiclePool.set(ghost.vehicleKind, pooled);
+    } else this.scene.remove(ghost.vehicle.group);
+    ghost.vehicle = null;
+    ghost.vehicleKind = null;
+  }
+  private removeGhost(id: string): void {
+    const ghost = this.ghosts.get(id);
+    if (!ghost) return;
+    this.scene.remove(ghost.actor.group);
+    this.scene.remove(ghost.tag);
+    ghost.tagTexture.dispose();
+    (ghost.tag.material as THREE.Material).dispose();
+    this.releaseGhostVehicle(ghost);
+    this.ghosts.delete(id);
+  }
+  /** Reconciles friend ghosts: stale out, nearest MAX_GHOSTS interpolated in. */
+  private syncGhosts(dt: number): void {
+    const sim = this.simulation;
+    const now = performance.now();
+    for (const [id, remote] of this.remotes) {
+      if (now - remote.updatedAt > GHOST_TIMEOUT_MS) {
+        this.remotes.delete(id);
+        this.removeGhost(id);
+      }
+    }
+    if (!sim.active) {
+      for (const id of [...this.ghosts.keys()]) this.removeGhost(id);
+      return;
+    }
+    const ordered = [...this.remotes.entries()]
+      .map(([id, r]) => ({ id, r, d: Math.hypot(r.pos.x - sim.x, r.pos.z - sim.z) }))
+      .sort((a, b) => a.d - b.d)
+      .slice(0, MAX_GHOSTS);
+    const wanted = new Set(ordered.map((o) => o.id));
+    for (const id of [...this.ghosts.keys()]) if (!wanted.has(id)) this.removeGhost(id);
+    const blend = 1 - Math.exp(-10 * Math.max(0, dt));
+    for (const { id, r } of ordered) {
+      let ghost = this.ghosts.get(id);
+      if (!ghost) {
+        const actor = this.kit.stickman(false, this.ghostSeed++);
+        const tagCanvas = document.createElement('canvas');
+        tagCanvas.width = 256; tagCanvas.height = 72;
+        const tagTexture = new THREE.CanvasTexture(tagCanvas);
+        tagTexture.colorSpace = THREE.SRGBColorSpace;
+        const tag = new THREE.Sprite(new THREE.SpriteMaterial({ map: tagTexture, transparent: true, depthTest: false, opacity: 0.95 }));
+        tag.scale.set(1.9, 0.53, 1);
+        tag.renderOrder = 9;
+        drawNameTag(tagCanvas, tagTexture, r.name);
+        this.scene.add(actor.group);
+        this.scene.add(tag);
+        ghost = {
+          id, actor, tag, tagCanvas, tagTexture, vehicle: null, vehicleKind: null,
+          x: r.pos.x, y: r.pos.y, z: r.pos.z, yaw: r.pos.yaw, facing: r.pos.facing, stride: 0,
+        };
+        this.ghosts.set(id, ghost);
+      }
+      // Snap on teleports, otherwise ease toward the latest fix.
+      if (Math.hypot(r.pos.x - ghost.x, r.pos.z - ghost.z) > 15) {
+        ghost.x = r.pos.x; ghost.z = r.pos.z; ghost.y = r.pos.y;
+        ghost.yaw = r.pos.yaw; ghost.facing = r.pos.facing;
+      } else {
+        ghost.x += (r.pos.x - ghost.x) * blend;
+        ghost.z += (r.pos.z - ghost.z) * blend;
+        ghost.y += (r.pos.y - ghost.y) * blend;
+        let dyaw = r.pos.yaw - ghost.yaw;
+        while (dyaw > Math.PI) dyaw -= Math.PI * 2;
+        while (dyaw < -Math.PI) dyaw += Math.PI * 2;
+        ghost.yaw += dyaw * blend;
+        let dface = r.pos.facing - ghost.facing;
+        while (dface > Math.PI) dface -= Math.PI * 2;
+        while (dface < -Math.PI) dface += Math.PI * 2;
+        ghost.facing += dface * blend;
+      }
+      const kind = (VEHICLE_KINDS as readonly string[]).includes(r.pos.vehicleKind)
+        ? (r.pos.vehicleKind as VehicleKind)
+        : 'car';
+      if (r.pos.driving) {
+        ghost.actor.group.visible = false;
+        if (!ghost.vehicle || ghost.vehicleKind !== kind) {
+          this.releaseGhostVehicle(ghost);
+          ghost.vehicle = this.acquireGhostVehicle(kind);
+          ghost.vehicleKind = kind;
+        }
+        ghost.vehicle.group.visible = true;
+        ghost.vehicle.group.position.set(ghost.x, 0.08, ghost.z);
+        ghost.vehicle.group.rotation.y = -ghost.yaw;
+        ghost.vehicle.update(r.pos.speed, 0, dt, false);
+        ghost.tag.visible = sim.view === 'third';
+        ghost.tag.position.set(ghost.x, ghost.y + 2.6, ghost.z);
+      } else {
+        if (ghost.vehicle) this.releaseGhostVehicle(ghost);
+        ghost.actor.group.visible = sim.view === 'third';
+        ghost.actor.group.position.set(ghost.x, ghost.y + 0.08, ghost.z);
+        ghost.actor.group.rotation.y = -ghost.facing;
+        const intensity = Math.min(1.2, Math.abs(r.pos.speed) / 4.6);
+        ghost.stride += Math.abs(r.pos.speed) * dt * 2.1;
+        ghost.actor.animate({ phase: ghost.stride, intensity, airborne: ghost.y > 0.02, dip: 0, idle: sim.time });
+        ghost.tag.visible = sim.view === 'third';
+        ghost.tag.position.set(ghost.x, ghost.y + 2.35, ghost.z);
+      }
+    }
+  }
+  /** Sets the walker's display name (from name-only login) and redraws the head tag. */
+  setPlayerName(name: string): void {
+    this.playerName = name.trim().slice(0, 24);
+    drawNameTag(this.nameCanvas, this.nameTexture, this.playerName);
+    this.emit();
+  }
   /** Keep render meshes in sync with the stealable world: rebuild on kind change, grow/shrink freely. */
   private syncWorldVehicles(initial = false): void {
     const sim = this.simulation;
@@ -253,6 +508,10 @@ export class WorldEngine {
     this.avatar.group.position.y += bob;
     this.avatar.animate({ phase: sim.stride, intensity: gaitI, airborne: sim.y > 0.02 && !sim.driving, dip: sim.landDip, idle: sim.time });
     this.avatar.group.visible = !sim.driving && sim.view === 'third';
+    // Name tag floats above your head while walking; hidden in cars, cockpit and minigames.
+    const showTag = this.playerName !== '' && !sim.driving && sim.view === 'third' && sim.active && sim.mode === 'roam';
+    this.nameTag.visible = showTag;
+    if (showTag) this.nameTag.position.set(x, y + 2.35 + bob, z);
     // Car body feel: pitch under accel/brake, roll in corners, bounce on crash.
     const dt = Math.max(0, Math.min(0.05, sim.time - this.prevSimTime));
     this.prevSimTime = sim.time;
@@ -287,6 +546,8 @@ export class WorldEngine {
       vehicle.group.position.set(p.x, 0.08, p.z); vehicle.group.rotation.y = -p.yaw;
       vehicle.update(0, 0, 0, false);
     });
+    // Friend ghosts from the private server (nearest MAX_GHOSTS, interpolated).
+    this.syncGhosts(dt);
     // Table tennis sounds: play only fresh sim events.
     const evts = sim.table.events;
     if (evts.length !== this.lastTTEvents) {
@@ -424,8 +685,13 @@ export class WorldEngine {
   };
   destroy(): void {
     this.disposed = true; this.loop.stop(); this.clearInput();
+    this.realtime?.dispose(); this.realtime = null;
+    for (const id of [...this.ghosts.keys()]) this.removeGhost(id);
+    for (const pooled of this.ghostVehiclePool.values()) for (const v of pooled) this.scene.remove(v.group);
+    this.ghostVehiclePool.clear();
     this.scene.traverse(object => { if (object instanceof THREE.InstancedMesh) object.dispose(); });
     this.marker.geometry.dispose(); (this.marker.material as THREE.Material).dispose();
+    this.nameTexture.dispose(); (this.nameTag.material as THREE.Material).dispose();
     this.sun.shadow.dispose(); this.kit.dispose(); this.renderer.dispose();
     this.scene.clear();
   }

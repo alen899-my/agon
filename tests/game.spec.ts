@@ -11,6 +11,7 @@ test.beforeEach(async ({ page }) => {
 test('renders the district, walks, changes perspective, drives and sets a waypoint', async ({ page }, info) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await page.goto('/');
+  await page.getByLabel('Your display name').fill('Ava');
   await expect(page.getByRole('button', { name: 'EXPLORE DISTRICT' })).toBeEnabled();
   await page.clock.runFor(80);
   await page.screenshot({ path: `test-results/${info.project.name}-district.png` });
@@ -43,7 +44,7 @@ test('renders the district, walks, changes perspective, drives and sets a waypoi
 
 test('joystick movement and simultaneous camera drag work independently', async ({ page, isMobile }) => {
   test.skip(!isMobile, 'Touch joystick is intentionally hidden on desktop');
-  await page.goto('/'); await page.getByRole('button', { name: 'EXPLORE DISTRICT' }).click();
+  await page.goto('/'); await page.getByLabel('Your display name').fill('Ava'); await page.getByRole('button', { name: 'EXPLORE DISTRICT' }).click();
   const session = await page.context().newCDPSession(page);
   const box = (await page.getByRole('group', { name: 'Movement joystick' }).boundingBox())!;
   const canvas = (await page.locator('canvas').boundingBox())!;
@@ -64,7 +65,7 @@ test('joystick movement and simultaneous camera drag work independently', async 
 
 test('portrait suspends the world and phone controls fit in landscape', async ({ page, isMobile }) => {
   test.skip(!isMobile, 'Phone layout only');
-  await page.goto('/'); await page.getByRole('button', { name: 'EXPLORE DISTRICT' }).click();
+  await page.goto('/'); await page.getByLabel('Your display name').fill('Ava'); await page.getByRole('button', { name: 'EXPLORE DISTRICT' }).click();
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.getByRole('heading', { name: 'Turn your world.' })).toBeVisible();
   await page.keyboard.down('w'); await page.clock.runFor(500); await page.keyboard.up('w');
@@ -76,7 +77,7 @@ test('portrait suspends the world and phone controls fit in landscape', async ({
 });
 
 test('driving controls, fleet and cockpit work on each input device', async ({ page, isMobile }, info) => {
-  await page.goto('/'); await page.getByRole('button', { name: 'EXPLORE DISTRICT' }).click();
+  await page.goto('/'); await page.getByLabel('Your display name').fill('Ava'); await page.getByRole('button', { name: 'EXPLORE DISTRICT' }).click();
   if (!isMobile) await expect(page.locator('.world-controls')).toBeHidden();
   await page.keyboard.press('e'); await page.clock.runFor(100);
   await expect(page.getByRole('group', { name: 'Movement joystick' })).toHaveCount(0);
@@ -106,7 +107,7 @@ test('driving controls, fleet and cockpit work on each input device', async ({ p
 
 test('mobile pedals and steering support simultaneous touches and release', async ({ page, isMobile }) => {
   test.skip(!isMobile, 'Touch driving only');
-  await page.goto('/'); await page.getByRole('button', { name: 'EXPLORE DISTRICT' }).click();
+  await page.goto('/'); await page.getByLabel('Your display name').fill('Ava'); await page.getByRole('button', { name: 'EXPLORE DISTRICT' }).click();
   await page.keyboard.press('e'); await page.clock.runFor(100);
   const session = await page.context().newCDPSession(page);
   const gas = (await page.getByRole('button', { name: 'Gas', exact: true }).boundingBox())!;
