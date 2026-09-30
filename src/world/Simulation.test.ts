@@ -144,7 +144,7 @@ describe('realistic physics one by one', () => {
 describe('driving dynamics', () => {
   const drive = () => {
     const sim = running(); sim.x = sim.car.x = 0; sim.z = sim.car.z = 40;
-    sim.traffic = []; sim.peds = []; sim.interact(); return sim;
+    sim.traffic = []; sim.peds = []; sim.parked = []; sim.interact(); sim.transition = 0; return sim;
   };
   it('builds speed progressively and gives the coupe more acceleration than the bus', () => {
     const coupe = drive(), bus = drive(); coupe.vehicleKind = 'sport'; bus.vehicleKind = 'bus';
@@ -165,14 +165,57 @@ describe('driving dynamics', () => {
     const slip = Math.abs(drift.lateralSpeed); drift.clearInput(); tick(drift, 45);
     expect(Math.abs(drift.lateralSpeed)).toBeLessThan(slip);
   });
-  it('cycles all six vehicles while stopped but rejects changes at speed', () => {
+  it('cycles all sixteen real-life rides while stopped but rejects changes at speed', () => {
     const sim = drive(); const kinds = new Set([sim.vehicleKind]);
-    for (let i = 0; i < 5; i++) { expect(sim.cycleVehicle()).toBe(true); kinds.add(sim.vehicleKind); }
-    expect(kinds.size).toBe(6); sim.car.speed = 2; expect(sim.cycleVehicle()).toBe(false);
+    for (let i = 0; i < 15; i++) { expect(sim.cycleVehicle()).toBe(true); kinds.add(sim.vehicleKind); }
+    expect(kinds.size).toBe(16); sim.car.speed = 2; expect(sim.cycleVehicle()).toBe(false);
   });
   it('keeps cockpit look relative to the car and recenters on changing views', () => {
     const sim = drive(); sim.toggleView(); sim.look(100, 0); const offset = sim.yaw - sim.car.yaw;
     sim.car.speed = 8; sim.setInput('right', true, 'd'); tick(sim, 15);
     expect(sim.yaw - sim.car.yaw).toBeCloseTo(offset); sim.toggleView(); expect(sim.yaw).toBe(sim.car.yaw);
+  });
+});
+
+describe('gta steal-any-vehicle', () => {
+  it('steals a parked taxi and leaves the old ride behind', () => {
+    const sim = running(); sim.traffic = []; sim.peds = [];
+    sim.parked = [{ kind: 'taxi', x: sim.x + 2, z: sim.z, yaw: 0 }];
+    expect(sim.nearbyCar).toBe(true);
+    expect(sim.interact()).toBe(true);
+    expect(sim.driving).toBe(true); expect(sim.vehicleKind).toBe('taxi');
+    sim.transition = 0;
+    expect(sim.interact()).toBe(true); // exit
+    expect(sim.driving).toBe(false); sim.transition = 0;
+    // Original sedan was stashed as parked; the taxi is now your ride sitting beside you.
+    expect(sim.parked.some(p => p.kind === 'car')).toBe(true);
+    expect(sim.vehicleKind).toBe('taxi');
+    expect(Math.hypot(sim.x - sim.car.x, sim.z - sim.car.z)).toBeLessThan(4);
+  });
+  it('rejects moving traffic but steals it once blocked and stopped', () => {
+    const sim = running(); sim.peds = []; sim.parked = [];
+    sim.car.x = 60; sim.car.z = 60; // your old ride is far — only the traffic counts
+    sim.traffic = [{ kind: 'sport', x: sim.x + 3, z: sim.z, yaw: 0, speed: 10, offset: 0, base: 10, steer: 0, wheelSpin: 0, braking: false, prevYaw: 0 }];
+    expect(sim.interact()).toBe(false); // too fast — chase & stop first
+    expect(sim.snapshot.enterHint).toMatch(/moving/i);
+    sim.traffic[0].speed = 0;
+    expect(sim.interact()).toBe(true);
+    expect(sim.vehicleKind).toBe('sport');
+    expect(sim.traffic.length).toBe(1); // replacement respawned to keep streets alive
+  });
+  it('brakes traffic for a pedestrian standing in the lane', () => {
+    const sim = running(); sim.parked = [];
+    const t = sim.traffic[0];
+    sim.x = t.x + Math.sin(t.yaw) * 6; sim.z = t.z - Math.cos(t.yaw) * 6;
+    sim.car.x = 60; sim.car.z = 60; // player car far away — only the body blocks
+    tick(sim, 60);
+    expect(sim.traffic[0].braking || sim.traffic[0].speed < 5).toBe(true);
+  });
+  it('locks re-entry during the smooth door transition', () => {
+    const sim = running(); sim.traffic = []; sim.peds = []; sim.parked = [];
+    expect(sim.interact()).toBe(true);
+    expect(sim.transition).toBeGreaterThan(0);
+    expect(sim.interact()).toBe(false); // door still swinging
+    expect(sim.snapshot.transition).toBeGreaterThan(0);
   });
 });

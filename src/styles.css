@@ -139,8 +139,10 @@ kbd { font: inherit; border: 1px solid var(--line); padding: 2px 4px; border-rad
 }
 
 /* Driving controls follow the primary input device, including large tablets. */
-.drive-steering, .drive-pedals { display: flex; gap: 10px; }
-.drive-pad { pointer-events: auto; touch-action: none; user-select: none; min-width: 64px; min-height: 62px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font-size: 10px; font-weight: 700; border-radius: 12px; }
+.drive-steering, .drive-pedals { display: flex; gap: 14px; }
+.drive-pad { pointer-events: auto; touch-action: none; user-select: none; min-width: 92px; min-height: 92px; padding: 10px 12px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font-weight: 700; border-radius: 16px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; }
+.drive-arrow { font-size: 34px; line-height: 1; display: block; }
+.drive-pad small { font-size: 9px; letter-spacing: 1.5px; font-weight: 700; }
 .drive-pad:active { transform: translateY(2px); background: var(--line); }
 .drive-pad:disabled { opacity: .4; }
 .driving-readout { position: absolute; top: 72px; left: 22px; display: grid; gap: 5px; padding: 12px; background: var(--surface); border: 1px solid var(--line); font-size: 11px; }
@@ -153,8 +155,9 @@ kbd { font: inherit; border: 1px solid var(--line); padding: 2px 4px; border-rad
 }
 @media (max-height: 500px) {
   .driving-readout { top: 54px; left: 12px; padding: 6px; font-size: 9px; gap: 2px; }
-  .drive-pad { min-width: 54px; min-height: 50px; font-size: 8px; }
-  .drive-steering, .drive-pedals { gap: 6px; }
+  .drive-pad { min-width: 72px; min-height: 72px; }
+  .drive-arrow { font-size: 26px; }
+  .drive-steering, .drive-pedals { gap: 10px; }
   .is-driving .look-hint { display: none; }
 }
 
@@ -181,3 +184,27 @@ kbd { font: inherit; border: 1px solid var(--line); padding: 2px 4px; border-rad
 .look-settings .invert-look { display: flex; gap: 10px; align-items: center; min-height: 36px; }
 @media (max-width: 900px) { .wordmark > div { display: none; } }
 @media (max-height: 500px) { .capture-look { bottom: 54px; } .is-driving .capture-look { bottom: 58px; } .look-settings { padding: 12px; } }
+
+/* Clean in-game HUD: driving-only top bar — map + speed. */
+.hud-top { position: absolute; top: 12px; left: 12px; right: auto; z-index: 5; display: flex; gap: 10px; align-items: stretch; pointer-events: none; max-width: calc(100% - 24px); }
+.hud-map { pointer-events: auto; width: 88px; height: 88px; flex: 0 0 auto; padding: 3px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+.hud-map .district-map { width: 100%; height: 100%; border-radius: 6px; }
+.hud-speed { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; min-width: 0; flex: 0 1 auto; display: flex; align-items: center; gap: 10px; }
+.hud-speed b { font-size: 22px; font-weight: 700; white-space: nowrap; }
+.hud-speed b small { font-size: 9px; font-weight: 600; color: var(--muted); margin-left: 4px; letter-spacing: 1px; }
+.hud-speed span { display: block; font-size: 9px; color: var(--muted); letter-spacing: .5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 38vw; }
+.hud-cycle { pointer-events: auto; min-width: 44px; min-height: 44px; flex: 0 0 auto; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font-size: 18px; }
+.hud-cycle:disabled { opacity: .4; }
+@media (max-width: 640px) {
+  .hud-top { top: 8px; left: 8px; gap: 8px; max-width: calc(100% - 16px); }
+  .hud-map { width: 60px; height: 60px; border-radius: 8px; }
+  .hud-speed { padding: 6px 10px; gap: 8px; }
+  .hud-speed b { font-size: 16px; } .hud-speed span { font-size: 8px; max-width: 44vw; }
+  .hud-cycle { min-width: 40px; min-height: 40px; font-size: 16px; }
+}
+@media (orientation: landscape) and (max-height: 600px) {
+  .hud-top { top: 8px; left: 8px; gap: 8px; }
+  .hud-map { width: 56px; height: 56px; }
+  .hud-speed { padding: 5px 10px; } .hud-speed b { font-size: 15px; }
+  .hud-speed span { max-width: 40vw; }
+}

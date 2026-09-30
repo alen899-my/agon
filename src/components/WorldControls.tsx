@@ -1,16 +1,21 @@
 import { useEffect, useRef, useState, type PointerEvent } from 'react';
 import type { WorldAction } from '../world/Simulation';
 
-interface Props { disabled: boolean; driving: boolean; onStick: (x: number, y: number) => void; onInput: (action: WorldAction, down: boolean, source: string) => void }
-export function WorldControls({ disabled, driving, onStick, onInput }: Props) {
+interface Props { disabled: boolean; driving: boolean; speed: number; onStick: (x: number, y: number) => void; onInput: (action: WorldAction, down: boolean, source: string) => void }
+export function WorldControls({ disabled, driving, speed, onStick, onInput }: Props) {
   const pointer = useRef<number | null>(null); const [stick, setStick] = useState({ x: 0, y: 0 });
   const callbacks = useRef({ onStick, onInput }); callbacks.current = { onStick, onInput };
   const sources = useRef(new Map<string, WorldAction>());
+  const speedRef = useRef(speed); speedRef.current = speed;
+  // Brake doubles as drift: companion handbrake sources owned by each brake pointer.
+  const driftSources = useRef(new Set<string>());
   useEffect(() => {
     const reset = () => {
       callbacks.current.onStick(0, 0); pointer.current = null; setStick({ x: 0, y: 0 });
       for (const [source, action] of sources.current) callbacks.current.onInput(action, false, source);
       sources.current.clear();
+      for (const drift of driftSources.current) callbacks.current.onInput('handbrake', false, drift);
+      driftSources.current.clear();
     };
     const media = matchMedia('(hover: hover) and (pointer: fine)');
     reset(); media.addEventListener('change', reset); window.addEventListener('blur', reset);
@@ -18,13 +23,35 @@ export function WorldControls({ disabled, driving, onStick, onInput }: Props) {
   }, [driving, disabled]);
   const releaseDrive = (event: PointerEvent<HTMLButtonElement>) => {
     const source = 'drive:' + event.pointerId, action = sources.current.get(source);
-    if (action) onInput(action, false, source); sources.current.delete(source);
+    if (action) callbacks.current.onInput(action, false, source);
+    sources.current.delete(source);
+    // Release the drift companion owned by a brake pointer, if any.
+    const drift = source + ':drift';
+    if (driftSources.current.has(drift)) { callbacks.current.onInput('handbrake', false, drift); driftSources.current.delete(drift); }
   };
-  const driveButton = (action: WorldAction, label: string) => <button key={action} className="drive-pad" disabled={disabled} aria-label={label}
+  const pressDrive = (event: PointerEvent<HTMLButtonElement>, action: WorldAction) => {
+    if (disabled) return;
+    event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId);
+    const source = 'drive:' + event.pointerId;
+    sources.current.set(source, action); callbacks.current.onInput(action, true, source);
+    // Mobile brake acts as drift while moving: hold handbrake alongside brake.
+    // Released automatically near standstill (see effect below) so reverse still works.
+    if (action === 'back' && Math.abs(speedRef.current) > 2) {
+      const drift = source + ':drift';
+      driftSources.current.add(drift); callbacks.current.onInput('handbrake', true, drift);
+    }
+  };
+  // Ease off the drift companion as the car stops so a held brake flows into reverse.
+  useEffect(() => {
+    if (Math.abs(speed) < 1 && driftSources.current.size > 0) {
+      for (const drift of [...driftSources.current]) { callbacks.current.onInput('handbrake', false, drift); driftSources.current.delete(drift); }
+    }
+  }, [speed]);
+  const driveButton = (action: WorldAction, arrow: string, sub: string, aria: string) => <button key={action} className="drive-pad" disabled={disabled} aria-label={aria}
     onContextMenu={event => event.preventDefault()}
-    onPointerDown={event => { if (disabled) return; event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId);
-      const source = 'drive:' + event.pointerId; sources.current.set(source, action); onInput(action, true, source); }}
-    onPointerUp={releaseDrive} onPointerCancel={releaseDrive} onLostPointerCapture={releaseDrive}>{label}</button>;
+    onPointerDown={event => pressDrive(event, action)}
+    onPointerUp={releaseDrive} onPointerCancel={releaseDrive} onLostPointerCapture={releaseDrive}>
+    <span className="drive-arrow" aria-hidden="true">{arrow}</span><small>{sub}</small></button>;
   const move = (event: PointerEvent<HTMLDivElement>) => {
     if (pointer.current !== event.pointerId || disabled) return;
     const rect = event.currentTarget.getBoundingClientRect(), radius = rect.width * 0.32;
@@ -37,8 +64,8 @@ export function WorldControls({ disabled, driving, onStick, onInput }: Props) {
     pointer.current = null; setStick({ x: 0, y: 0 }); onStick(0, 0);
   };
   if (driving) return <div className={`world-controls driving-controls ${disabled ? 'inactive' : ''}`}>
-    <div className="drive-steering">{driveButton('left', 'LEFT')}{driveButton('right', 'RIGHT')}</div>
-    <div className="drive-pedals">{driveButton('handbrake', 'DRIFT')}{driveButton('back', 'BRAKE / REV')}{driveButton('forward', 'GAS')}</div>
+    <div className="drive-steering">{driveButton('left', '◀', 'LEFT', 'Steer left')}{driveButton('right', '▶', 'RIGHT', 'Steer right')}</div>
+    <div className="drive-pedals">{driveButton('back', '▼', 'BRAKE', 'Brake')}{driveButton('forward', '▲', 'GAS', 'Gas')}</div>
   </div>;
   return <div className={`world-controls ${disabled ? 'inactive' : ''}`}>
     <div className="stick-wrap"><div className="joystick" aria-label="Movement joystick" role="group"

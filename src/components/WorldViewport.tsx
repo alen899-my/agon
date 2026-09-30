@@ -19,6 +19,8 @@ export function WorldViewport({ engineRef, onSnapshot, onMap, theme, quality, po
     try { engine = new WorldEngine(element, s => { cameraInput.current?.refresh(); props.current.onSnapshot(s); }); }
     catch { setError('This map needs WebGL 2. Enable hardware acceleration or try a compatible browser.'); return; }
     engineRef.current = engine; engine.setTheme(props.current.theme); engine.applyQuality(props.current.quality);
+    // E2E hook: heading/waypoint no longer render in the HUD, so tests read the sim directly.
+    (window as unknown as { __worldEngine?: WorldEngine }).__worldEngine = engine;
     const resize = () => { const bounds = element.getBoundingClientRect(); engine.resize(bounds.width, bounds.height); };
     const observer = new ResizeObserver(resize); observer.observe(element);
     window.addEventListener('resize', resize); resize();
@@ -63,12 +65,13 @@ export function WorldViewport({ engineRef, onSnapshot, onMap, theme, quality, po
       window.removeEventListener('keydown', keydown); window.removeEventListener('keyup', keyup);
       look.destroy(); cameraInput.current = null;
       element.removeEventListener('webglcontextlost', lost); engine.destroy(); engineRef.current = null;
+      (window as unknown as { __worldEngine?: WorldEngine }).__worldEngine = undefined;
     };
   }, [engineRef]);
   useEffect(() => engineRef.current?.setTheme(theme), [theme, engineRef]);
   useEffect(() => engineRef.current?.applyQuality(quality), [quality, engineRef]);
   useEffect(() => { engineRef.current?.setSuspended(document.hidden || portrait || blocked); cameraInput.current?.refresh(); }, [portrait, blocked, engineRef]);
-  return <><canvas ref={canvas} tabIndex={0} className="world-canvas" data-look-state={lookStatus} aria-label="3D neighborhood. WASD or arrows to move, click once to capture mouse or trackpad look, Escape to release, touch swipe to look, Q/C to turn camera, Space to jump or handbrake, V for cockpit, E to use car, N to change stopped vehicle, Enter to start." />
+  return <><canvas ref={canvas} tabIndex={0} className="world-canvas" data-look-state={lookStatus} aria-label="3D neighborhood. WASD or arrows to move, click once to capture mouse or trackpad look, Escape to release, touch swipe to look, Q/C to turn camera, Space to jump or handbrake, V for cockpit, E to enter or steal any stopped car, N to cycle 16 stopped vehicles, Enter to start." />
     {lookEnabled && <div className="capture-look desktop-look">
       {lookStatus === 'locked' ? <span>LOOK ACTIVE | ESC RELEASES CURSOR</span> : <button onClick={() => cameraInput.current?.request()} aria-label="Capture mouse or trackpad look">
         {lookStatus === 'fallback' ? 'CAPTURE UNAVAILABLE | HOVER TO LOOK | Q / C CAMERA | CLICK TO RETRY' : 'CLICK TO LOOK | MOUSE / TRACKPAD | ESC TO RELEASE'}

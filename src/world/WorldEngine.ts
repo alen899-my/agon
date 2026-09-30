@@ -22,6 +22,9 @@ export class WorldEngine {
   private car: Vehicle;
   private readonly fleet = new Map<VehicleKind, Vehicle>();
   private readonly parked: Vehicle[] = [];
+  private parkedKinds: (VehicleKind | null)[] = [];
+  private readonly traffic: Vehicle[] = [];
+  private trafficKinds: (VehicleKind | null)[] = [];
   private readonly sun = new THREE.DirectionalLight(0xffffff, 3);
   private readonly ambient = new THREE.HemisphereLight(0xffffff, 0x555555, 2.2);
   private readonly marker: THREE.Mesh;
@@ -38,7 +41,6 @@ export class WorldEngine {
   private lastBBEvents = 0;
   private readonly loop: GameLoop;
   private readonly people: { actor: Stickman }[] = [];
-  private readonly traffic: Vehicle[] = [];
   private shake = 0; private lastImpactAt = -10; private prevSimTime = 0;
   private quality: QualityLevel = 'balanced'; private pixelCap = QUALITY_PIXEL.balanced;
   private lastW = 1; private lastH = 1;
@@ -63,18 +65,14 @@ export class WorldEngine {
       vehicle.group.visible = false; this.fleet.set(kind, vehicle); this.scene.add(vehicle.group);
     }
     this.car = this.fleet.get('car')!;
+    this.parkedKinds = [];
+    this.trafficKinds = [];
     const random = seeded(8008);
     for (let i = 0; i < 16; i++) {
       const actor = this.kit.stickman(false, i); actor.group.scale.setScalar(0.9 + random() * 0.15);
       this.scene.add(actor.group); this.people.push({ actor });
     }
-    for (let i = 0; i < 6; i++) {
-      const vehicle = this.kit.car(VEHICLE_KINDS[i], i % 2 === 0);
-      this.scene.add(vehicle.group); this.traffic.push(vehicle);
-    }
-    for (const [x, z, type] of [[-11, -38, 'van'], [11, -54, 'car'], [55, 12, 'car']] as const) {
-      const parked = this.kit.car(type, true); parked.group.position.set(x, 0, z); this.scene.add(parked.group); this.parked.push(parked);
-    }
+    this.syncWorldVehicles(true);
     this.marker = new THREE.Mesh(new THREE.TorusGeometry(1.2, 0.07, 8, 48), new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false }));
     this.marker.rotation.x = -Math.PI / 2; this.marker.renderOrder = 5; this.scene.add(this.marker);
     // Table tennis dynamic props (world-anchored at GAME_CENTER).
@@ -119,6 +117,36 @@ export class WorldEngine {
     this.emit();
   }
   private emit(): void { this.publish(this.simulation.snapshot); }
+  /** Keep render meshes in sync with the stealable world: rebuild on kind change, grow/shrink freely. */
+  private syncWorldVehicles(initial = false): void {
+    const sim = this.simulation;
+    while (this.traffic.length < sim.traffic.length) {
+      const v = this.kit.car(sim.traffic[this.traffic.length]?.kind ?? 'car', false);
+      this.scene.add(v.group); this.traffic.push(v); this.trafficKinds.push(null);
+    }
+    while (this.traffic.length > sim.traffic.length) {
+      const v = this.traffic.pop()!; this.scene.remove(v.group); this.trafficKinds.pop();
+    }
+    sim.traffic.forEach((t, i) => {
+      if (!initial && this.trafficKinds[i] === t.kind) return;
+      this.scene.remove(this.traffic[i].group);
+      const v = this.kit.car(t.kind, false);
+      this.scene.add(v.group); this.traffic[i] = v; this.trafficKinds[i] = t.kind;
+    });
+    while (this.parked.length < sim.parked.length) {
+      const v = this.kit.car(sim.parked[this.parked.length]?.kind ?? 'car', true);
+      this.scene.add(v.group); this.parked.push(v); this.parkedKinds.push(null);
+    }
+    while (this.parked.length > sim.parked.length) {
+      const v = this.parked.pop()!; this.scene.remove(v.group); this.parkedKinds.pop();
+    }
+    sim.parked.forEach((p, i) => {
+      if (!initial && this.parkedKinds[i] === p.kind) return;
+      this.scene.remove(this.parked[i].group);
+      const v = this.kit.car(p.kind, true);
+      this.scene.add(v.group); this.parked[i] = v; this.parkedKinds[i] = p.kind;
+    });
+  }
   begin(): void { unlockAudio(); this.simulation.begin(); this.emit(); }
   enterTable(): void { unlockAudio(); this.simulation.enterTable(); this.lastTTEvents = this.simulation.table.events.length; this.emit(); }
   rematch(): void { unlockAudio(); this.simulation.table.reset(); this.lastTTEvents = this.simulation.table.events.length; this.emit(); }
@@ -237,16 +265,27 @@ export class WorldEngine {
       roll: sim.skidding ? Math.sin(sim.time * 20) * 0.02 : -sim.car.steer * Math.min(0.05, Math.abs(sim.car.speed) * 0.003),
     });
     this.car.glazing.visible = !(sim.driving && sim.view === 'first');
-    // Ped + traffic positions are owned by the simulation (braking / collisions).
+    // Smooth GTA doors: swing the driver door while slipping in/out, ease shut after.
+    const doorOpen = sim.transition > 0 ? Math.min(1, sim.transition / 0.3) * 1.15 : 0;
+    for (const [i, door] of this.car.doors.entries()) door.rotation.y = (i === 0 ? 1 : -1) * doorOpen;
+    // Ped + traffic + parked positions are owned by the simulation (braking / collisions).
     this.people.forEach((person, i) => {
       const point = sim.peds[i]; if (!point) return;
       person.actor.group.position.set(point.x, 0.08, point.z); person.actor.group.rotation.y = -point.yaw;
       person.actor.animate({ phase: point.phase, intensity: point.move, airborne: false, dip: 0, idle: sim.time + i * 1.7 });
     });
+    this.syncWorldVehicles();
     this.traffic.forEach((vehicle, i) => {
-      const p = sim.traffic[i]; if (!p) return;
+      const p = sim.traffic[i]; if (!p) { vehicle.group.visible = false; return; }
+      vehicle.group.visible = true;
       vehicle.group.position.set(p.x, 0.08, p.z); vehicle.group.rotation.y = -p.yaw;
       vehicle.update(p.speed, p.steer, dt, p.braking);
+    });
+    this.parked.forEach((vehicle, i) => {
+      const p = sim.parked[i]; if (!p) { vehicle.group.visible = false; return; }
+      vehicle.group.visible = true;
+      vehicle.group.position.set(p.x, 0.08, p.z); vehicle.group.rotation.y = -p.yaw;
+      vehicle.update(0, 0, 0, false);
     });
     // Table tennis sounds: play only fresh sim events.
     const evts = sim.table.events;

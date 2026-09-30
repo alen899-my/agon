@@ -57,9 +57,9 @@ test('capture rejection falls back without errors or a held mouse button', async
   const canvas = page.locator('canvas'), box = (await canvas.boundingBox())!;
   await canvas.click({ position: { x: box.width / 2, y: box.height / 2 } });
   await expect(canvas).toHaveAttribute('data-look-state', 'fallback');
-  const before = await page.locator('.compass').textContent();
+  const before = await page.evaluate(() => (window as unknown as { __worldEngine?: { simulation: { yaw: number } } }).__worldEngine?.simulation.yaw ?? null);
   await page.mouse.move(box.x + box.width / 2 + 200, box.y + box.height / 2, { steps: 10 });
   await page.clock.runFor(150);
-  expect(await page.locator('.compass').textContent()).not.toBe(before);
+  expect(await page.evaluate(() => (window as unknown as { __worldEngine?: { simulation: { yaw: number } } }).__worldEngine?.simulation.yaw ?? null)).not.toBe(before);
   expect(errors).toEqual([]);
 });

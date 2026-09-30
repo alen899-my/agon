@@ -76,9 +76,6 @@ export default function App() {
   };
   const ready = !state || state.phase === 'ready';
   const active = !ready && !state?.paused && !portrait && !mapOpen && !physicsOpen && !lookOpen;
-  const destination = PLACES.find(p => p.id === state?.waypoint);
-  const distance = destination && state ? Math.round(Math.hypot(destination.x - state.x, destination.z - state.z)) : null;
-  const heading = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][Math.round(((state?.yaw ?? 0) * 180 / Math.PI + 3600) / 45) % 8];
   return <main className={`district-shell${fullscreen ? ' is-fullscreen' : ''}`}>
     <header className="district-header">
       <div className="wordmark">agon<span>↗</span><div>OPEN<br />DISTRICT</div></div>
@@ -99,9 +96,6 @@ export default function App() {
         onDismissOverlay={() => { if (lookOpen) setLookOpen(false); else if (physicsOpen) setPhysicsOpen(false); else if (mapOpen) toggleMap(); }}
         lookSettings={lookSettings} lookEnabled={active && state?.mode === 'roam'} />
       {fullscreen && <button className="fullscreen-exit" onClick={enterFullscreen} aria-label="Exit fullscreen">⛶ EXIT</button>}
-      <div className="location-card"><span className="eyebrow">{state?.mode === 'table' ? 'GAME CENTER / TABLE TENNIS' : state?.mode === 'basket' ? 'GAME CENTER / HOOPS' : 'DISTRICT 01 / FREE ROAM'}</span><h2>{ready ? 'The neighborhood.' : state?.mode === 'table' ? 'Game Center.' : state?.mode === 'basket' ? 'The Blacktop.' : state?.location}</h2><p>{ready ? 'A small place. A thousand directions.' : state?.mode === 'table' ? 'First to 11, win by 2. Good luck.' : state?.mode === 'basket' ? 'No aim. Pure touch. Fill the meter.' : state?.driving ? 'Behind the wheel. Make your own route.' : 'No hurry. Take the long way home.'}</p></div>
-      <div className="compass"><span>W</span><b>{heading}</b><span>E</span><i /></div>
-      {!ready && <div className="exploration-count"><b>{state?.discovered.length ?? 0}<span> / 7</span></b><small>PLACES DISCOVERED</small></div>}
       {ready && <div className="world-intro">
         <p className="eyebrow">THE FIRST BLOCK OF SOMETHING BIGGER</p>
         <h1>OUTSIDE.<br />IS YOURS.</h1>
@@ -110,15 +104,12 @@ export default function App() {
         <div className="intro-tags"><span>7 LOCATIONS</span><span>2 PERSPECTIVES</span><span>NO RUSH</span></div>
       </div>}
       {!ready && <>
-        {state?.mode !== 'table' && <div className="look-hint">{state?.driving ? 'W / S GAS / BRAKE | A / D STEER | SPACE DRIFT | E EXIT' : state?.view === 'first' ? 'FIRST PERSON' : 'THIRD PERSON'}<span><span className="desktop-look">CLICK ONCE TO LOOK | Q / C CAMERA | V VIEW</span><span className="touch-look">SWIPE THE WORLD TO LOOK</span></span></div>}
+        {state?.driving && <div className="hud-top" role="status" aria-label="Map and speed">
+          <button className="hud-map" onClick={toggleMap} aria-label="Open district map"><DistrictMap state={state} theme={theme} /></button>
+          <div className="hud-speed" aria-label="Speed"><b>{state?.speed ?? 0}<small>KM/H</small></b><span>{VEHICLES[state.vehicleKind].name} · {state.acceleration.toFixed(1)} m/s^2{(state?.damage ?? 0) > 0 ? ` · DMG ${state?.damage}%` : ''}</span><button className="hud-cycle" disabled={!active || Math.abs(state?.car.speed ?? 0) > 0.2} onClick={() => { engine.current?.cycleVehicle(); focus(); }} aria-label="Next vehicle">⇄</button></div>
+        </div>}
         {state?.view === 'first' && <div className="crosshair" aria-hidden="true">+</div>}
-        {state?.driving && <div className="driving-readout"><b>{VEHICLES[state.vehicleKind].name} | {state.speed} KM/H</b><span>{state.car.speed < -0.1 ? 'REVERSE' : 'DRIVE'} | {state.acceleration.toFixed(1)} m/s^2 {state.skidding ? ' | DRIFT' : ''}</span><button disabled={!active || Math.abs(state.car.speed) > 0.2} onClick={() => { engine.current?.cycleVehicle(); focus(); }}>NEXT VEHICLE <kbd>N</kbd></button><small>Stop in an open area to change vehicle</small></div>}
-        {state?.driving && <div className={`damage-bar${(state?.damage ?? 0) > 60 ? ' critical' : ''}`} aria-label={`Car damage ${state?.damage ?? 0} percent`}><i style={{ width: `${state?.damage ?? 0}%` }} /><span>DMG {state?.damage ?? 0}%</span></div>}
-        {state?.driving && state?.frontBlocked && <div className="front-warning" role="status">⚠ {state.frontDistance}m AHEAD</div>}
         {state?.impact && <div className="crash-flash" role="status">CRASH · {state.impact.speed} KM/H vs {state.impact.with.toUpperCase()}</div>}
-        {state?.skidding && <div className="skid-note" aria-hidden="true">DRIFT</div>}
-        <button className="minimap-button" onClick={toggleMap} aria-label="Open district map"><DistrictMap state={state} theme={theme} /><div><b>{state?.driving ? `${state.speed} KM/H` : 'YOUR NEIGHBORHOOD'}</b><span>↗</span></div></button>
-        <div className="destination"><span>◇</span><div><b>{destination?.name ?? 'Choose a destination'}</b><small>{distance !== null ? `${distance} m away` : 'Open the map to set a waypoint'}</small></div></div>
         {state?.mode === 'table' && state.table && <div className="tt-score" role="status" aria-label={`Table tennis score you ${state.table.you} AI ${state.table.aiScore}`}>
           <div><small>YOU</small><b>{state.table.you}</b>{state.table.server === 'you' && <i>●</i>}</div>
           <div className="tt-mid"><span>{state.table.phase === 'over' ? 'MATCH' : `RALLY ${state.table.rally}`}</span><small>{state.table.ballSpeedKmh} KM/H</small></div>
@@ -135,12 +126,12 @@ export default function App() {
         {state?.mode === 'basket' && state?.basket?.message && <div className="tt-message" role="status">{state.basket.message}</div>}
         {state?.mode === 'basket' && <button className="tt-exit" onClick={() => { engine.current?.exitBasket(); focus(); }} aria-label="Exit hoops">✕ EXIT <kbd>X</kbd></button>}
         {state?.mode === 'roam' && state?.nearHoop && !state?.driving && <button className="interact-button bb-play" onClick={() => { engine.current?.enterBasket(); focus(); }}>SHOOT HOOPS <kbd>E</kbd></button>}
-        {state?.mode !== 'table' && state?.mode !== 'basket' && (state?.nearbyCar || state?.driving || state?.nearTable) && <button className="interact-button" onClick={() => { if (state?.nearTable && !state?.driving) engine.current?.enterTable(); else engine.current?.interact(); focus(); }}>{state.driving ? 'EXIT VEHICLE' : state?.nearTable && !state?.nearbyCar ? 'PLAY TABLE TENNIS' : state?.nearTable ? 'PLAY TABLE TENNIS' : 'DRIVE THIS CAR'} <kbd>E</kbd></button>}
+        {state?.mode !== 'table' && state?.mode !== 'basket' && (state?.nearbyCar || state?.driving || (state?.nearTable && !state?.driving)) && <button className="interact-button" onClick={() => { if (state?.nearTable && !state?.driving) engine.current?.enterTable(); else engine.current?.interact(); focus(); }}>{state.driving ? 'EXIT VEHICLE' : state?.nearTable && !state?.nearbyCar ? 'PLAY TABLE TENNIS' : (state?.enterHint ?? 'DRIVE')} <kbd>E</kbd></button>}
         {state?.mode === 'table'
           ? <TableTennisControls disabled={!active} onSwing={shot => engine.current?.tableSwing(shot)} />
           : state?.mode === 'basket'
           ? <BasketballControls disabled={!active} pumping={state?.basket?.pumping ?? false} onTap={() => engine.current?.basketTap()} />
-          : <WorldControls disabled={!active} driving={state?.driving ?? false} onStick={(x, y) => engine.current?.joystick(x, y)} onInput={(action, down, source) => engine.current?.input(action, down, source)} />}
+          : <WorldControls disabled={!active} driving={state?.driving ?? false} speed={state?.car.speed ?? 0} onStick={(x, y) => engine.current?.joystick(x, y)} onInput={(action, down, source) => engine.current?.input(action, down, source)} />}
       </>}
       {state?.paused && !mapOpen && !physicsOpen && !lookOpen && <div className="pause-cover"><div><p className="eyebrow">THE CITY CAN WAIT</p><h2>A moment to yourself.</h2><button className="primary-button" onClick={() => { engine.current?.togglePause(); focus(); }}>KEEP EXPLORING <span>→</span></button></div></div>}
       {mapOpen && <div className="map-cover"><div className="map-sheet" role="dialog" aria-labelledby="map-title">
@@ -162,7 +153,7 @@ export default function App() {
       {physicsOpen && !ready && <div className="physics-cover"><div className="physics-sheet" role="dialog" aria-label="Physics checklist"><div className="map-heading"><div><p className="eyebrow">REALISTIC PHYSICS · ONE BY ONE</p><h2>Systems online.</h2></div><button className="control" onClick={() => setPhysicsOpen(false)} aria-label="Close physics">✕</button></div><PhysicsChecklist state={state} /><p className="map-caption">Drive into walls, traffic and crowds to tick crash events. Repair at South Station.</p></div></div>}
       {portrait && <div className="rotate-cover"><span className="rotate-symbol">↻</span><p className="eyebrow">MORE ROOM TO EXPLORE</p><h2>Turn your world.</h2><p>Rotate your phone to landscape.<br />Your neighborhood will be waiting.</p><button className="primary-button" onClick={enterFullscreen}>GO FULLSCREEN <span>⛶</span></button></div>}
     </section>
-    <footer className="district-footer"><span>{state?.mode === 'table' ? <>AUTO MOVE <i>●</i> · SPACE <i>HIT</i> · W <i>TOP</i> · S <i>CHOP</i> · SHIFT <i>SMASH</i></> : state?.mode === 'basket' ? <>TAP SPACE <i>PUMP</i> · TAP AGAIN <i>THROW</i></> : state?.driving ? <>W / S <i>GAS / BRAKE</i> | A / D <i>STEER</i> | SPACE <i>DRIFT</i> | V <i>COCKPIT</i> | N <i>VEHICLE</i></> : <>W A S D <i>MOVE</i> · SHIFT <i>SPRINT</i> · SPACE <i>JUMP</i></>}</span><span>{state?.mode === 'table' ? 'GAME CENTER — TABLE TENNIS' : state?.mode === 'basket' ? 'GAME CENTER — HOOPS' : 'STAGE 01 — THE NEIGHBORHOOD'}</span><span>{state?.distance ?? 0} m EXPLORED</span></footer>
+    <footer className="district-footer"><span>{state?.mode === 'table' ? <>AUTO MOVE <i>●</i> · SPACE <i>HIT</i> · W <i>TOP</i> · S <i>CHOP</i> · SHIFT <i>SMASH</i></> : state?.mode === 'basket' ? <>TAP SPACE <i>PUMP</i> · TAP AGAIN <i>THROW</i></> : state?.driving ? <>W / S <i>GAS / BRAKE</i> | A / D <i>STEER</i> | SPACE <i>DRIFT</i> | V <i>COCKPIT</i> | E <i>EXIT</i> | N <i>16 RIDES</i></> : <>W A S D <i>MOVE</i> · SHIFT <i>SPRINT</i> · SPACE <i>JUMP</i> · E <i>STEAL ANY CAR</i></>}</span><span>{state?.mode === 'table' ? 'GAME CENTER — TABLE TENNIS' : state?.mode === 'basket' ? 'GAME CENTER — HOOPS' : 'STAGE 01 — THE NEIGHBORHOOD'}</span><span>{state?.distance ?? 0} m EXPLORED</span></footer>
     {notice && <div className="notice" role="status">{notice}<button className="control" onClick={() => setNotice('')}>Dismiss</button></div>}
   </main>;
 }

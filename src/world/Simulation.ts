@@ -8,6 +8,8 @@ export type WorldAction = 'forward' | 'back' | 'left' | 'right' | 'sprint' | 'ju
 export type View = 'third' | 'first';
 export interface Impact { speed: number; with: string; at: number }
 export interface TrafficCar { kind: VehicleKind; x: number; z: number; yaw: number; speed: number; offset: number; base: number; steer: number; wheelSpin: number; braking: boolean; prevYaw: number }
+export interface ParkedVehicle { kind: VehicleKind; x: number; z: number; yaw: number }
+export interface VehicleTarget { type: 'player' | 'parked' | 'traffic'; index: number; kind: VehicleKind; x: number; z: number; yaw: number; speed: number; dist: number; enterable: boolean; reason: string | null }
 export interface Ped { x: number; z: number; yaw: number; route: Point[]; dist: number; speed: number; phase: number; seed: number; move: number; cur: number; scaredUntil: number }
 export interface SnapshotCar { x: number; z: number; yaw: number; speed: number; steer: number; wheelSpin: number; braking: boolean }
 export type PlayMode = 'roam' | 'table' | 'basket';
@@ -15,8 +17,11 @@ export interface WorldSnapshot {
   phase: 'ready' | 'playing'; paused: boolean; view: View; driving: boolean;
   x: number; z: number; yaw: number; speed: number; distance: number;
   location: string; discovered: string[]; waypoint: string | null; nearbyCar: boolean;
+  nearbyVehicleKind: VehicleKind | null; nearbyVehicleLabel: string | null; enterHint: string | null;
   damage: number; impact: Impact | null; frontDistance: number; frontBlocked: boolean;
   vehicleKind: VehicleKind; acceleration: number; crashed: boolean; skidding: boolean; car: SnapshotCar;
+  transition: number;
+  parked: ParkedVehicle[];
   stridePhase: number; moveBlend: number; airborne: boolean; landDip: number;
   traffic: (SnapshotCar)[];
   peds: { x: number; z: number; yaw: number; phase: number; moving: number }[];
@@ -52,8 +57,25 @@ export class Simulation {
   vehicleKind: VehicleKind = 'car';
   acceleration = 0;
   lateralSpeed = 0;
+  /** Smooth GTA enter/exit: locks drive inputs while the avatar slips through the door. */
+  transition = 0;
   private lookUntil = 0;
   car = { x: 9, z: 29, yaw: 0, speed: 0, steer: 0, wheelSpin: 0, braking: false };
+  /** Every parked car in the world is stealable. Includes your previously driven cars. */
+  parked: ParkedVehicle[] = [
+    { kind: 'van', x: -11, z: -38, yaw: 0 },
+    { kind: 'car', x: 11, z: -54, yaw: 0 },
+    { kind: 'car', x: 55, z: 12, yaw: 0 },
+    { kind: 'taxi', x: 24, z: -4, yaw: Math.PI / 2 },
+    { kind: 'muscle', x: -32, z: 14, yaw: 0.3 },
+    { kind: 'police', x: 38, z: 34, yaw: -Math.PI / 2 },
+    { kind: 'pickup', x: -50, z: -8, yaw: Math.PI / 2 },
+    { kind: 'ambulance', x: 48, z: -28, yaw: 0 },
+    { kind: 'super', x: 18, z: 48, yaw: -0.4 },
+    { kind: 'bus', x: 30, z: 62, yaw: Math.PI / 2 },
+    { kind: 'hatch', x: -14, z: 52, yaw: 1.2 },
+    { kind: 'fire', x: -58, z: 60, yaw: 0 },
+  ];
   waypoint: string | null = 'plaza';
   readonly discovered = new Set<string>();
   // --- realistic-physics state (one by one) ---
@@ -77,7 +99,9 @@ export class Simulation {
   private jumpPressed = false;
   constructor() {
     const rng = seeded(9001);
-    for (let i = 0; i < 6; i++) this.traffic.push({ kind: VEHICLE_KINDS[i], ...routePoint(TRAFFIC_ROUTE, i * 100 + 25), speed: 7, offset: i * 100 + 25, base: 7, steer: 0, wheelSpin: 0, braking: false, prevYaw: 0 });
+    // A living street: 8 looping cars covering the full catalog, not just the first six.
+    const streetCast: VehicleKind[] = ['car', 'taxi', 'suv', 'bus', 'sport', 'pickup', 'police', 'boxTruck'];
+    for (let i = 0; i < 8; i++) this.traffic.push({ kind: streetCast[i % streetCast.length], ...routePoint(TRAFFIC_ROUTE, i * 76 + 25), speed: 7, offset: i * 76 + 25, base: 7, steer: 0, wheelSpin: 0, braking: false, prevYaw: 0 });
     for (let i = 0; i < 16; i++) {
       const speed = 0.9 + rng() * 0.6;
       this.peds.push({ x: 0, z: 0, yaw: 0, route: PED_ROUTES[i], dist: rng() * 240, speed, phase: rng() * 6.28, seed: rng(), move: 1, cur: speed, scaredUntil: 0 });
@@ -85,7 +109,26 @@ export class Simulation {
     this.syncCrowd(0);
   }
   get active(): boolean { return this.phase === 'playing' && !this.paused; }
-  get nearbyCar(): boolean { return Math.hypot(this.x - this.car.x, this.z - this.car.z) < 7; }
+  /** GTA rule: every world vehicle is enterable. Nearest within reach, traffic must be stopped/slow. */
+  nearestVehicle(): VehicleTarget | null {
+    const R = 6.5;
+    const candidates: VehicleTarget[] = [];
+    const pd = Math.hypot(this.x - this.car.x, this.z - this.car.z);
+    candidates.push({ type: 'player', index: -1, kind: this.vehicleKind, x: this.car.x, z: this.car.z, yaw: this.car.yaw, speed: Math.abs(this.car.speed), dist: pd, enterable: pd < R, reason: pd < R ? null : 'too far' });
+    this.parked.forEach((p, i) => {
+      const d = Math.hypot(this.x - p.x, this.z - p.z);
+      candidates.push({ type: 'parked', index: i, kind: p.kind, x: p.x, z: p.z, yaw: p.yaw, speed: 0, dist: d, enterable: d < R, reason: d < R ? null : 'too far' });
+    });
+    this.traffic.forEach((t, i) => {
+      const d = Math.hypot(this.x - t.x, this.z - t.z);
+      const slow = Math.abs(t.speed) < 3.5;
+      candidates.push({ type: 'traffic', index: i, kind: t.kind, x: t.x, z: t.z, yaw: t.yaw, speed: Math.abs(t.speed), dist: d, enterable: d < R && slow, reason: d >= R ? 'too far' : slow ? null : 'moving — block it first' });
+    });
+    candidates.sort((a, b) => a.dist - b.dist);
+    // Prefer an enterable car; otherwise return the closest so the HUD can hint "stop it first".
+    return candidates.find(c => c.enterable) ?? (candidates[0]?.dist !== undefined && candidates[0].dist < 9 ? candidates[0] : null);
+  }
+  get nearbyCar(): boolean { return !!this.nearestVehicle()?.enterable; }
   get nearTable(): boolean { return Math.hypot(this.x - GAME_CENTER.x, this.z - GAME_CENTER.z) < 8; }
   get nearHoop(): boolean { return Math.hypot(this.x - HOOP.x, this.z - (HOOP.z - 4.2)) < 7; }
   enterBasket(): boolean {
@@ -131,18 +174,42 @@ export class Simulation {
     return this.table.swingPlayer('drive');
   }
   get crashed(): boolean { return this.time < this.crashUntil; }
+  private spawnReplacementTraffic(): void {
+    // Keep the street alive after a steal: respawn far from the player so it never pops in.
+    const kinds: VehicleKind[] = ['car', 'hatch', 'taxi', 'suv', 'sport', 'muscle', 'super', 'minivan', 'van', 'police', 'ambulance', 'boxTruck'];
+    const kind = kinds[Math.floor(((this.time * 13.7) % 1 + 1) % 1 * kinds.length) % kinds.length];
+    let best = 0, bestDist = -1;
+    for (let k = 0; k < 8; k++) {
+      const offset = ((this.time * 7 + k * 79 + this.traffic.length * 37) % 608 + 608) % 608;
+      const p = routePoint(TRAFFIC_ROUTE, offset);
+      const d = Math.hypot(p.x - this.x, p.z - this.z);
+      if (d > bestDist) { bestDist = d; best = offset; }
+    }
+    const p = routePoint(TRAFFIC_ROUTE, best);
+    this.traffic.push({ kind, x: p.x, z: p.z, yaw: p.yaw, speed: 0, offset: best, base: 6 + (best % 3), steer: 0, wheelSpin: 0, braking: false, prevYaw: p.yaw });
+  }
   get snapshot(): WorldSnapshot {
     let location = 'Civic Avenue', best = 23;
     for (const place of PLACES) {
       const distance = Math.hypot(this.x - place.x, this.z - place.z);
       if (distance < best) { best = distance; location = place.name; }
     }
+    const near = this.driving ? null : this.nearestVehicle();
+    const enterHint = this.driving ? 'E — exit'
+      : !near ? null
+      : !near.enterable ? `${VEHICLES[near.kind].name} ${near.reason ?? ''}`.trim()
+      : `E — drive ${VEHICLES[near.kind].name}`;
     return { phase: this.phase, paused: this.paused, view: this.view, driving: this.driving,
       x: this.x, z: this.z, yaw: this.yaw, speed: Math.round(Math.abs(this.driving ? this.car.speed : this.pace) * 3.6),
       distance: Math.floor(this.distance), location, discovered: [...this.discovered], waypoint: this.waypoint, nearbyCar: this.nearbyCar,
+      nearbyVehicleKind: near?.enterable ? near.kind : null,
+      nearbyVehicleLabel: near ? `${VEHICLES[near.kind].name} · ${VEHICLES[near.kind].inspiredBy}` : null,
+      enterHint,
       damage: Math.round(this.damage), impact: this.impact, frontDistance: Math.round(this.frontDistance),
       vehicleKind: this.vehicleKind, acceleration: this.acceleration, frontBlocked: this.frontBlocked, crashed: this.crashed, skidding: this.skidding,
       car: { x: this.car.x, z: this.car.z, yaw: this.car.yaw, speed: this.car.speed, steer: this.car.steer, wheelSpin: this.car.wheelSpin, braking: this.car.braking },
+      transition: this.transition,
+      parked: this.parked.map(p => ({ ...p })),
       stridePhase: this.stride, moveBlend: this.moveBlend, airborne: this.y > 0.02, landDip: Math.max(0, Math.min(1, this.landDip)),
       traffic: this.traffic.map(t => ({ x: t.x, z: t.z, yaw: t.yaw, speed: t.speed, steer: t.steer, wheelSpin: t.wheelSpin, braking: t.braking })),
       peds: this.peds.map(p => ({ x: p.x, z: p.z, yaw: p.yaw, phase: p.phase, moving: p.move })),
@@ -172,7 +239,7 @@ export class Simulation {
   toggleView(): void { this.view = this.view === 'third' ? 'first' : 'third'; if (this.driving) { this.yaw = this.car.yaw; this.pitch = 0.08; } }
   togglePause(): void { if (this.phase === 'playing') { this.paused = !this.paused; this.clearInput(); } }
   cycleVehicle(): boolean {
-    if (!this.active || this.mode !== 'roam' || !this.driving || Math.abs(this.car.speed) > 0.2) return false;
+    if (!this.active || this.mode !== 'roam' || !this.driving || Math.abs(this.car.speed) > 0.2 || this.transition > 0) return false;
     const next = VEHICLE_KINDS[(VEHICLE_KINDS.indexOf(this.vehicleKind) + 1) % VEHICLE_KINDS.length];
     if (Math.abs(this.lateralSpeed) > 0.2 || this.contact(vehicleBody(this.car.x, this.car.z, this.car.yaw, next))) return false;
     this.vehicleKind = next; this.lateralSpeed = 0; return true;
@@ -181,12 +248,32 @@ export class Simulation {
   interact(): boolean {
     if (!this.active) return false;
     if (this.mode !== 'roam') return false;
+    if (this.transition > 0) return false;
     if (!this.driving && this.nearTable) return this.enterTable();
     if (!this.driving && this.nearHoop) return this.enterBasket();
     if (!this.driving) {
-      if (!this.nearbyCar) return false;
+      // GTA-style: step into the nearest enterable world vehicle — your old ride stays parked.
+      const target = this.nearestVehicle();
+      if (!target || !target.enterable) return false;
+      if (target.type !== 'player') {
+        this.parked.push({ kind: this.vehicleKind, x: this.car.x, z: this.car.z, yaw: this.car.yaw });
+        if (this.parked.length > 28) this.parked.shift();
+      }
+      if (target.type === 'parked') {
+        const [p] = this.parked.splice(target.index, 1);
+        this.vehicleKind = p.kind;
+        this.car = { x: p.x, z: p.z, yaw: p.yaw, speed: 0, steer: 0, wheelSpin: 0, braking: false };
+        // Old ride stays parked (pushed above) — straight GTA swap, net +0.
+      } else if (target.type === 'traffic') {
+        const t = this.traffic[target.index];
+        this.vehicleKind = t.kind;
+        this.car = { x: t.x, z: t.z, yaw: t.yaw, speed: 0, steer: 0, wheelSpin: 0, braking: false };
+        this.traffic.splice(target.index, 1);
+        this.spawnReplacementTraffic();
+      }
       this.driving = true; this.x = this.car.x; this.z = this.car.z; this.y = this.vy = 0;
       this.yaw = this.car.yaw; this.pitch = 0.12;
+      this.transition = 0.35;
     } else {
       // Door candidates follow the vehicle heading and must clear all solid objects.
       const reach = VEHICLES[this.vehicleKind].length / 2 + 0.8;
@@ -198,6 +285,7 @@ export class Simulation {
       if (!exit) return false;
       this.driving = false; this.lateralSpeed = 0; this.acceleration = 0; this.skidding = false; this.x = exit.x; this.z = exit.z; this.car.speed = 0; this.car.steer = 0; this.car.braking = false;
       this.pvx = 0; this.pvz = 0;
+      this.transition = 0.3;
     }
     this.previous = { x: this.x, z: this.z, y: this.y }; this.clearInput(); return true;
   }
@@ -224,6 +312,16 @@ export class Simulation {
       const hit = bodyContact(body, vehicleBody(p.x, p.z, 0, p.label === 'parked-van' ? 'van' : 'car'));
       if (hit) return { ...hit, label: p.label ?? 'parked car' };
     }
+    // Dynamic parked fleet (includes stolen-car leftovers + your old rides).
+    for (const p of this.parked) {
+      const hit = bodyContact(body, vehicleBody(p.x, p.z, p.yaw, p.kind));
+      if (hit) return { ...hit, label: 'parked car' };
+    }
+    // Your last ride stays solid while you are on foot.
+    if (!this.driving) {
+      const hit = bodyContact(body, vehicleBody(this.car.x, this.car.z, this.car.yaw, this.vehicleKind));
+      if (hit) return { ...hit, label: 'parked car' };
+    }
     for (const t of this.traffic) {
       if (t === ignore) continue;
       const hit = bodyContact(body, vehicleBody(t.x, t.z, t.yaw, t.kind));
@@ -247,6 +345,7 @@ export class Simulation {
     return Math.abs(x) + 0.48 >= LIMIT || Math.abs(z) + 0.48 >= LIMIT || intersects(x, z, 0.48) ||
       !!circleContact(vehicleBody(this.car.x, this.car.z, this.car.yaw, this.vehicleKind), x, z, 0.48) ||
       PARKED_CARS.some(p => circleContact(vehicleBody(p.x, p.z, 0, p.label === 'parked-van' ? 'van' : 'car'), x, z, 0.48)) ||
+      this.parked.some(p => circleContact(vehicleBody(p.x, p.z, p.yaw, p.kind), x, z, 0.48)) ||
       this.traffic.some(t => circleContact(vehicleBody(t.x, t.z, t.yaw, t.kind), x, z, 0.48)) ||
       PROPS.some(p => circleHit(x, z, 0.48, p.x, p.z, p.r));
   }
@@ -317,9 +416,16 @@ export class Simulation {
       const p = routePoint(TRAFFIC_ROUTE, t.offset);
       const fx = Math.sin(p.yaw), fz = -Math.cos(p.yaw);
       const clearance = VEHICLES[t.kind].length / 2;
-      if (this.aheadBlocked(fx, fz, t.x, t.z, this.car.x, this.car.z, clearance + VEHICLES[this.vehicleKind].length / 2)) want = 0;
+      // Chase & stop: traffic yields to your car AND to you on foot standing in the lane.
+      const blockX = this.driving ? this.car.x : this.x;
+      const blockZ = this.driving ? this.car.z : this.z;
+      const blockR = this.driving ? clearance + VEHICLES[this.vehicleKind].length / 2 : clearance + 1.2;
+      if (this.aheadBlocked(fx, fz, t.x, t.z, blockX, blockZ, blockR)) want = 0;
       for (const o of this.traffic) {
         if (o !== t && this.aheadBlocked(fx, fz, t.x, t.z, o.x, o.z, clearance + VEHICLES[o.kind].length / 2)) { want = 0; break; }
+      }
+      if (want !== 0) for (const q of this.parked) {
+        if (this.aheadBlocked(fx, fz, t.x, t.z, q.x, q.z, clearance + VEHICLES[q.kind].length / 2)) { want = 0; break; }
       }
       t.braking = want < t.speed - 0.3;
       t.speed += clamp(want - t.speed, -10 * dt, 4 * dt);
@@ -369,6 +475,7 @@ export class Simulation {
       this.previous = previous; return;
     }
     this.time += dt; this.previous = { x: this.x, z: this.z, y: this.y };
+    if (this.transition > 0) this.transition = Math.max(0, this.transition - dt);
     // Basketball mode: tap-tap power meter (tap to pump, tap again to throw).
     if (this.mode === 'basket') {
       if (this.jumpPressed) this.basket.pressMeter();

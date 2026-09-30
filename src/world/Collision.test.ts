@@ -5,8 +5,8 @@ import { SOLIDS, LIMIT, PROPS } from './Map';
 
 const tick = (s: Simulation, n = 60) => { for (let i = 0; i < n; i++) s.update(1 / 60); };
 function driving(x = 0, z = 40) {
-  const s = new Simulation(); s.begin(); s.traffic = []; s.peds = [];
-  s.x = s.car.x = x; s.z = s.car.z = z; s.interact(); return s;
+  const s = new Simulation(); s.begin(); s.traffic = []; s.peds = []; s.parked = [];
+  s.x = s.car.x = x; s.z = s.car.z = z; s.interact(); s.transition = 0; return s;
 }
 function expectClear(s: Simulation) {
   const body = vehicleBody(s.car.x, s.car.z, s.car.yaw, s.vehicleKind);
@@ -31,7 +31,7 @@ describe('vehicle collision regressions', () => {
     s.setInput('back', true, 's'); tick(s, 60); expect(s.z).toBeGreaterThan(z + 1);
   });
   it('rejects rotation into walls and boundaries for a long vehicle', () => {
-    for (const [x, z] of [[14.2, -22], [110.8, 0]]) {
+    for (const [x, z] of [[14.2, -22], [110.4, 0]]) {
       const s = driving(x, z); s.vehicleKind = 'bus'; s.car.speed = 8;
       s.setInput('right', true, 'd'); s.setInput('forward', true, 'w');
       for (let i = 0; i < 90; i++) { s.update(1 / 60); expectClear(s); }
@@ -61,6 +61,7 @@ describe('vehicle collision regressions', () => {
   });
   it('chooses a clear exit door instead of exiting into a lamp', () => {
     const s = driving(10.1, 29); // right door lies at lamp (12, 29)
+    s.transition = 0;
     expect(s.interact()).toBe(true);
     expect(s.x).toBeLessThan(s.car.x);
     expect(PROPS.some(p => Math.hypot(s.x - p.x, s.z - p.z) < p.r + 0.48)).toBe(false);

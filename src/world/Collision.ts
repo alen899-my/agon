@@ -5,7 +5,9 @@ export interface Contact { nx: number; nz: number; depth: number }
 
 export function vehicleBody(x: number, z: number, yaw: number, kind: VehicleKind): Body {
   // Includes the tire sidewalls and lamp housings of the rendered vehicle.
-  return { x, z, yaw, halfWidth: 1.12, halfLength: VEHICLES[kind].length / 2 + 0.05 };
+  // Width comes from the catalog so bikes/vans/buses all collide true to size.
+  const halfWidth = VEHICLES[kind].width / 2 + 0.12;
+  return { x, z, yaw, halfWidth, halfLength: VEHICLES[kind].length / 2 + 0.05 };
 }
 function axes(b: Body) {
   return [{ x: Math.cos(b.yaw), z: Math.sin(b.yaw) }, { x: Math.sin(b.yaw), z: -Math.cos(b.yaw) }];
