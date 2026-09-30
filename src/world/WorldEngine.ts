@@ -1,3 +1,4 @@
+import { VEHICLE_KINDS, VEHICLES, type VehicleKind } from './Vehicles';
 import * as THREE from 'three';
 import { GameLoop } from '../game/GameLoop';
 import type { Theme } from '../game/State';
@@ -18,7 +19,8 @@ export class WorldEngine {
   private readonly camera = new THREE.PerspectiveCamera(60, 1, 0.12, 340);
   private readonly kit: AssetKit;
   private readonly avatar: Stickman;
-  private readonly car: Vehicle;
+  private car: Vehicle;
+  private readonly fleet = new Map<VehicleKind, Vehicle>();
   private readonly parked: Vehicle[] = [];
   private readonly sun = new THREE.DirectionalLight(0xffffff, 3);
   private readonly ambient = new THREE.HemisphereLight(0xffffff, 0x555555, 2.2);
@@ -37,7 +39,7 @@ export class WorldEngine {
   private readonly loop: GameLoop;
   private readonly people: { actor: Stickman }[] = [];
   private readonly traffic: Vehicle[] = [];
-  private prevSpeed = 0; private shake = 0; private lastImpactAt = -10; private prevSimTime = 0;
+  private shake = 0; private lastImpactAt = -10; private prevSimTime = 0;
   private quality: QualityLevel = 'balanced'; private pixelCap = QUALITY_PIXEL.balanced;
   private lastW = 1; private lastH = 1;
   private readonly cameraBoxes = BUILDINGS.map(b => new THREE.Box3(new THREE.Vector3(b.x - b.w / 2 - 0.35, 0, b.z - b.d / 2 - 0.35), new THREE.Vector3(b.x + b.w / 2 + 0.35, b.h + 0.5, b.z + b.d / 2 + 0.35)));
@@ -56,14 +58,18 @@ export class WorldEngine {
     Object.assign(this.sun.shadow.camera, { left: -44, right: 44, top: 44, bottom: -44, near: 1, far: 150 });
     this.sun.shadow.bias = -0.0004; this.sun.shadow.normalBias = 0.1;
     this.avatar = this.kit.stickman(true); this.scene.add(this.avatar.group);
-    this.car = this.kit.car(); this.scene.add(this.car.group);
+    for (const kind of VEHICLE_KINDS) {
+      const vehicle = this.kit.car(kind, kind === 'sport' || kind === 'suv');
+      vehicle.group.visible = false; this.fleet.set(kind, vehicle); this.scene.add(vehicle.group);
+    }
+    this.car = this.fleet.get('car')!;
     const random = seeded(8008);
     for (let i = 0; i < 16; i++) {
       const actor = this.kit.stickman(false, i); actor.group.scale.setScalar(0.9 + random() * 0.15);
       this.scene.add(actor.group); this.people.push({ actor });
     }
     for (let i = 0; i < 6; i++) {
-      const vehicle = this.kit.car(i === 0 ? 'bus' : i % 3 === 0 ? 'van' : 'car', i % 2 === 0);
+      const vehicle = this.kit.car(VEHICLE_KINDS[i], i % 2 === 0);
       this.scene.add(vehicle.group); this.traffic.push(vehicle);
     }
     for (const [x, z, type] of [[-11, -38, 'van'], [11, -54, 'car'], [55, 12, 'car']] as const) {
@@ -134,6 +140,7 @@ export class WorldEngine {
   start(): void { if (!this.suspended) this.loop.start(); }
   togglePause(): void { this.simulation.togglePause(); this.emit(); }
   toggleView(): void { this.simulation.toggleView(); this.emit(); }
+  cycleVehicle(): void { this.simulation.cycleVehicle(); this.emit(); }
   interact(): void { this.simulation.interact(); this.emit(); }
   waypoint(id: string): void { if (PLACES.some(p => p.id === id)) { this.simulation.waypoint = id; this.emit(); } }
   input(action: WorldAction, down: boolean, source: string): void { if (!this.suspended || !down) this.simulation.setInput(action, down, source); }
@@ -219,16 +226,17 @@ export class WorldEngine {
     this.avatar.animate({ phase: sim.stride, intensity: gaitI, airborne: sim.y > 0.02 && !sim.driving, dip: sim.landDip, idle: sim.time });
     this.avatar.group.visible = !sim.driving && sim.view === 'third';
     // Car body feel: pitch under accel/brake, roll in corners, bounce on crash.
-    const dt = Math.max(0.001, Math.min(0.05, sim.time - this.prevSimTime || 0.016));
+    const dt = Math.max(0, Math.min(0.05, sim.time - this.prevSimTime));
     this.prevSimTime = sim.time;
-    const accel = sim.driving ? (sim.car.speed - this.prevSpeed) * 8 : 0;
-    this.prevSpeed = sim.car.speed;
+    const accel = sim.driving ? sim.acceleration : 0;
+    for (const [kind, vehicle] of this.fleet) vehicle.group.visible = kind === sim.vehicleKind;
+    this.car = this.fleet.get(sim.vehicleKind)!;
     this.car.group.position.set(sim.car.x, 0.08, sim.car.z); this.car.group.rotation.y = -sim.car.yaw;
     this.car.update(sim.car.speed, sim.car.steer, dt, sim.car.braking, {
       pitch: THREE.MathUtils.clamp(-accel * 0.012, -0.06, 0.08),
       roll: sim.skidding ? Math.sin(sim.time * 20) * 0.02 : -sim.car.steer * Math.min(0.05, Math.abs(sim.car.speed) * 0.003),
     });
-    this.car.group.visible = !(sim.driving && sim.view === 'first');
+    this.car.glazing.visible = !(sim.driving && sim.view === 'first');
     // Ped + traffic positions are owned by the simulation (braking / collisions).
     this.people.forEach((person, i) => {
       const point = sim.peds[i]; if (!point) return;
@@ -352,12 +360,18 @@ export class WorldEngine {
     if (sim.phase === 'ready') {
       this.camera.position.set(69, 52, 78); this.camera.lookAt(-7, 0, -8);
     } else if (sim.view === 'first') {
-      this.camera.position.set(x + shakeX, y + (sim.driving ? 1.85 : 1.84) + shakeY, z);
-      this.target.set(x + Math.sin(sim.yaw) * 10, this.camera.position.y - Math.sin(sim.pitch) * 10, z - Math.cos(sim.yaw) * 10);
+      if (sim.driving) {
+        this.car.group.updateMatrixWorld(true);
+        this.camera.position.copy(this.car.eye); this.car.body.localToWorld(this.camera.position);
+        this.camera.position.x += x - sim.car.x + shakeX * 0.15;
+        this.camera.position.z += z - sim.car.z;
+        this.camera.position.y += shakeY * 0.15;
+      } else this.camera.position.set(x + shakeX, y + 1.84 + shakeY, z);
+      this.target.copy(this.camera.position).add(this.direction.set(Math.sin(sim.yaw) * 10, -Math.sin(sim.pitch) * 10, -Math.cos(sim.yaw) * 10));
       this.camera.lookAt(this.target);
     } else {
       this.target.set(x, y + 1.35, z);
-      const distance = sim.driving ? 10 : 6.5;
+      const distance = sim.driving ? VEHICLES[sim.vehicleKind].length + 6 : 6.5;
       this.desired.set(x - Math.sin(sim.yaw) * distance, y + 3.4 + sim.pitch * 5, z + Math.cos(sim.yaw) * distance);
       this.direction.subVectors(this.desired, this.target); let cameraDistance = this.direction.length(); this.direction.normalize();
       this.ray.set(this.target, this.direction);

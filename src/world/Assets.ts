@@ -1,3 +1,4 @@
+import { VEHICLES, type VehicleKind } from './Vehicles';
 import * as THREE from 'three';
 import { BUILDINGS, FREE_THROW_DIST, GAME_CENTER, HOOP, RIM, ROADS, TABLE, seeded } from './Map';
 
@@ -10,7 +11,7 @@ export interface Stickman {
   animate: (s: GaitState) => void;
 }
 export interface Vehicle {
-  group: THREE.Group; body: THREE.Group;
+  group: THREE.Group; body: THREE.Group; glazing: THREE.Mesh; steeringWheel: THREE.Group; eye: THREE.Vector3;
   spins: THREE.Object3D[]; frontSteer: THREE.Group[];
   brakeMat: THREE.MeshStandardMaterial; headMat: THREE.MeshStandardMaterial;
   spin: number;
@@ -134,14 +135,36 @@ export class AssetKit {
       } else { torso.scale.y = 1; hips.rotation.y = 0; }
     } };
   }
-  car(kind: 'car' | 'van' | 'bus' = 'car', dark = false): Vehicle {
+  car(kind: VehicleKind = 'car', dark = false): Vehicle {
     const group = new THREE.Group(); const body = new THREE.Group(); group.add(body);
-    const length = kind === 'bus' ? 7 : kind === 'van' ? 4.8 : 4.3;
+    const { length, height: cabinHeight } = VEHICLES[kind];
     const bodyMat = dark ? 'wall2' : 'white';
     this.mesh(body, 'box', bodyMat, 0, 0.8, 0, 1.9, 0.7, length);
-    const cabinLength = kind === 'car' ? 2.4 : length - 0.6;
-    const cabinHeight = kind === 'car' ? 0.75 : 1.4;
-    this.mesh(body, 'box', 'glass', 0, 1.15 + cabinHeight / 2, 0.1, 1.7, cabinHeight, cabinLength);
+    const cabinLength = kind === 'pickup' ? 2.3 : kind === 'car' || kind === 'sport' ? 2.4 : length - 0.6;
+    const glazing = this.mesh(body, 'box', 'glass', 0, 1.15 + cabinHeight / 2, 0.1, 1.7, cabinHeight, cabinLength);
+    const frontZ = 0.1 - cabinLength / 2;
+    const eye = new THREE.Vector3(-0.36, 1.15 + cabinHeight * 0.65, frontZ + 0.7);
+    // Open windshield in cockpit mode; structural posts and dashboard stay visible.
+    for (const side of [-1, 1]) {
+      this.mesh(body, 'box', bodyMat, side * 0.84, 1.15 + cabinHeight / 2, frontZ, 0.07, cabinHeight, 0.08);
+      this.mesh(body, 'box', bodyMat, side * 0.84, 1.15 + cabinHeight / 2, 0.1 + cabinLength / 2, 0.07, cabinHeight, 0.08);
+      this.mesh(body, 'box', 'ink', side * 0.44, 1.21, eye.z + 0.15, 0.62, 0.14, 0.65);
+    }
+    this.mesh(body, 'box', 'ink', 0, Math.max(1.07, eye.y - 0.55), frontZ + 0.08, 1.65, 0.12, 0.25);
+    const steeringWheel = new THREE.Group(); steeringWheel.position.set(-0.36, eye.y - 0.25, eye.z - 0.45); steeringWheel.scale.setScalar(0.65); body.add(steeringWheel);
+    const rimGeometry = new THREE.TorusGeometry(0.22, 0.027, 8, 32); this.extra.push(rimGeometry);
+    steeringWheel.add(new THREE.Mesh(rimGeometry, this.materials.ink));
+    this.mesh(steeringWheel, 'box', 'metal', 0, 0, 0, 0.4, 0.035, 0.035);
+    this.mesh(steeringWheel, 'box', 'metal', 0, -0.1, 0, 0.035, 0.2, 0.035);
+    this.mesh(steeringWheel, 'sphere', 'ink', 0, 0, 0, 0.065, 0.065, 0.035);
+    if (kind === 'pickup') {
+      this.mesh(body, 'box', 'ink', 0, 1.17, 1.85, 1.55, 0.05, 1.5);
+      for (const side of [-1, 1]) this.mesh(body, 'box', bodyMat, side * 0.87, 1.35, 1.85, 0.15, 0.4, 1.6);
+    }
+    if (kind === 'sport') this.mesh(body, 'box', bodyMat, 0, 1.38, length / 2 - 0.3, 2, 0.09, 0.3);
+    if (kind === 'bus') for (let z = frontZ + 0.8; z < length / 2 - 0.4; z += 0.85) {
+      for (const side of [-1, 1]) this.mesh(body, 'box', bodyMat, side * 0.86, 1.9, z, 0.07, cabinHeight, 0.07);
+    }
     this.mesh(body, 'box', bodyMat, 0, 1.15 + cabinHeight, 0.1, 1.85, 0.15, cabinLength + 0.15);
     // Dedicated lamp materials per vehicle so brake glow doesn't leak across cars.
     const brakeMat = new THREE.MeshStandardMaterial({ color: 0x7a1010, roughness: 0.4, emissive: 0xff1a1a, emissiveIntensity: 0.25 });
@@ -168,11 +191,12 @@ export class AssetKit {
       tail.position.set(side * 0.6, 0.86, length / 2 + 0.02); tail.scale.set(0.32, 0.14, 0.06); body.add(tail);
       this.mesh(body, 'box', bodyMat, side * 0.86, 1.6, 0.1, 0.08, cabinHeight, 0.15);
     }
-    const vehicle: Vehicle = { group, body, spins, frontSteer, brakeMat, headMat, spin: 0,
+    const vehicle: Vehicle = { group, body, glazing, steeringWheel, eye, spins, frontSteer, brakeMat, headMat, spin: 0,
       update: (speed, steer, dt, braking, bodyTilt) => {
         vehicle.spin += (speed * dt) / WHEEL_R;
         for (const s of spins) s.rotation.x = vehicle.spin;
-        for (const f of frontSteer) f.rotation.y = -steer * 0.45;
+        for (const f of frontSteer) f.rotation.y = -steer * 0.55 / (1 + Math.abs(speed) / 24);
+        steeringWheel.rotation.z = -steer * 2.4;
         brakeMat.emissiveIntensity = braking ? 2.2 : 0.25;
         if (bodyTilt) { body.rotation.x = bodyTilt.pitch; body.rotation.z = bodyTilt.roll; body.position.y = 0; }
       } };

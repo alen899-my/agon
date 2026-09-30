@@ -15,7 +15,7 @@ export const BB = {
   RIM_H: 3.05, RIM_R: 0.225, TUBE: 0.02,
   BOARD_Z: 0.45, BOARD_W: 1.8, BOARD_BOT: 2.9, BOARD_TOP: 3.95,
   SPOT_Z: -4.2, HAND_Y: 1.9, ANGLE: 53 * Math.PI / 180, BACKSPIN: 2.5,
-  CHARGE_RATE: 0.85,
+  CHARGE_RATE: 0.85, MIN_SPEED: 4.8, SPEED_RANGE: 8,
   SPOT_MIN: 3.0, SPOT_MAX: 6.25, SPOT_ANGLE: 50,
 } as const;
 
@@ -46,6 +46,8 @@ export class BasketballSim {
   maxY = 0;
   events: BBEvent[] = [];
 
+  constructor(solve = true) { if (solve) this.solveGreen(); }
+
   resetStats(): void {
     this.makes = 0; this.attempts = 0; this.streak = 0; this.best = 0; this.swishes = 0;
     this.setupHold();
@@ -69,7 +71,7 @@ export class BasketballSim {
   /** Find the meter power that drops clean for the current spot by probing the real physics. */
   private solveGreen(): void {
     const probeShot = (v: number): { scored: boolean; clean: boolean } => {
-      const probe = new BasketballSim();
+      const probe = new BasketballSim(false);
       probe.spot = { ...this.spot };
       probe.phase = 'flight';
       probe.ball = { x: this.spot.x, y: BB.HAND_Y, z: this.spot.z };
@@ -80,14 +82,14 @@ export class BasketballSim {
     };
     // Coarse scan, then refine around the first make.
     let seed = -1;
-    for (let v = 5; v <= 12; v += 0.25) {
+    for (let v = BB.MIN_SPEED + 0.05 * BB.SPEED_RANGE; v <= BB.MIN_SPEED + BB.SPEED_RANGE; v += 0.1) {
       if (probeShot(v).scored) { seed = v; break; }
     }
     if (seed < 0) return;
     // Prefer the longest run of untouched swishes; lucky rattles don't center the green.
     const grid: { v: number; scored: boolean; clean: boolean }[] = [];
-    for (let v = seed - 0.4; v <= seed + 0.4; v += 0.05) {
-      if (v < 5 || v > 12) continue;
+    for (let v = seed - 0.4; v <= seed + 0.4; v += 0.02) {
+      if (v < BB.MIN_SPEED + 0.05 * BB.SPEED_RANGE || v > BB.MIN_SPEED + BB.SPEED_RANGE) continue;
       const r = probeShot(v);
       grid.push({ v, scored: r.scored, clean: r.clean });
     }
@@ -104,12 +106,12 @@ export class BasketballSim {
     if (pool.length === 0) pool = longestRun(false);
     if (pool.length > 0) {
       const mean = pool.reduce((a, b) => a + b, 0) / pool.length;
-      this.greenCenter = clamp((mean - 4.8) / 6.0, 0.05, 0.98);
+      this.greenCenter = clamp((mean - BB.MIN_SPEED) / BB.SPEED_RANGE, 0.05, 0.98);
     }
   }
   private velocityFor(power: number, wobble: number): { x: number; y: number; z: number } {
     const p = clamp(power, 0.05, 1);
-    const speed = 4.8 + p * 6.0;
+    const speed = BB.MIN_SPEED + p * BB.SPEED_RANGE;
     const d = Math.max(0.5, Math.hypot(this.spot.x, this.spot.z));
     const dx = -this.spot.x / d, dz = -this.spot.z / d; // toward the rim
     const wob = (Math.random() - 0.5) * wobble;
@@ -140,7 +142,7 @@ export class BasketballSim {
   shoot(power: number): void {
     if (this.phase !== 'hold') return;
     // Fixed aim at the rim; tiny release wobble keeps edge makes/misses organic.
-    this.vel = this.velocityFor(power, 0.025 * (4.8 + clamp(power, 0, 1) * 6.0) * 0.3);
+    this.vel = this.velocityFor(power, 0.025 * (BB.MIN_SPEED + clamp(power, 0, 1) * BB.SPEED_RANGE) * 0.3);
     this.ball = { x: this.spot.x, y: BB.HAND_Y, z: this.spot.z };
     this.phase = 'flight'; this.attempts += 1;
     this.maxY = BB.HAND_Y;
@@ -166,7 +168,7 @@ export class BasketballSim {
     }
     const steps = Math.max(1, Math.ceil(dt / (1 / 240)));
     const h = dt / steps;
-    for (let i = 0; i < steps; i++) this.integrate(h);
+    for (let i = 0; i < steps && this.phase === 'flight'; i++) this.integrate(h);
   }
   private integrate(h: number): void {
     const prevY = this.ball.y, prevZ = this.ball.z;

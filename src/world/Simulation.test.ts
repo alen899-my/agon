@@ -55,7 +55,9 @@ describe('vehicles and exploration', () => {
     expect(sim.driving).toBe(true); const z = sim.z;
     sim.setInput('forward', true, 'w'); tick(sim); expect(sim.z).toBeLessThan(z);
     expect(sim.car.speed).toBeGreaterThan(0); expect(sim.car.x).toBe(sim.x);
-    sim.clearInput(); tick(sim, 120); expect(sim.car.speed).toBeCloseTo(0);
+    sim.clearInput(); const coastSpeed = sim.car.speed; tick(sim, 30);
+    expect(sim.car.speed).toBeGreaterThan(0); expect(sim.car.speed).toBeLessThan(coastSpeed);
+    sim.setInput('handbrake', true, 'space'); tick(sim, 120); expect(sim.car.speed).toBeCloseTo(0);
     expect(sim.interact()).toBe(true); expect(sim.driving).toBe(false);
     expect(intersects(sim.x, sim.z, 0.48)).toBe(false);
   });
@@ -136,5 +138,41 @@ describe('realistic physics one by one', () => {
     for (const p of sim.snapshot.peds) {
       expect(p.phase).not.toBe(0); expect(p.moving).toBeGreaterThanOrEqual(0); expect(p.moving).toBeLessThanOrEqual(1);
     }
+  });
+});
+
+describe('driving dynamics', () => {
+  const drive = () => {
+    const sim = running(); sim.x = sim.car.x = 0; sim.z = sim.car.z = 40;
+    sim.traffic = []; sim.peds = []; sim.interact(); return sim;
+  };
+  it('builds speed progressively and gives the coupe more acceleration than the bus', () => {
+    const coupe = drive(), bus = drive(); coupe.vehicleKind = 'sport'; bus.vehicleKind = 'bus';
+    for (const sim of [coupe, bus]) { sim.setInput('forward', true, 'w'); tick(sim, 1); expect(sim.car.speed).toBeLessThan(1); tick(sim, 59); }
+    expect(coupe.car.speed).toBeGreaterThan(bus.car.speed * 2);
+  });
+  it('brakes before reversing and prevents the handbrake from accelerating backwards', () => {
+    const sim = drive(); sim.car.speed = 8; sim.setInput('back', true, 's'); tick(sim, 20);
+    expect(sim.car.speed).toBeGreaterThan(0); expect(sim.car.braking).toBe(true);
+    tick(sim, 80); expect(sim.car.speed).toBeLessThan(0);
+    sim.setInput('handbrake', true, 'space'); tick(sim, 120); expect(sim.car.speed).toBeCloseTo(0); expect(sim.y).toBe(0);
+  });
+  it('loses lateral grip under handbrake and regains grip after release', () => {
+    const grip = drive(), drift = drive();
+    for (const sim of [grip, drift]) { sim.car.speed = 18; sim.setInput('right', true, 'd'); }
+    drift.setInput('handbrake', true, 'space'); tick(grip, 24); tick(drift, 24);
+    expect(Math.abs(drift.lateralSpeed)).toBeGreaterThan(Math.abs(grip.lateralSpeed)); expect(drift.skidding).toBe(true);
+    const slip = Math.abs(drift.lateralSpeed); drift.clearInput(); tick(drift, 45);
+    expect(Math.abs(drift.lateralSpeed)).toBeLessThan(slip);
+  });
+  it('cycles all six vehicles while stopped but rejects changes at speed', () => {
+    const sim = drive(); const kinds = new Set([sim.vehicleKind]);
+    for (let i = 0; i < 5; i++) { expect(sim.cycleVehicle()).toBe(true); kinds.add(sim.vehicleKind); }
+    expect(kinds.size).toBe(6); sim.car.speed = 2; expect(sim.cycleVehicle()).toBe(false);
+  });
+  it('keeps cockpit look relative to the car and recenters on changing views', () => {
+    const sim = drive(); sim.toggleView(); sim.look(100, 0); const offset = sim.yaw - sim.car.yaw;
+    sim.car.speed = 8; sim.setInput('right', true, 'd'); tick(sim, 15);
+    expect(sim.yaw - sim.car.yaw).toBeCloseTo(offset); sim.toggleView(); expect(sim.yaw).toBe(sim.car.yaw);
   });
 });

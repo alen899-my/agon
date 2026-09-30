@@ -137,3 +137,47 @@ kbd { font: inherit; border: 1px solid var(--line); padding: 2px 4px; border-rad
   .map-cover { padding: 12px 24px; } .map-sheet { width: min(720px, 100%); } .map-heading { margin-bottom: 8px; } .map-heading h2 { font-size: 21px; margin-top: 4px; } .map-content { grid-template-columns: 230px 1fr; gap: 16px; align-items: start; } .place-list { gap: 3px; } .place-list > button { padding: 7px 10px; } .place-list p { display: none; } .place-list b { font-size: 11px; margin: 2px 0; } .place-list small { font-size: 6px; } .map-caption { font-size: 8px; margin-top: 8px; }
   .pause-cover > div { padding: 24px; } .pause-cover h2 { font-size: 26px; margin: 10px 0 20px; }
 }
+
+/* Driving controls follow the primary input device, including large tablets. */
+.drive-steering, .drive-pedals { display: flex; gap: 10px; }
+.drive-pad { pointer-events: auto; touch-action: none; user-select: none; min-width: 64px; min-height: 62px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font-size: 10px; font-weight: 700; border-radius: 12px; }
+.drive-pad:active { transform: translateY(2px); background: var(--line); }
+.drive-pad:disabled { opacity: .4; }
+.driving-readout { position: absolute; top: 72px; left: 22px; display: grid; gap: 5px; padding: 12px; background: var(--surface); border: 1px solid var(--line); font-size: 11px; }
+.driving-readout button { padding: 7px; cursor: pointer; background: var(--surface); color: inherit; border: 1px solid var(--line); }
+.driving-readout small { font-size: 8px; color: var(--muted); }
+.desktop-look { display: none; }
+@media (hover: hover) and (pointer: fine) {
+  .world-controls, .tt-controls, .bb-controls { display: none; }
+  .desktop-look { display: inline; } .touch-look { display: none; }
+}
+@media (max-height: 500px) {
+  .driving-readout { top: 54px; left: 12px; padding: 6px; font-size: 9px; gap: 2px; }
+  .drive-pad { min-width: 54px; min-height: 50px; font-size: 8px; }
+  .drive-steering, .drive-pedals { gap: 6px; }
+  .is-driving .look-hint { display: none; }
+}
+
+.driving-readout { top: 145px; }
+@media (max-height: 500px) { .driving-readout { top: 62px; } .driving-readout small { display: none; } }
+
+.is-driving .destination { display: none; }
+.is-driving .crosshair { display: none; }
+
+@media (max-height: 500px) {
+  .is-driving .location-card { display: none; }
+  .is-driving .driving-readout { top: 12px; }
+  .is-driving .interact-button { bottom: 10px; min-height: 36px; }
+}
+
+.capture-look { position: absolute; left: 50%; bottom: 78px; transform: translateX(-50%); z-index: 2; font-size: 9px; text-align: center; }
+.capture-look button, .capture-look > span { background: var(--surface); color: var(--ink); border: 1px solid var(--line); padding: 9px 12px; }
+.capture-look button { min-height: 40px; } .capture-look > span { pointer-events: none; }
+.is-driving .capture-look { bottom: 155px; }
+.look-settings { width: min(480px, 100%); max-height: 100%; overflow: auto; background: var(--surface); border: 1px solid var(--line); padding: 20px; }
+.look-settings p { font-size: 12px; line-height: 1.5; color: var(--muted); margin: 12px 0; }
+.look-settings label { display: block; margin: 18px 0; font-size: 12px; }
+.look-settings output { float: right; } .look-settings input[type=range] { display: block; width: 100%; margin-top: 10px; min-height: 24px; touch-action: pan-x; }
+.look-settings .invert-look { display: flex; gap: 10px; align-items: center; min-height: 36px; }
+@media (max-width: 900px) { .wordmark > div { display: none; } }
+@media (max-height: 500px) { .capture-look { bottom: 54px; } .is-driving .capture-look { bottom: 58px; } .look-settings { padding: 12px; } }

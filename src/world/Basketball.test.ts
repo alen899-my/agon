@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { BasketballSim, BB } from './Basketball';
 
 const lane = new BasketballSim();
@@ -24,6 +24,22 @@ function swishWindow(): number[] {
 }
 
 describe('basketball physics', () => {
+  it('makes the initial green release and far corner releases reachable at both wobble extremes', () => {
+    const random = vi.spyOn(Math, 'random');
+    try {
+      for (const wobble of [0, 1]) for (const angle of [-50, 0, 50]) {
+        random.mockReturnValue(wobble);
+        for (const distance of [null, BB.SPOT_MAX]) {
+          const s = new BasketballSim();
+          if (distance !== null) s.setSpot(distance, angle);
+          const mid = (s.snapshot.greenLo + s.snapshot.greenHi) / 2;
+          s.setupHold(true); s.shoot(mid);
+          for (let i = 0; i < 600 && s.phase !== 'done'; i++) s.update(1 / 60);
+          expect(s.makes).toBe(1);
+        }
+      }
+    } finally { random.mockRestore(); }
+  });
   it('has a swish power window between short and long misses', () => {
     const window = swishWindow();
     expect(window.length).toBeGreaterThan(0); // a perfect release drops clean

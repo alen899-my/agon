@@ -1,70 +1,78 @@
+import { CameraInput, type LookSettings, type LookStatus } from '../game/CameraInput';
 import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 import { WorldEngine, type QualityLevel } from '../world/WorldEngine';
 import type { Theme } from '../game/State';
 import type { WorldAction, WorldSnapshot } from '../world/Simulation';
 
-const KEYS: Record<string, WorldAction> = { KeyW: 'forward', KeyS: 'back', KeyA: 'left', KeyD: 'right', ArrowUp: 'forward', ArrowDown: 'back', ArrowLeft: 'turnLeft', ArrowRight: 'turnRight', ShiftLeft: 'sprint', ShiftRight: 'sprint', Space: 'jump' };
-interface Props { engineRef: MutableRefObject<WorldEngine | null>; onSnapshot: (s: WorldSnapshot) => void; onMap: () => void; theme: Theme; quality: QualityLevel; portrait: boolean }
+const KEYS: Record<string, WorldAction> = { KeyW: 'forward', KeyS: 'back', KeyA: 'left', KeyD: 'right', ArrowUp: 'forward', ArrowDown: 'back', ArrowLeft: 'left', ArrowRight: 'right', KeyQ: 'turnLeft', KeyC: 'turnRight', ShiftLeft: 'sprint', ShiftRight: 'sprint', Space: 'jump' };
+interface Props { engineRef: MutableRefObject<WorldEngine | null>; onSnapshot: (s: WorldSnapshot) => void; onMap: () => void; theme: Theme; quality: QualityLevel; portrait: boolean; blocked: boolean; onDismissOverlay: () => void; lookSettings: LookSettings; lookEnabled: boolean }
 
-export function WorldViewport({ engineRef, onSnapshot, onMap, theme, quality, portrait }: Props) {
+export function WorldViewport({ engineRef, onSnapshot, onMap, theme, quality, portrait, blocked, onDismissOverlay, lookSettings, lookEnabled }: Props) {
   const canvas = useRef<HTMLCanvasElement>(null);
-  const props = useRef({ onSnapshot, onMap, theme, quality, portrait }); props.current = { onSnapshot, onMap, theme, quality, portrait };
+  const props = useRef({ onSnapshot, onMap, theme, quality, portrait, blocked, onDismissOverlay, lookSettings }); props.current = { onSnapshot, onMap, theme, quality, portrait, blocked, onDismissOverlay, lookSettings };
+  const cameraInput = useRef<CameraInput | null>(null);
+  const [lookStatus, setLookStatus] = useState<LookStatus>('free');
   const [error, setError] = useState('');
   useEffect(() => {
     const element = canvas.current!;
     let engine: WorldEngine;
-    try { engine = new WorldEngine(element, s => props.current.onSnapshot(s)); }
+    try { engine = new WorldEngine(element, s => { cameraInput.current?.refresh(); props.current.onSnapshot(s); }); }
     catch { setError('This map needs WebGL 2. Enable hardware acceleration or try a compatible browser.'); return; }
     engineRef.current = engine; engine.setTheme(props.current.theme); engine.applyQuality(props.current.quality);
     const resize = () => { const bounds = element.getBoundingClientRect(); engine.resize(bounds.width, bounds.height); };
     const observer = new ResizeObserver(resize); observer.observe(element);
     window.addEventListener('resize', resize); resize();
-    const visibility = () => engine.setSuspended(document.hidden || props.current.portrait);
-    const blur = () => { engine.clearInput(); if (engine.simulation.active) engine.togglePause(); };
+    const pause = () => { engine.clearInput(); if (engine.simulation.active) engine.togglePause(); cameraInput.current?.release(); };
+    const look = new CameraInput(element, {
+      enabled: () => engine.simulation.active && engine.simulation.mode === 'roam' && !props.current.blocked && !props.current.portrait && !document.hidden,
+      settings: () => props.current.lookSettings,
+      look: (dx, dy) => engine.look(dx, dy), pause, status: setLookStatus,
+    });
+    cameraInput.current = look;
+    const visibility = () => { if (document.hidden) pause(); engine.setSuspended(document.hidden || props.current.portrait || props.current.blocked); look.refresh(); };
+    const blur = pause;
     document.addEventListener('visibilitychange', visibility); window.addEventListener('blur', blur);
     const keydown = (event: KeyboardEvent) => {
+      if (props.current.blocked) { if (event.code === 'Escape' && !event.repeat) props.current.onDismissOverlay(); return; }
+      if (props.current.portrait || document.hidden) return;
       const target = event.target as HTMLElement;
       if (event.ctrlKey || event.altKey || event.metaKey || target.closest('input,textarea,select,[contenteditable="true"]')) return;
       if ((event.code === 'Space' || event.code === 'Enter') && target.closest('button')) return;
       if (KEYS[event.code]) { event.preventDefault(); if (!event.repeat) engine.input(KEYS[event.code], true, event.code); }
       if (!event.repeat) {
+        if (event.code === 'Enter' && engine.simulation.phase === 'ready') engine.begin();
+        if (event.code === 'KeyN') engine.cycleVehicle();
         if (event.code === 'KeyV') engine.toggleView();
         if (event.code === 'KeyE') { if (engine.simulation.mode === 'table') engine.tableSwing('drive'); else if (engine.simulation.mode === 'roam') engine.interact(); }
         if (event.code === 'KeyX') { if (engine.simulation.mode === 'table') engine.exitTable(); else if (engine.simulation.mode === 'basket') engine.exitBasket(); }
         if (event.code === 'KeyR') { if (engine.simulation.mode === 'table') engine.rematch(); else if (engine.simulation.mode === 'basket') engine.resetBasket(); }
         if (event.code === 'KeyM') props.current.onMap();
-        if (event.code === 'KeyP' || event.code === 'Escape') engine.togglePause();
+        if (event.code === 'KeyP') { engine.togglePause(); look.refresh(); }
+        // Escape only pauses: pointerlockchange may already have handled browser Escape.
+        if (event.code === 'Escape') pause();
       }
     };
     const keyup = (event: KeyboardEvent) => { if (KEYS[event.code]) engine.input(KEYS[event.code], false, event.code); };
     window.addEventListener('keydown', keydown); window.addEventListener('keyup', keyup);
-    let drag: { id: number; x: number; y: number } | null = null;
-    const down = (event: PointerEvent) => {
-      if (event.button !== 0 || drag) return;
-      drag = { id: event.pointerId, x: event.clientX, y: event.clientY }; element.setPointerCapture(event.pointerId); element.focus();
-    };
-    const move = (event: PointerEvent) => {
-      if (!drag || drag.id !== event.pointerId) return;
-      engine.look(event.clientX - drag.x, event.clientY - drag.y); drag.x = event.clientX; drag.y = event.clientY;
-    };
-    const up = (event: PointerEvent) => { if (drag?.id === event.pointerId) drag = null; };
     const lost = (event: Event) => { event.preventDefault(); engine.setSuspended(true); setError('The graphics context was lost. Reload the map to continue.'); };
-    element.addEventListener('pointerdown', down); element.addEventListener('pointermove', move);
-    element.addEventListener('pointerup', up); element.addEventListener('pointercancel', up); element.addEventListener('lostpointercapture', up);
     element.addEventListener('webglcontextlost', lost);
     visibility();
     return () => {
       observer.disconnect(); window.removeEventListener('resize', resize);
       document.removeEventListener('visibilitychange', visibility); window.removeEventListener('blur', blur);
       window.removeEventListener('keydown', keydown); window.removeEventListener('keyup', keyup);
-      element.removeEventListener('pointerdown', down); element.removeEventListener('pointermove', move);
-      element.removeEventListener('pointerup', up); element.removeEventListener('pointercancel', up); element.removeEventListener('lostpointercapture', up);
+      look.destroy(); cameraInput.current = null;
       element.removeEventListener('webglcontextlost', lost); engine.destroy(); engineRef.current = null;
     };
   }, [engineRef]);
   useEffect(() => engineRef.current?.setTheme(theme), [theme, engineRef]);
   useEffect(() => engineRef.current?.applyQuality(quality), [quality, engineRef]);
-  useEffect(() => engineRef.current?.setSuspended(document.hidden || portrait), [portrait, engineRef]);
-  return <><canvas ref={canvas} tabIndex={0} className="world-canvas" aria-label="3D neighborhood. WASD to move, drag to look, V to switch camera, E to use car." />
+  useEffect(() => { engineRef.current?.setSuspended(document.hidden || portrait || blocked); cameraInput.current?.refresh(); }, [portrait, blocked, engineRef]);
+  return <><canvas ref={canvas} tabIndex={0} className="world-canvas" data-look-state={lookStatus} aria-label="3D neighborhood. WASD or arrows to move, click once to capture mouse or trackpad look, Escape to release, touch swipe to look, Q/C to turn camera, Space to jump or handbrake, V for cockpit, E to use car, N to change stopped vehicle, Enter to start." />
+    {lookEnabled && <div className="capture-look desktop-look">
+      {lookStatus === 'locked' ? <span>LOOK ACTIVE | ESC RELEASES CURSOR</span> : <button onClick={() => cameraInput.current?.request()} aria-label="Capture mouse or trackpad look">
+        {lookStatus === 'fallback' ? 'CAPTURE UNAVAILABLE | HOVER TO LOOK | Q / C CAMERA | CLICK TO RETRY' : 'CLICK TO LOOK | MOUSE / TRACKPAD | ESC TO RELEASE'}
+      </button>}
+    </div>}
     {error && <div className="world-error" role="alert"><h2>Unable to render the map</h2><p>{error}</p><button className="primary-button" onClick={() => location.reload()}>RELOAD</button></div>}</>;
 }

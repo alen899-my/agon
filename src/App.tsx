@@ -1,3 +1,5 @@
+import { DEFAULT_LOOK, readLookSettings } from './game/CameraInput';
+import { VEHICLES } from './world/Vehicles';
 ﻿import { useEffect, useRef, useState } from 'react';
 import { ThemeToggle } from './components/ThemeToggle';
 import { QualityToggle } from './components/QualityToggle';
@@ -35,6 +37,9 @@ export default function App() {
   const [notice, setNotice] = useState('');
   const [fullscreen, setFullscreen] = useState(false);
   const [physicsOpen, setPhysicsOpen] = useState(false);
+  const [lookOpen, setLookOpen] = useState(false);
+  const [lookSettings, setLookSettings] = useState(readLookSettings);
+  useEffect(() => { try { localStorage.setItem('agon-look', JSON.stringify(lookSettings)); } catch { /* Optional storage. */ } }, [lookSettings]);
   useEffect(() => {
     const media = matchMedia(portraitQuery);
     const rotate = () => setPortrait(media.matches);
@@ -70,7 +75,7 @@ export default function App() {
     } catch { setNotice('Fullscreen was unavailable. You can explore in this window.'); }
   };
   const ready = !state || state.phase === 'ready';
-  const active = !ready && !state?.paused && !portrait && !mapOpen;
+  const active = !ready && !state?.paused && !portrait && !mapOpen && !physicsOpen && !lookOpen;
   const destination = PLACES.find(p => p.id === state?.waypoint);
   const distance = destination && state ? Math.round(Math.hypot(destination.x - state.x, destination.z - state.z)) : null;
   const heading = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][Math.round(((state?.yaw ?? 0) * 180 / Math.PI + 3600) / 45) % 8];
@@ -82,14 +87,17 @@ export default function App() {
         <button className="control" onClick={enterFullscreen} aria-label={fullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}>⛶</button>
         <ThemeToggle theme={theme} onChange={setTheme} />
         <QualityToggle quality={quality} onChange={setQuality} />
+        <button className="control" onClick={() => setLookOpen(true)} aria-label="Camera controls and sensitivity">LOOK</button>
         <button className="control" onClick={() => engine.current?.toggleView()} aria-label="Switch camera view">{state?.view === 'first' ? '1ST PERSON' : '3RD PERSON'} <kbd>V</kbd></button>
         <button className="control" onClick={toggleMap} aria-expanded={mapOpen}>MAP <kbd>M</kbd></button>
         <button className="control" onClick={() => setPhysicsOpen(!physicsOpen)} aria-expanded={physicsOpen} aria-label="Physics checklist">⚙ PHYSICS</button>
         <button className="control" disabled={ready || mapOpen} onClick={() => { engine.current?.togglePause(); focus(); }} aria-label={state?.paused ? 'Resume' : 'Pause'}>{state?.paused ? '▶' : 'Ⅱ'}</button>
       </nav>
     </header>
-    <section className="world-stage" aria-label="Open world neighborhood">
-      <WorldViewport engineRef={engine} onSnapshot={setState} onMap={toggleMap} theme={theme} quality={quality} portrait={portrait} />
+    <section className={`world-stage${state?.driving ? ' is-driving' : ''}`} aria-label="Open world neighborhood">
+      <WorldViewport engineRef={engine} onSnapshot={setState} onMap={toggleMap} theme={theme} quality={quality} portrait={portrait} blocked={mapOpen || physicsOpen || lookOpen}
+        onDismissOverlay={() => { if (lookOpen) setLookOpen(false); else if (physicsOpen) setPhysicsOpen(false); else if (mapOpen) toggleMap(); }}
+        lookSettings={lookSettings} lookEnabled={active && state?.mode === 'roam'} />
       {fullscreen && <button className="fullscreen-exit" onClick={enterFullscreen} aria-label="Exit fullscreen">⛶ EXIT</button>}
       <div className="location-card"><span className="eyebrow">{state?.mode === 'table' ? 'GAME CENTER / TABLE TENNIS' : state?.mode === 'basket' ? 'GAME CENTER / HOOPS' : 'DISTRICT 01 / FREE ROAM'}</span><h2>{ready ? 'The neighborhood.' : state?.mode === 'table' ? 'Game Center.' : state?.mode === 'basket' ? 'The Blacktop.' : state?.location}</h2><p>{ready ? 'A small place. A thousand directions.' : state?.mode === 'table' ? 'First to 11, win by 2. Good luck.' : state?.mode === 'basket' ? 'No aim. Pure touch. Fill the meter.' : state?.driving ? 'Behind the wheel. Make your own route.' : 'No hurry. Take the long way home.'}</p></div>
       <div className="compass"><span>W</span><b>{heading}</b><span>E</span><i /></div>
@@ -102,8 +110,9 @@ export default function App() {
         <div className="intro-tags"><span>7 LOCATIONS</span><span>2 PERSPECTIVES</span><span>NO RUSH</span></div>
       </div>}
       {!ready && <>
-        {state?.mode !== 'table' && <div className="look-hint">{state?.view === 'first' ? 'FIRST PERSON' : 'THIRD PERSON'}<span>DRAG THE WORLD TO LOOK AROUND</span></div>}
+        {state?.mode !== 'table' && <div className="look-hint">{state?.driving ? 'W / S GAS / BRAKE | A / D STEER | SPACE DRIFT | E EXIT' : state?.view === 'first' ? 'FIRST PERSON' : 'THIRD PERSON'}<span><span className="desktop-look">CLICK ONCE TO LOOK | Q / C CAMERA | V VIEW</span><span className="touch-look">SWIPE THE WORLD TO LOOK</span></span></div>}
         {state?.view === 'first' && <div className="crosshair" aria-hidden="true">+</div>}
+        {state?.driving && <div className="driving-readout"><b>{VEHICLES[state.vehicleKind].name} | {state.speed} KM/H</b><span>{state.car.speed < -0.1 ? 'REVERSE' : 'DRIVE'} | {state.acceleration.toFixed(1)} m/s^2 {state.skidding ? ' | DRIFT' : ''}</span><button disabled={!active || Math.abs(state.car.speed) > 0.2} onClick={() => { engine.current?.cycleVehicle(); focus(); }}>NEXT VEHICLE <kbd>N</kbd></button><small>Stop in an open area to change vehicle</small></div>}
         {state?.driving && <div className={`damage-bar${(state?.damage ?? 0) > 60 ? ' critical' : ''}`} aria-label={`Car damage ${state?.damage ?? 0} percent`}><i style={{ width: `${state?.damage ?? 0}%` }} /><span>DMG {state?.damage ?? 0}%</span></div>}
         {state?.driving && state?.frontBlocked && <div className="front-warning" role="status">⚠ {state.frontDistance}m AHEAD</div>}
         {state?.impact && <div className="crash-flash" role="status">CRASH · {state.impact.speed} KM/H vs {state.impact.with.toUpperCase()}</div>}
@@ -133,7 +142,7 @@ export default function App() {
           ? <BasketballControls disabled={!active} pumping={state?.basket?.pumping ?? false} onTap={() => engine.current?.basketTap()} />
           : <WorldControls disabled={!active} driving={state?.driving ?? false} onStick={(x, y) => engine.current?.joystick(x, y)} onInput={(action, down, source) => engine.current?.input(action, down, source)} />}
       </>}
-      {state?.paused && !mapOpen && <div className="pause-cover"><div><p className="eyebrow">THE CITY CAN WAIT</p><h2>A moment to yourself.</h2><button className="primary-button" onClick={() => { engine.current?.togglePause(); focus(); }}>KEEP EXPLORING <span>→</span></button></div></div>}
+      {state?.paused && !mapOpen && !physicsOpen && !lookOpen && <div className="pause-cover"><div><p className="eyebrow">THE CITY CAN WAIT</p><h2>A moment to yourself.</h2><button className="primary-button" onClick={() => { engine.current?.togglePause(); focus(); }}>KEEP EXPLORING <span>→</span></button></div></div>}
       {mapOpen && <div className="map-cover"><div className="map-sheet" role="dialog" aria-labelledby="map-title">
         <div className="map-heading"><div><p className="eyebrow">224 × 224 METERS / ONE CONNECTED NEIGHBORHOOD</p><h2 id="map-title">Make your own way.</h2></div><button className="control" onClick={toggleMap} aria-label="Close map">✕</button></div>
         <div className="map-content"><DistrictMap state={state} large theme={theme} /><div className="place-list">{PLACES.map((place, index) => <button key={place.id} onClick={() => { engine.current?.waypoint(place.id); toggleMap(); focus(); }}>
@@ -141,10 +150,19 @@ export default function App() {
         </button>)}</div></div>
         <p className="map-caption">Select a place to set a waypoint. Walk or drive there to discover it.</p>
       </div></div>}
+      {lookOpen && <div className="map-cover"><div className="look-settings" role="dialog" aria-modal="true" aria-labelledby="look-title">
+        <div className="map-heading"><h2 id="look-title">Camera controls</h2><button className="control" autoFocus onClick={() => setLookOpen(false)} aria-label="Close camera settings">CLOSE</button></div>
+        <p>Mouse / laptop: click the world once, then move without holding a button. Escape releases the cursor and pauses. Q / C also turn the camera.</p>
+        <p>Touch: swipe the world with a free finger while moving or steering with the other hand.</p>
+        <label>Mouse / trackpad sensitivity <output>{lookSettings.pointer.toFixed(2)}x</output><input aria-label="Mouse and trackpad sensitivity" type="range" min="0.25" max="3" step="0.05" value={lookSettings.pointer} onChange={event => setLookSettings({ ...lookSettings, pointer: Number(event.target.value) })} /></label>
+        <label>Touch sensitivity <output>{lookSettings.touch.toFixed(2)}x</output><input aria-label="Touch look sensitivity" type="range" min="0.25" max="3" step="0.05" value={lookSettings.touch} onChange={event => setLookSettings({ ...lookSettings, touch: Number(event.target.value) })} /></label>
+        <label className="invert-look"><input type="checkbox" checked={lookSettings.invertY} onChange={event => setLookSettings({ ...lookSettings, invertY: event.target.checked })} /> Invert vertical look</label>
+        <button className="control" onClick={() => setLookSettings({ ...DEFAULT_LOOK })}>RESET CAMERA SETTINGS</button>
+      </div></div>}
       {physicsOpen && !ready && <div className="physics-cover"><div className="physics-sheet" role="dialog" aria-label="Physics checklist"><div className="map-heading"><div><p className="eyebrow">REALISTIC PHYSICS · ONE BY ONE</p><h2>Systems online.</h2></div><button className="control" onClick={() => setPhysicsOpen(false)} aria-label="Close physics">✕</button></div><PhysicsChecklist state={state} /><p className="map-caption">Drive into walls, traffic and crowds to tick crash events. Repair at South Station.</p></div></div>}
       {portrait && <div className="rotate-cover"><span className="rotate-symbol">↻</span><p className="eyebrow">MORE ROOM TO EXPLORE</p><h2>Turn your world.</h2><p>Rotate your phone to landscape.<br />Your neighborhood will be waiting.</p><button className="primary-button" onClick={enterFullscreen}>GO FULLSCREEN <span>⛶</span></button></div>}
     </section>
-    <footer className="district-footer"><span>{state?.mode === 'table' ? <>AUTO MOVE <i>●</i> · SPACE <i>HIT</i> · W <i>TOP</i> · S <i>CHOP</i> · SHIFT <i>SMASH</i></> : state?.mode === 'basket' ? <>TAP SPACE <i>PUMP</i> · TAP AGAIN <i>THROW</i></> : <>W A S D <i>MOVE</i> · SHIFT <i>SPRINT</i> · SPACE <i>JUMP</i></>}</span><span>{state?.mode === 'table' ? 'GAME CENTER — TABLE TENNIS' : state?.mode === 'basket' ? 'GAME CENTER — HOOPS' : 'STAGE 01 — THE NEIGHBORHOOD'}</span><span>{state?.distance ?? 0} m EXPLORED</span></footer>
+    <footer className="district-footer"><span>{state?.mode === 'table' ? <>AUTO MOVE <i>●</i> · SPACE <i>HIT</i> · W <i>TOP</i> · S <i>CHOP</i> · SHIFT <i>SMASH</i></> : state?.mode === 'basket' ? <>TAP SPACE <i>PUMP</i> · TAP AGAIN <i>THROW</i></> : state?.driving ? <>W / S <i>GAS / BRAKE</i> | A / D <i>STEER</i> | SPACE <i>DRIFT</i> | V <i>COCKPIT</i> | N <i>VEHICLE</i></> : <>W A S D <i>MOVE</i> · SHIFT <i>SPRINT</i> · SPACE <i>JUMP</i></>}</span><span>{state?.mode === 'table' ? 'GAME CENTER — TABLE TENNIS' : state?.mode === 'basket' ? 'GAME CENTER — HOOPS' : 'STAGE 01 — THE NEIGHBORHOOD'}</span><span>{state?.distance ?? 0} m EXPLORED</span></footer>
     {notice && <div className="notice" role="status">{notice}<button className="control" onClick={() => setNotice('')}>Dismiss</button></div>}
   </main>;
 }
