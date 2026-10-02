@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { BENCHES, BUILDINGS, FREE_THROW_DIST, GAME_CENTER, HOOP, LAMPS, RACE_ARENA, RACE_SHOW_CARS, RACE_SLAB, RIM, ROADS, TABLE, TREES, seeded } from './Map';
 
 type Shape = 'box' | 'sphere' | 'cylinder';
-type MaterialName = 'road' | 'pavement' | 'white' | 'ink' | 'glass' | 'metal' | 'wall0' | 'wall1' | 'wall2' | 'leaf';
+export type MaterialName = 'road' | 'pavement' | 'white' | 'ink' | 'glass' | 'metal' | 'wall0' | 'wall1' | 'wall2' | 'leaf' | 'lampGlow' | 'windowLit';
 
 export interface GaitState { phase: number; intensity: number; airborne: boolean; dip: number; idle: number; cheer?: number }
 export interface Stickman {
@@ -40,6 +40,8 @@ export class AssetKit {
     wall1: new THREE.MeshStandardMaterial({ color: 0xababab, roughness: 0.95 }),
     wall2: new THREE.MeshStandardMaterial({ color: 0x737373, roughness: 0.95 }),
     leaf: new THREE.MeshStandardMaterial({ color: 0x626262, roughness: 1, flatShading: true }),
+    lampGlow: new THREE.MeshStandardMaterial({ color: 0xfff2d8, roughness: 0.5, emissive: 0xffb45e, emissiveIntensity: 0 }),
+    windowLit: new THREE.MeshStandardMaterial({ color: 0x414141, roughness: 0.25, metalness: 0.35, emissive: 0xffc86e, emissiveIntensity: 0 }),
   };
   private batches = new Map<string, THREE.Matrix4[]>();
   private transform = new THREE.Object3D();
@@ -195,12 +197,20 @@ export function buildMap(scene: THREE.Scene, kit: AssetKit): void {
     box('ink', b.x, 0.45, b.z, b.w + 0.2, 0.9, b.d + 0.2);
     box('metal', b.x - b.w * 0.22, b.h + 0.65, b.z, 2.8, 1, 2.3);
     for (const side of [-1, 1]) {
-      for (let y = 3.6; y < b.h - 1; y += 3.7) {
-        for (let x = -b.w / 2 + 2.5; x < b.w / 2 - 1.5; x += 3.8) {
-          box('glass', b.x + x, y, b.z + side * (b.d / 2 + 0.035), 1.7, 2, 0.08);
+      let row = 0;
+      for (let y = 3.6; y < b.h - 1; y += 3.7, row++) {
+        let col = 0;
+        for (let x = -b.w / 2 + 2.5; x < b.w / 2 - 1.5; x += 3.8, col++) {
+          // Sample ~1/3 of windows into the lit-window material so nights glow.
+          const lit = (col + row + (side > 0 ? 1 : 0)) % 3 === 0;
+          box(lit ? 'windowLit' : 'glass', b.x + x, y, b.z + side * (b.d / 2 + 0.035), 1.7, 2, 0.08);
           box('white', b.x + x, y - 1.05, b.z + side * (b.d / 2 + 0.15), 1.95, 0.12, 0.35);
         }
-        for (let z = -b.d / 2 + 2.5; z < b.d / 2 - 1.5; z += 3.8) box('glass', b.x + side * (b.w / 2 + 0.035), y, b.z + z, 0.08, 2, 1.7);
+        let col2 = 0;
+        for (let z = -b.d / 2 + 2.5; z < b.d / 2 - 1.5; z += 3.8, col2++) {
+          const lit = (col2 + row) % 3 === 0;
+          box(lit ? 'windowLit' : 'glass', b.x + side * (b.w / 2 + 0.035), y, b.z + z, 0.08, 2, 1.7);
+        }
       }
     }
     box('glass', b.x, 1.5, b.z + b.d / 2 + 0.08, 2.4, 3, 0.12);
@@ -233,7 +243,7 @@ export function buildMap(scene: THREE.Scene, kit: AssetKit): void {
     const x = lamp.x, z = lamp.z;
     kit.stamp('cylinder', 'ink', x, 3.1, z, 0.1, 6.2, 0.1);
     box('ink', x + (x < 0 ? 0.7 : -0.7), 6.2, z, 1.6, 0.15, 0.15);
-    box('white', x + (x < 0 ? 1.4 : -1.4), 6.1, z, 0.6, 0.12, 0.4);
+    box('lampGlow', x + (x < 0 ? 1.4 : -1.4), 6.1, z, 0.6, 0.12, 0.4);
   }
   // Station canopy and visible parallel rail tracks.
   box('metal', 42, 4.3, 62, 28, 0.35, 7);
@@ -364,7 +374,7 @@ export function buildRaceArena(scene: THREE.Scene, kit: AssetKit, box?: (m: Mate
     put('metal', ax + fx, 0.4, az + fz, 1.6, 0.8, 1.2);
     put('metal', ax + fx, 4.2, az + fz, 0.2, 7.4, 0.2);
     put('ink', ax + fx, 7.8, az + fz, 1.8, 0.8, 0.35);
-    put('white', ax + fx, 7.8, az + fz - 0.15, 1.6, 0.6, 0.08);
+    put('lampGlow', ax + fx, 7.8, az + fz - 0.15, 1.6, 0.6, 0.08);
   }
 
   // 8. Multi-Tiered Corner Tire Stacks tucked safely at the northern back corners
@@ -469,7 +479,7 @@ export function buildGameCenter(scene: THREE.Scene, kit: AssetKit, box?: (m: Mat
   // Corner floodlight poles + hall sign.
   for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]] as const) {
     kit.stamp('cylinder', 'ink', gx + sx * 5.4, 2.6, gz + sz * 4.6, 0.09, 5.2, 0.09);
-    put('white', gx + sx * 5.4, 5.1, gz + sz * 4.6, 0.7, 0.18, 0.5);
+    put('lampGlow', gx + sx * 5.4, 5.1, gz + sz * 4.6, 0.7, 0.18, 0.5);
   }
   // Back wall with signage.
   put('wall0', gx, 1.75, gz + 5.6, 12, 3.5, 0.4);

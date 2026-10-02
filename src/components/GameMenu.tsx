@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { DEFAULT_LOOK, type LookSettings } from '../game/CameraInput';
 import type { Theme } from '../game/State';
 import type { WorldSnapshot } from '../world/Simulation';
+import type { Weather } from '../world/Weather';
 import type { QualityLevel } from '../world/WorldEngine';
 
 export type MenuTab = 'display' | 'camera' | 'world' | 'game';
@@ -26,9 +27,17 @@ const QUALITIES: { id: QualityLevel; label: string }[] = [
   { id: 'ultra', label: 'ULTRA' },
 ];
 
+const WEATHERS: { id: Weather; label: string; icon: string }[] = [
+  { id: 'normal', label: 'Clear', icon: '☀' },
+  { id: 'rain', label: 'Rain', icon: '🌧' },
+  { id: 'snow', label: 'Snow', icon: '❄' },
+];
+
 interface Props {
   theme: Theme;
   onTheme: (t: Theme) => void;
+  weather: Weather;
+  onWeather: (w: Weather) => void;
   quality: QualityLevel;
   onQuality: (q: QualityLevel) => void;
   fullscreen: boolean;
@@ -101,6 +110,7 @@ export function GameMenu(props: Props) {
         <div className="menu-body" role="tabpanel">
           {tab === 'display' && <>
             <Segmented label="Theme" options={THEMES} value={props.theme} onPick={props.onTheme} namePrefix="theme" />
+            <Segmented label="Weather" options={WEATHERS} value={props.weather} onPick={props.onWeather} namePrefix="weather" />
             <Segmented label="Graphics" options={QUALITIES} value={props.quality} onPick={props.onQuality} namePrefix="graphics" />
             <p className="menu-hint">Graphics sets pixel sharpness and shadow detail. Lower it if the frame rate drops. Saved on this device.</p>
             <div className="menu-row">

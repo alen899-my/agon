@@ -3,7 +3,9 @@ import * as THREE from 'three';
 import { RealtimeClient, type RaceDirEntry, type RemoteDot, type RemotePos } from '../api/realtime';
 import { GameLoop } from '../game/GameLoop';
 import type { Theme } from '../game/State';
-import { barrelSound, bbSound, countdownBeep, crashThud, crowdCheerSound, horn, ttSound, unlockAudio } from '../game/Sound';
+import { barrelSound, bbSound, countdownBeep, crashThud, crowdCheerSound, horn, startRainLoop, stopRainLoop, ttSound, unlockAudio } from '../game/Sound';
+import { WEATHER_PRESETS, WeatherParticles, type Weather } from './Weather';
+import { LAMPS } from './Map';
 import { AssetKit, buildMap, type Stickman, type Vehicle } from './Assets';
 import { BUILDINGS, GAME_CENTER, HOOP, PLACES, RACE_ARENA, RACE_CROWD, RIM, TABLE, seeded } from './Map';
 import { BarrelSim, createBarrelMesh } from './Barrels';
@@ -110,6 +112,9 @@ export class WorldEngine {
     const me = this.race.racers.get(this.localRaceId);
     return !!me && !me.finished && (this.race.phase === 'countdown' || this.race.phase === 'racing');
   }
+  get nightFactor(): number { return this._nightFactor; }
+  get currentWeather(): Weather { return this.weather; }
+  get glowCount(): number { return this.glowSprites.length; }
   /** Arena directory: joinable races in this server (refreshed by server push + request). */
   raceDir: RaceDirEntry[] = [];
   onRace: (() => void) | null = null;
@@ -136,6 +141,14 @@ export class WorldEngine {
   private readonly skids = new SkidMarks();
   /** Continuous engine voices: player car + nearest traffic, skid screech. */
   private readonly vehicleAudio = new VehicleAudio();
+  private theme: Theme = 'light';
+  private weather: Weather = 'normal';
+  private _nightFactor = 0;
+  private precip: WeatherParticles | null = null;
+  private readonly glowSprites: THREE.Sprite[] = [];
+  private glowTexture: THREE.CanvasTexture | null = null;
+  readonly glowPoints: THREE.Vector3[] = [];
+  private readonly headlight = new THREE.SpotLight(0xffe9c4, 0, 42, 0.55, 0.55, 1.1);
 
   constructor(private canvas: HTMLCanvasElement, private publish: (value: WorldSnapshot) => void) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
@@ -215,6 +228,9 @@ export class WorldEngine {
     this.bbNet = new THREE.LineSegments(netGeo, new THREE.LineBasicMaterial({ color: 0xf5f5f5, transparent: true, opacity: 0.85 }));
     this.bbNet.frustumCulled = false; this.scene.add(this.bbNet);
     this.setTheme('light');
+    this.initNightGlow();
+    this.headlight.castShadow = false;
+    this.scene.add(this.headlight, this.headlight.target);
     // Interactive dynamic barrels in the street racing arena
     for (const b of this.barrelSim.barrels) {
       const mesh = createBarrelMesh(b.color);
@@ -575,9 +591,11 @@ export class WorldEngine {
     if (vehicle) {
       if (!vehicle.group.parent) this.scene.add(vehicle.group);
       vehicle.group.visible = true;
+      this.applyHeadlightMat(vehicle);
       return vehicle;
     }
     const fresh = this.kit.car(kind, false, this.ghostSeed % 8);
+    this.applyHeadlightMat(fresh);
     this.scene.add(fresh.group);
     return fresh;
   }
@@ -706,6 +724,7 @@ export class WorldEngine {
     while (this.traffic.length < sim.traffic.length) {
       const kind = sim.traffic[this.traffic.length]?.kind ?? 'car';
       const v = this.kit.car(kind, false, trafficVariant(kind, this.traffic.length));
+      this.applyHeadlightMat(v);
       this.scene.add(v.group); this.traffic.push(v); this.trafficKinds.push(null);
     }
     while (this.traffic.length > sim.traffic.length) {
@@ -716,11 +735,13 @@ export class WorldEngine {
       if (!initial && this.trafficKinds[i] === key) return;
       this.scene.remove(this.traffic[i].group);
       const v = this.kit.car(t.kind, false, trafficVariant(t.kind, i));
+      this.applyHeadlightMat(v);
       this.scene.add(v.group); this.traffic[i] = v; this.trafficKinds[i] = key;
     });
     while (this.parked.length < sim.parked.length) {
       const kind = sim.parked[this.parked.length]?.kind ?? 'car';
       const v = this.kit.car(kind, false, parkedVariant(kind, this.parked.length));
+      this.applyHeadlightMat(v);
       this.scene.add(v.group); this.parked.push(v); this.parkedKinds.push(null);
     }
     while (this.parked.length > sim.parked.length) {
@@ -731,6 +752,7 @@ export class WorldEngine {
       if (!initial && this.parkedKinds[i] === key) return;
       this.scene.remove(this.parked[i].group);
       const v = this.kit.car(p.kind, false, parkedVariant(p.kind, i));
+      this.applyHeadlightMat(v);
       this.scene.add(v.group); this.parked[i] = v; this.parkedKinds[i] = key;
     });
   }
@@ -778,8 +800,36 @@ export class WorldEngine {
   clearInput(): void { this.simulation.clearInput(); }
   setSuspended(value: boolean): void { this.suspended = value; this.clearInput(); this.vehicleAudio.setSuspended(value); if (value) this.loop.stop(); else this.loop.start(); }
   setTheme(theme: Theme): void {
+    this.theme = theme;
+    // Snap day<->night on explicit switch; the render loop eases nightFactor.
+    if (this.glowSprites.length === 0) this._nightFactor = theme === 'dark' ? 1 : 0;
+    this.applyLook();
+  }
+  /** Weather mode: pushes grip to the sim, restyles the sky/road, runs particles + sound. */
+  setWeather(w: Weather): void {
+    if (this.weather === w && this.precip) return;
+    this.weather = w;
+    this.simulation.weather = w;
+    if (!this.precip) {
+      this.precip = new WeatherParticles(this.scene);
+      this.precip.setQuality(this.quality);
+    }
+    this.precip.setWeather(w);
+    this.precip.snapTo(this.simulation.x, this.simulation.z);
+    if (w === 'rain') startRainLoop(this.theme === 'dark' ? 0.035 : 0.05);
+    else stopRainLoop();
+    this.applyLook();
+    this.emit();
+  }
+  /**
+   * Composes the final look: theme base + weather overlay + night factor.
+   * Called on theme/weather change and while nightFactor is lerping.
+   */
+  applyLook(): void {
     const mats = this.kit.materials;
-    if (theme === 'color') {
+    const night = this._nightFactor;
+    const preset = WEATHER_PRESETS[this.weather];
+    if (this.theme === 'color') {
       // Real-life palette: asphalt, concrete, brick, glass blue, green trees.
       mats.road.color.setHex(0x3c4046);
       mats.pavement.color.setHex(0xb8b2a4);
@@ -792,33 +842,120 @@ export class WorldEngine {
       mats.wall1.color.setHex(0xb65a41);
       mats.wall2.color.setHex(0x6f87a3);
       mats.leaf.color.setHex(0x43a047);
-      const sky = 0x87bfe8;
-      this.scene.background = new THREE.Color(sky); this.scene.fog = new THREE.Fog(sky, 100, 280);
-      this.sun.color.setHex(0xfff0d6); this.sun.intensity = 3;
-      this.ambient.color.setHex(0xcfe5ff); this.ambient.groundColor.setHex(0x8a9a7b); this.ambient.intensity = 1.6;
-      this.renderer.toneMappingExposure = 1.1;
+      const sky = new THREE.Color(0x87bfe8);
+      let fogNear = 100, fogFar = 280;
+      let sunI = 3, ambI = 1.6, exposure = 1.1;
+      this.sun.color.setHex(0xfff0d6);
+      this.ambient.color.setHex(0xcfe5ff); this.ambient.groundColor.setHex(0x8a9a7b);
+      if (this.weather !== 'normal') {
+        sky.setHex(preset.sky);
+        if (preset.fogNear > 0) { fogNear = preset.fogNear; fogFar = preset.fogFar; }
+        this.sun.color.setHex(preset.sunColor); sunI = 3 * preset.sunIntensity;
+        ambI = 1.6 * preset.ambientIntensity; exposure = 1.1 * preset.exposure;
+        mats.road.color.setHex(preset.roadTint);
+        mats.road.roughness = preset.roadRoughness;
+        mats.road.metalness = preset.wetGloss * 0.4;
+      } else { mats.road.roughness = 1; mats.road.metalness = 0; }
+      if (preset.snowBlanket) {
+        mats.pavement.color.setHex(0xe9eef5); mats.leaf.color.setHex(0xd7e4e4);
+        mats.white.color.setHex(0xffffff);
+      }
+      // Night composes on top (rainy night = darkest via preset.nightDarken).
+      const darken = night * (0.82 + preset.nightDarken);
+      sky.multiplyScalar(Math.max(0.06, 1 - darken));
+      // True night sky fades toward deep blue, not pure black.
+      if (night > 0) sky.lerp(new THREE.Color(0x0b1026), night * 0.75);
+      this.scene.background = sky.clone(); this.scene.fog = new THREE.Fog(sky.getHex(), fogNear, fogFar);
+      this.sun.intensity = sunI * (1 - night * 0.88);
+      this.ambient.intensity = ambI * (1 - night * 0.55);
+      this.renderer.toneMappingExposure = exposure * (1 - night * 0.25);
       if (this.marker) (this.marker.material as THREE.MeshBasicMaterial).color.setHex(0xe11d48);
-      return;
+    } else {
+      // Monochrome palettes (light / dark-day base; true night via nightFactor).
+      const light = this.theme === 'light';
+      mats.road.color.setHex(0x373737);
+      mats.pavement.color.setHex(0x9b9b9b);
+      mats.white.color.setHex(0xf1f1f1);
+      mats.ink.color.setHex(0x181818);
+      mats.glass.color.setHex(0x414141);
+      mats.glass.roughness = 0.25; mats.glass.metalness = 0.35;
+      mats.metal.color.setHex(0x666666);
+      mats.wall0.color.setHex(0xd9d9d9);
+      mats.wall1.color.setHex(0xababab);
+      mats.wall2.color.setHex(0x737373);
+      mats.leaf.color.setHex(0x626262);
+      let color = new THREE.Color(light ? 0xdadada : 0x242424);
+      let fogNear = 90, fogFar = 255;
+      let sunI = light ? 3 : 1.5, ambI = light ? 2.2 : 1.1, exposure = 1.05;
+      if (this.weather !== 'normal') {
+        color.setHex(preset.fog);
+        if (preset.fogNear > 0) { fogNear = preset.fogNear; fogFar = preset.fogFar; }
+        this.sun.color.setHex(preset.sunColor); sunI = (light ? 3 : 1.5) * preset.sunIntensity;
+        ambI = (light ? 2.2 : 1.1) * preset.ambientIntensity; exposure = 1.05 * preset.exposure;
+        mats.road.color.setHex(preset.roadTint);
+        mats.road.roughness = preset.roadRoughness;
+        mats.road.metalness = preset.wetGloss * 0.4;
+      } else { mats.road.roughness = 1; mats.road.metalness = 0; this.sun.color.setHex(0xffffff); }
+      if (preset.snowBlanket) {
+        mats.pavement.color.setHex(0xe6e6e6); mats.leaf.color.setHex(0xc9c9c9);
+        mats.wall0.color.setHex(0xefefef); mats.wall1.color.setHex(0xe2e2e2);
+      }
+      this.ambient.color.setHex(0xffffff); this.ambient.groundColor.setHex(0x555555);
+      const darken = night * (0.8 + preset.nightDarken);
+      color.multiplyScalar(Math.max(0.05, 1 - darken));
+      if (night > 0) color.lerp(new THREE.Color(0x0b1026), night * 0.7);
+      this.scene.background = color.clone(); this.scene.fog = new THREE.Fog(color.getHex(), fogNear, fogFar);
+      this.sun.intensity = sunI * (1 - night * 0.88);
+      this.ambient.intensity = ambI * (1 - night * 0.55);
+      this.renderer.toneMappingExposure = exposure * (1 - night * 0.25);
+      if (this.marker) (this.marker.material as THREE.MeshBasicMaterial).color.setHex(night > 0.5 ? 0xffffff : light ? 0x111111 : 0xffffff);
     }
-    // Monochrome palettes (light / dark).
-    mats.road.color.setHex(0x373737);
-    mats.pavement.color.setHex(0x9b9b9b);
-    mats.white.color.setHex(0xf1f1f1);
-    mats.ink.color.setHex(0x181818);
-    mats.glass.color.setHex(0x414141);
-    mats.glass.roughness = 0.25; mats.glass.metalness = 0.35;
-    mats.metal.color.setHex(0x666666);
-    mats.wall0.color.setHex(0xd9d9d9);
-    mats.wall1.color.setHex(0xababab);
-    mats.wall2.color.setHex(0x737373);
-    mats.leaf.color.setHex(0x626262);
-    const dark = theme === 'dark'; const color = dark ? 0x242424 : 0xdadada;
-    this.scene.background = new THREE.Color(color); this.scene.fog = new THREE.Fog(color, 90, 255);
-    this.sun.color.setHex(0xffffff);
-    this.ambient.color.setHex(0xffffff); this.ambient.groundColor.setHex(0x555555);
-    this.ambient.intensity = dark ? 1.1 : 2.2; this.sun.intensity = dark ? 1.5 : 3;
-    this.renderer.toneMappingExposure = 1.05;
-    if (this.marker) (this.marker.material as THREE.MeshBasicMaterial).color.setHex(dark ? 0xffffff : 0x111111);
+    // Night glow: warm lamp heads + lit windows fade in with nightFactor.
+    mats.lampGlow.emissiveIntensity = night * 2.4;
+    mats.windowLit.emissiveIntensity = night * 1.7;
+    for (const s of this.glowSprites) (s.material as THREE.SpriteMaterial).opacity = night * 0.85;
+    this.headlight.intensity = night * 90;
+    this.updateHeadlightMats();
+  }
+  /** Builds glow sprites + registers lamp/floodlight anchors (once). */
+  private initNightGlow(): void {
+    if (this.glowSprites.length > 0) return;
+    const canvas = document.createElement('canvas'); canvas.width = 128; canvas.height = 128;
+    const ctx = canvas.getContext('2d')!;
+    const grad = ctx.createRadialGradient(64, 64, 4, 64, 64, 62);
+    grad.addColorStop(0, 'rgba(255, 210, 140, 1)');
+    grad.addColorStop(0.35, 'rgba(255, 180, 100, 0.55)');
+    grad.addColorStop(1, 'rgba(255, 170, 90, 0)');
+    ctx.fillStyle = grad; ctx.fillRect(0, 0, 128, 128);
+    this.glowTexture = new THREE.CanvasTexture(canvas); this.glowTexture.colorSpace = THREE.SRGBColorSpace;
+    const addGlow = (x: number, y: number, z: number, scale: number) => {
+      const mat = new THREE.SpriteMaterial({ map: this.glowTexture, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending });
+      const sprite = new THREE.Sprite(mat); sprite.position.set(x, y, z); sprite.scale.set(scale, scale, 1);
+      this.scene.add(sprite); this.glowSprites.push(sprite); this.glowPoints.push(new THREE.Vector3(x, y, z));
+    };
+    for (const lamp of LAMPS) {
+      const hx = lamp.x + (lamp.x < 0 ? 1.4 : -1.4);
+      addGlow(hx, 5.95, lamp.z, 2.6);
+    }
+    // Arena floodlight heads + game-center corner lights.
+    const ax = -45, az = 82;
+    for (const fx of [-20.5, 20.5]) addGlow(ax + fx, 7.7, az + 9.2, 4.2);
+    for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]] as const) addGlow(-22 + sx * 5.4, 5.0, 48 + sz * 4.6, 3.0);
+    this.applyLook();
+  }
+  /** Sets a fresh vehicle's headlight to the current night level. */
+  private applyHeadlightMat(v: { headMat: THREE.MeshStandardMaterial }): void {
+    v.headMat.emissiveIntensity = 0.35 + this._nightFactor * 2.4;
+  }
+  /** Raises every car's headlight emissive at night (player + traffic + parked + ghosts). */
+  private updateHeadlightMats(): void {
+    const boost = 0.35 + this._nightFactor * 2.4;
+    const touch = (v: { headMat: THREE.MeshStandardMaterial } | null | undefined) => { if (v) v.headMat.emissiveIntensity = boost; };
+    for (const [, v] of this.fleet) touch(v);
+    for (const v of this.traffic) touch(v);
+    for (const v of this.parked) touch(v);
+    for (const g of this.ghosts.values()) touch(g.vehicle);
+    for (const pooled of this.ghostVehiclePool.values()) for (const v of pooled) touch(v);
   }
   resize(width: number, height: number): void {
     this.lastW = Math.max(1, width); this.lastH = Math.max(1, height);
@@ -829,6 +966,7 @@ export class WorldEngine {
   /** Graphics quality for high-spec devices. Live-applied: pixel ratio, shadow resolution, shadows on/off. */
   applyQuality(q: QualityLevel): void {
     this.quality = q; this.pixelCap = QUALITY_PIXEL[q];
+    this.precip?.setQuality(q);
     this.sun.shadow.mapSize.set(QUALITY_SHADOW[q], QUALITY_SHADOW[q]);
     if (this.sun.shadow.map) { this.sun.shadow.map.dispose(); this.sun.shadow.map = null; }
     const enable = q !== 'low';
@@ -867,6 +1005,24 @@ export class WorldEngine {
     // Car body feel: pitch under accel/brake, roll in corners, bounce on crash.
     const dt = Math.max(0, Math.min(0.05, sim.time - this.prevSimTime));
     this.prevSimTime = sim.time;
+    // Night eases over ~2s (no popping); weather + night compose in applyLook.
+    {
+      const target = this.theme === 'dark' ? 1 : 0;
+      if (target !== this._nightFactor) {
+        const step = dt / 2;
+        this._nightFactor = Math.abs(target - this._nightFactor) <= step ? target
+          : this._nightFactor + Math.sign(target - this._nightFactor) * step;
+        this.applyLook();
+      }
+    }
+    if (this.precip) this.precip.update(dt, sim.driving ? sim.car.x : sim.x, sim.driving ? sim.car.z : sim.z);
+    // Player headlight: shadowless spot thrown ahead of the driven car.
+    if (this._nightFactor > 0.01 && sim.driving) {
+      const fx = Math.sin(sim.car.yaw), fz = -Math.cos(sim.car.yaw);
+      this.headlight.position.set(sim.car.x + fx * 1.5, 1.1, sim.car.z + fz * 1.5);
+      this.headlight.target.position.set(sim.car.x + fx * 14, 0.2, sim.car.z + fz * 14);
+      this.headlight.visible = true;
+    } else this.headlight.visible = false;
     const accel = sim.driving ? sim.acceleration : 0;
     for (const [kind, vehicle] of this.fleet) vehicle.group.visible = kind === sim.vehicleKind;
     this.car = this.fleet.get(sim.vehicleKind)!;
@@ -1090,6 +1246,11 @@ export class WorldEngine {
     this.marker.geometry.dispose(); (this.marker.material as THREE.Material).dispose();
     this.nameTexture.dispose(); (this.nameTag.material as THREE.Material).dispose();
     this.skids.dispose(); this.vehicleAudio.dispose();
+    stopRainLoop();
+    this.precip?.dispose(); this.precip = null;
+    for (const s of this.glowSprites) { this.scene.remove(s); (s.material as THREE.Material).dispose(); }
+    this.glowSprites.length = 0; this.glowPoints.length = 0;
+    this.glowTexture?.dispose(); this.glowTexture = null;
     this.sun.shadow.dispose(); this.kit.dispose(); this.renderer.dispose();
     this.scene.clear();
   }

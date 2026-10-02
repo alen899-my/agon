@@ -120,6 +120,43 @@ export function crashThud(speedKmh = 0): void {
   noise.start(now); noise.stop(now + dur);
 }
 
+/** Looping rain patter (filtered noise). Idempotent start/stop; import-safe in Node. */
+let rainNodes: { src: AudioBufferSourceNode; gain: GainNode } | null = null;
+export function startRainLoop(volume = 0.05): void {
+  const ac = audio(); if (!ac || rainNodes) return;
+  try {
+    const dur = 2;
+    const buf = ac.createBuffer(1, Math.floor(ac.sampleRate * dur), ac.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+    const src = ac.createBufferSource(); src.buffer = buf; src.loop = true;
+    const hp = ac.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 1800;
+    const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 6500;
+    const gain = ac.createGain();
+    gain.gain.setValueAtTime(0.0001, ac.currentTime);
+    gain.gain.exponentialRampToValueAtTime(Math.max(0.0002, volume), ac.currentTime + 1.2);
+    src.connect(hp).connect(lp).connect(gain).connect(ac.destination);
+    src.start();
+    rainNodes = { src, gain };
+  } catch { /* Audio unavailable. */ }
+}
+export function stopRainLoop(): void {
+  if (!rainNodes) return;
+  try {
+    const { src, gain } = rainNodes;
+    const ac = audio();
+    if (ac) {
+      gain.gain.cancelScheduledValues(ac.currentTime);
+      gain.gain.setValueAtTime(Math.max(0.0001, gain.gain.value), ac.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + 0.5);
+      setTimeout(() => { try { src.stop(); } catch { /* already stopped */ } }, 600);
+    } else { try { src.stop(); } catch { /* already stopped */ } }
+  } catch { /* noop */ }
+  rainNodes = null;
+}
+/** Snow hushes the world: stop rain, halve engine master via callback. */
+export function isRainLooping(): boolean { return rainNodes !== null; }
+
 /** Dual-tone horn: polite meep for cars, air horn for rigs. */
 export function horn(airHorn = false): void {
   const ac = audio(); if (!ac) return;

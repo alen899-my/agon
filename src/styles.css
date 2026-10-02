@@ -391,6 +391,7 @@ kbd { font: inherit; border: 1px solid var(--line); padding: 2px 4px; border-rad
 .hud-speed span { display: block; font-size: 9px; color: var(--muted); letter-spacing: .5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 38vw; }
 .hud-cycle { pointer-events: auto; min-width: 44px; min-height: 44px; flex: 0 0 auto; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font-size: 18px; }
 .hud-cycle:disabled { opacity: .4; }
+.hud-weather { align-self: center; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; font-size: 11px; font-weight: 700; letter-spacing: 1px; white-space: nowrap; }
 @media (max-width: 640px) {
   .hud-top { top: 8px; left: 8px; gap: 8px; max-width: calc(100% - 16px); }
   .hud-map { width: 60px; height: 60px; border-radius: 8px; }

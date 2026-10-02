@@ -16,6 +16,7 @@ import type { VehicleKind } from './world/Vehicles';
 import type { Theme } from './game/State';
 import type { WorldEngine, QualityLevel } from './world/WorldEngine';
 import type { WorldSnapshot } from './world/Simulation';
+import type { Weather } from './world/Weather';
 
 function initialTheme(): Theme {
   try { const saved = localStorage.getItem('agon-theme'); if (saved === 'light' || saved === 'dark' || saved === 'color') return saved; } catch { /* Optional storage. */ }
@@ -28,11 +29,19 @@ function initialQuality(): QualityLevel {
   } catch { /* Optional storage. */ }
   return 'balanced';
 }
+function initialWeather(): Weather {
+  try {
+    const saved = localStorage.getItem('agon-weather');
+    if (saved === 'normal' || saved === 'rain' || saved === 'snow') return saved;
+  } catch { /* Optional storage. */ }
+  return 'normal';
+}
 const portraitQuery = '(orientation: portrait) and (max-width: 1000px)';
 export default function App() {
   const engine = useRef<WorldEngine | null>(null);
   const [state, setState] = useState<WorldSnapshot | null>(null);
   const [theme, setTheme] = useState<Theme>(initialTheme);
+  const [weather, setWeather] = useState<Weather>(initialWeather);
   const [quality, setQuality] = useState<QualityLevel>(initialQuality);
   const [portrait, setPortrait] = useState(() => matchMedia(portraitQuery).matches);
   const [mapOpen, setMapOpen] = useState(false);
@@ -74,6 +83,9 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem('agon-quality', quality); } catch { /* Optional storage. */ }
   }, [quality]);
+  useEffect(() => {
+    try { localStorage.setItem('agon-weather', weather); } catch { /* Optional storage. */ }
+  }, [weather]);
   const focus = () => document.querySelector<HTMLCanvasElement>('canvas')?.focus();
   const rememberRoom = (session: Session) => {
     saveSession(session);
@@ -257,7 +269,7 @@ export default function App() {
   };
   return <main className={`district-shell${fullscreen ? ' is-fullscreen' : ''}`}>
     <section className={`world-stage${state?.driving ? ' is-driving' : ''}`} aria-label="Open world neighborhood">
-      <WorldViewport engineRef={engine} onSnapshot={setState} onMap={toggleMap} theme={theme} quality={quality} portrait={portrait} blocked={mapOpen || physicsOpen || menuOpen}
+      <WorldViewport engineRef={engine} onSnapshot={setState} onMap={toggleMap} theme={theme} weather={weather} quality={quality} portrait={portrait} blocked={mapOpen || physicsOpen || menuOpen}
         onDismissOverlay={() => { if (physicsOpen) setPhysicsOpen(false); else if (menuOpen) { toggleMenu(false); focus(); } else if (mapOpen) toggleMap(); }}
         lookSettings={lookSettings} lookEnabled={active && state?.mode === 'roam'} />
       <div className="canvas-corner">
@@ -266,6 +278,7 @@ export default function App() {
       </div>
       {menuOpen && <GameMenu
         theme={theme} onTheme={setTheme}
+        weather={weather} onWeather={setWeather}
         quality={quality} onQuality={setQuality}
         fullscreen={fullscreen} onToggleFullscreen={enterFullscreen}
         view={state?.view} onToggleView={() => { engine.current?.toggleView(); }}
@@ -308,6 +321,7 @@ export default function App() {
         </div>}
         <div className="hud-top" role="status" aria-label="Map and speed">
           <button className="hud-map" onClick={toggleMap} aria-label="Open district map"><DistrictMap state={state} theme={theme} raceActive={engine.current?.raceGuidanceActive ?? false} /></button>
+          {(state?.weather && state.weather !== 'normal') && <div className="hud-weather" role="status" aria-label={state.weather === 'rain' ? 'Raining — slippery roads' : 'Snowing — very slippery roads'}>{state.weather === 'rain' ? '🌧 RAIN' : '❄ SNOW'}</div>}
           {state?.driving && <div className="hud-speed" aria-label="Speed"><b>{state?.speed ?? 0}<small>KM/H</small></b><span>{VEHICLES[state.vehicleKind].name} · {state.acceleration.toFixed(1)} m/s^2{(state?.damage ?? 0) > 0 ? ` · DMG ${state?.damage}%` : ''}</span><button className="hud-cycle" disabled={!active || Math.abs(state?.car.speed ?? 0) > 0.2} onClick={() => { engine.current?.cycleVehicle(); focus(); }} aria-label="Next vehicle">⇄</button></div>}
         </div>
         {state?.view === 'first' && <div className="crosshair" aria-hidden="true">+</div>}

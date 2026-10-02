@@ -1,5 +1,6 @@
 import { bodyContact, boundaryContact, circleContact, vehicleBody, type Body, type Contact } from './Collision';
 import { VEHICLES, VEHICLE_KINDS, type VehicleKind } from './Vehicles';
+import { WEATHER_GRIP, type Weather } from './Weather';
 import { GAME_CENTER, HOOP, intersects, LIMIT, SOLIDS, PARKED_CARS, PLACES, PROPS, RACE_SHOW_CARS, TRAFFIC_ROUTE, circleHit, seeded, type Point } from './Map';
 import { TableTennisSim, type TTShot, type TTSnapshot } from './TableTennis';
 import { BasketballSim, type BBSnapshot } from './Basketball';
@@ -19,8 +20,9 @@ export interface Ped {
 }
 export interface SnapshotCar { x: number; z: number; yaw: number; speed: number; steer: number; wheelSpin: number; braking: boolean }
 export type PlayMode = 'roam' | 'table' | 'basket';
+export type { Weather };
 export interface WorldSnapshot {
-  phase: 'ready' | 'playing'; paused: boolean; view: View; driving: boolean;
+  phase: 'ready' | 'playing'; paused: boolean; view: View; driving: boolean; weather: Weather;
   x: number; z: number; yaw: number; speed: number; distance: number;
   location: string; discovered: string[]; waypoint: string | null; nearbyCar: boolean;
   nearbyVehicleKind: VehicleKind | null; nearbyVehicleLabel: string | null; enterHint: string | null;
@@ -115,6 +117,9 @@ export class Simulation {
   pedBloodSeq = 0;
   // --- character locomotion: smoothed velocity, stride phase, landing dip ---
   pvx = 0; pvz = 0; stride = 0; moveBlend = 0; landDip = 0;
+  /** Weather mode (grip multiplier). Set by WorldEngine.setWeather. */
+  weather: Weather = 'normal';
+  get weatherGrip(): number { return WEATHER_GRIP[this.weather] ?? 1; }
   // --- game center: table tennis + basketball modes ---
   mode: PlayMode = 'roam';
   table = new TableTennisSim();
@@ -238,7 +243,7 @@ export class Simulation {
       : !near ? null
       : !near.enterable ? `${VEHICLES[near.kind].name} ${near.reason ?? ''}`.trim()
       : `E — drive ${VEHICLES[near.kind].name}`;
-    return { phase: this.phase, paused: this.paused, view: this.view, driving: this.driving,
+    return { phase: this.phase, paused: this.paused, view: this.view, driving: this.driving, weather: this.weather,
       x: this.x, z: this.z, yaw: this.yaw, speed: Math.round(Math.abs(this.driving ? this.car.speed : this.pace) * 3.6),
       distance: Math.floor(this.distance), location, discovered: [...this.discovered], waypoint: this.waypoint, nearbyCar: this.nearbyCar,
       nearbyVehicleKind: near?.enterable ? near.kind : null,
@@ -600,11 +605,12 @@ export class Simulation {
       const handbrake = this.held('handbrake') || this.held('jump');
       const topSpeed = spec.topSpeed * (1 - this.damage / 160);
       const opposing = forward !== 0 && forward * oldSpeed < -0.1;
+      const gripF = this.weatherGrip;
       const drag = 0.65 + 0.008 * oldSpeed * oldSpeed;
       let force = forward * spec.acceleration * Math.max(0.15, 1 - Math.abs(oldSpeed) / (forward < 0 ? 7 : topSpeed));
-      if (opposing) force = forward * 13;
+      if (opposing) force = forward * 13 * gripF;
       if (!forward || handbrake || crashed) {
-        const decel = crashed ? 14 : handbrake ? 9 : drag;
+        const decel = crashed ? 14 : handbrake ? 9 * gripF : drag;
         this.car.speed = Math.sign(oldSpeed) * Math.max(0, Math.abs(oldSpeed) - decel * dt);
       } else this.car.speed = clamp(oldSpeed + (force - Math.sign(oldSpeed) * drag) * dt, -7, topSpeed);
       this.acceleration = (this.car.speed - oldSpeed) / dt;
@@ -614,7 +620,8 @@ export class Simulation {
       const wantedYaw = oldYaw + clamp(yawRate, -1.7, 1.7) * dt;
       const deltaYaw = wantedYaw - oldYaw;
       // Preserve momentum across a turning chassis; tire grip dissipates lateral slip.
-      this.lateralSpeed = (this.lateralSpeed - oldSpeed * deltaYaw) * Math.exp(-(handbrake ? 0.65 : spec.grip) * dt);
+      // Weather scales grip: rain 0.85x, snow 0.7x (longer slides, longer braking).
+      this.lateralSpeed = (this.lateralSpeed - oldSpeed * deltaYaw) * Math.exp(-(handbrake ? 0.65 : spec.grip * this.weatherGrip) * dt);
       this.skidding = Math.abs(this.lateralSpeed) > 1.2;
       this.car.braking = opposing || handbrake || crashed;
       this.car.wheelSpin += (this.car.speed * dt) / 0.4;
