@@ -1,3 +1,5 @@
+import type { VehicleKind } from './Vehicles';
+
 export interface Point { x: number; z: number }
 export interface Box extends Point { w: number; d: number; h: number }
 export interface Building extends Box { kind: 'apartment' | 'shop' | 'warehouse' | 'station'; shade: number; name?: string }
@@ -101,13 +103,13 @@ export const PROPS: Collider[] = [
  *  of it, with generous gaps to traffic, tents, and the spectator rows. */
 export const RACE_SLAB = { w: 44, d: 22 };
 /** Paddock show-car display row: 6.4m spacing leaves ~4.4m walk aisles. */
-export const RACE_SHOW_CARS: readonly { kind: 'super' | 'muscle' | 'sport' | 'convertible' | 'police' | 'taxi'; x: number; z: number; yaw: number }[] = [
-  { kind: 'super', x: -61, z: 81.5, yaw: 0.15 },
-  { kind: 'muscle', x: -54.6, z: 81.5, yaw: -0.1 },
-  { kind: 'sport', x: -48.2, z: 81.5, yaw: 0.1 },
-  { kind: 'convertible', x: -41.8, z: 81.5, yaw: -0.15 },
-  { kind: 'police', x: -35.4, z: 81.5, yaw: 0.12 },
-  { kind: 'taxi', x: -29, z: 81.5, yaw: -0.08 },
+export const RACE_SHOW_CARS: readonly { kind: VehicleKind; x: number; z: number; yaw: number }[] = [
+  { kind: 'hyper', x: -61, z: 81.5, yaw: 0.15 },
+  { kind: 'raptor', x: -54.6, z: 81.5, yaw: -0.1 },
+  { kind: 'jeep', x: -48.2, z: 81.5, yaw: 0.1 },
+  { kind: 'patrol', x: -41.8, z: 81.5, yaw: -0.15 },
+  { kind: 'egt', x: -35.4, z: 81.5, yaw: 0.12 },
+  { kind: 'track', x: -29, z: 81.5, yaw: -0.08 },
 ];
 /** Static spectator rows flanking the display (clear of the racing line and tents). */
 export interface CrowdSpot { x: number; z: number; yaw: number }

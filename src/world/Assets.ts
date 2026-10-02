@@ -1,9 +1,11 @@
-import { VEHICLES, type VehicleKind } from './Vehicles';
+import { type VehicleKind } from './Vehicles';
+import { buildVehicle } from './VehicleFactory';
 import * as THREE from 'three';
 import { BENCHES, BUILDINGS, FREE_THROW_DIST, GAME_CENTER, HOOP, LAMPS, RACE_ARENA, RACE_SHOW_CARS, RACE_SLAB, RIM, ROADS, TABLE, TREES, seeded } from './Map';
 
 type Shape = 'box' | 'sphere' | 'cylinder';
 type MaterialName = 'road' | 'pavement' | 'white' | 'ink' | 'glass' | 'metal' | 'wall0' | 'wall1' | 'wall2' | 'leaf';
+
 export interface GaitState { phase: number; intensity: number; airborne: boolean; dip: number; idle: number; cheer?: number }
 export interface Stickman {
   group: THREE.Group; hips: THREE.Group; torso: THREE.Group; head: THREE.Group;
@@ -41,7 +43,7 @@ export class AssetKit {
   };
   private batches = new Map<string, THREE.Matrix4[]>();
   private transform = new THREE.Object3D();
-  private extra: { dispose: () => void }[] = [];
+  readonly extra: { dispose: () => void }[] = [];
 
   stamp(shape: Shape, material: MaterialName, x: number, y: number, z: number, sx: number, sy: number, sz: number, yaw = 0): void {
     this.transform.position.set(x, y, z); this.transform.scale.set(sx, sy, sz); this.transform.rotation.set(0, yaw, 0);
@@ -159,148 +161,8 @@ export class AssetKit {
       } else { torso.scale.y = 1; hips.rotation.y = 0; }
     } };
   }
-  car(kind: VehicleKind = 'car', dark = false): Vehicle {
-    const group = new THREE.Group(); const body = new THREE.Group(); group.add(body);
-    const spec = VEHICLES[kind];
-    const { length, height: cabinHeight, width } = spec;
-    // Real-life inspired paint per model (Camry silver, taxi yellow, police B/W, fire red...).
-    const PAINT: Record<VehicleKind, number> = {
-      car: 0xd8dce2, hatch: 0xc23b2e, taxi: 0xf2b705, police: 0xe8ecf1,
-      sport: 0xd21f26, muscle: 0x2456c8, super: 0xff6a00, convertible: 0xb3122e,
-      suv: 0x2f4a3c, pickup: 0x2e5fa3, van: 0xe4e4e4, minivan: 0x9aa5b1,
-      ambulance: 0xf2f2f2, fire: 0xc01515, boxTruck: 0xe8e8e8, bus: 0x2b7fc4,
-    };
-    const paintMat = new THREE.MeshStandardMaterial({ color: dark && kind !== 'police' ? 0x4a4d52 : PAINT[kind], roughness: 0.45, metalness: 0.25 });
-    this.extra.push(paintMat);
-    const paint = (parent: THREE.Object3D, x: number, y: number, z: number, sx: number, sy: number, sz: number): THREE.Mesh => {
-      const mesh = new THREE.Mesh(this.geometry.box, paintMat);
-      mesh.position.set(x, y, z); mesh.scale.set(sx, sy, sz); mesh.castShadow = mesh.receiveShadow = true;
-      parent.add(mesh); return mesh;
-    };
-    this.mesh(body, 'box', 'ink', 0, 0.45, 0, width - 0.2, 0.25, length - 0.3); // chassis shadow
-    paint(body, 0, 0.8, 0, width, 0.7, length);
-    const openTop = kind === 'convertible';
-    const cabinLength = kind === 'pickup' ? 2.3 : kind === 'car' || kind === 'sport' || kind === 'muscle' || kind === 'super' || kind === 'convertible' ? 2.2 : kind === 'hatch' ? 2.6 : length - 0.6;
-    const cabinH = openTop ? cabinHeight * 0.55 : cabinHeight;
-    const glazing = this.mesh(body, 'box', 'glass', 0, 1.15 + cabinH / 2, 0.1, width - 0.25, cabinH, cabinLength);
-    if (openTop) glazing.visible = false;
-    const frontZ = 0.1 - cabinLength / 2;
-    const eye = new THREE.Vector3(-0.36, 1.15 + cabinH * 0.65 + (kind === 'bus' || kind === 'fire' || kind === 'boxTruck' ? 0.5 : 0), frontZ + 0.7);
-    // Open windshield in cockpit mode; structural posts and dashboard stay visible.
-    for (const side of [-1, 1]) {
-      paint(body, side * (width / 2 - 0.06), 1.15 + cabinH / 2, frontZ, 0.07, cabinH, 0.08);
-      paint(body, side * (width / 2 - 0.06), 1.15 + cabinH / 2, 0.1 + cabinLength / 2, 0.07, cabinH, 0.08);
-      this.mesh(body, 'box', 'ink', side * 0.44, 1.21, eye.z + 0.15, 0.62, 0.14, 0.65);
-    }
-    this.mesh(body, 'box', 'ink', 0, Math.max(1.07, eye.y - 0.55), frontZ + 0.08, 1.65, 0.12, 0.25);
-    const steeringWheel = new THREE.Group(); steeringWheel.position.set(-0.36, eye.y - 0.25, eye.z - 0.45); steeringWheel.scale.setScalar(0.65); body.add(steeringWheel);
-    const rimGeometry = new THREE.TorusGeometry(0.22, 0.027, 8, 32); this.extra.push(rimGeometry);
-    steeringWheel.add(new THREE.Mesh(rimGeometry, this.materials.ink));
-    this.mesh(steeringWheel, 'box', 'metal', 0, 0, 0, 0.4, 0.035, 0.035);
-    this.mesh(steeringWheel, 'box', 'metal', 0, -0.1, 0, 0.035, 0.2, 0.035);
-    this.mesh(steeringWheel, 'sphere', 'ink', 0, 0, 0, 0.065, 0.065, 0.035);
-    if (kind === 'pickup') {
-      this.mesh(body, 'box', 'ink', 0, 1.17, 1.85, 1.55, 0.05, 1.5);
-      for (const side of [-1, 1]) paint(body, side * (width / 2 - 0.08), 1.35, 1.85, 0.15, 0.4, 1.6);
-    }
-    if (kind === 'sport' || kind === 'super') paint(body, 0, 1.32, length / 2 - 0.3, width - 0.1, 0.09, 0.35); // rear wing
-    if (kind === 'muscle') {
-      paint(body, 0, 1.22, -0.6, 0.5, 0.08, 1.4); // hood scoop stripe
-      paint(body, 0, 1.18, 0.4, width - 0.3, 0.04, 1.2);
-    }
-    if (kind === 'bus') {
-      for (let z = frontZ + 0.8; z < length / 2 - 0.4; z += 0.85) {
-        for (const side of [-1, 1]) paint(body, side * (width / 2 - 0.04), 1.9, z, 0.07, cabinH, 0.07);
-      }
-      this.mesh(body, 'box', 'ink', width / 2 - 0.02, 1.1, -length / 2 + 1.2, 0.06, 1.2, 1.1); // entry door
-    }
-    if (kind === 'taxi') {
-      paint(body, 0, 1.15 + cabinH + 0.12, 0.1, 0.7, 0.22, 0.4); // roof sign
-      this.mesh(body, 'box', 'ink', 0, 1.15 + cabinH + 0.12, -0.11, 0.72, 0.12, 0.02);
-    }
-    if (kind === 'police') {
-      this.mesh(body, 'box', 'ink', 0, 1.0, 0.3, width - 0.1, 0.35, 1.6); // black doors
-      const red = new THREE.MeshStandardMaterial({ color: 0xff2020, emissive: 0xff0000, emissiveIntensity: 1.2 });
-      const blue = new THREE.MeshStandardMaterial({ color: 0x2040ff, emissive: 0x0022ff, emissiveIntensity: 1.2 });
-      this.extra.push(red, blue);
-      const r = new THREE.Mesh(this.geometry.box, red); r.position.set(-0.3, 1.15 + cabinH + 0.15, 0); r.scale.set(0.5, 0.18, 0.3); body.add(r);
-      const b = new THREE.Mesh(this.geometry.box, blue); b.position.set(0.3, 1.15 + cabinH + 0.15, 0); b.scale.set(0.5, 0.18, 0.3); body.add(b);
-    }
-    if (kind === 'ambulance') {
-      this.mesh(body, 'box', 'white', 0, 1.5, 1.2, width - 0.15, 0.9, 2.6); // patient box
-      this.mesh(body, 'box', 'ink', 0, 1.5, 2.51, 0.5, 0.5, 0.04);
-      this.mesh(body, 'box', 'ink', 0, 1.5, 2.51, 0.18, 0.5, 0.05);
-      const red = new THREE.MeshStandardMaterial({ color: 0xd00f0f, roughness: 0.5 });
-      this.extra.push(red);
-      const stripe = new THREE.Mesh(this.geometry.box, red); stripe.position.set(0, 1.15, 1.2); stripe.scale.set(width + 0.02, 0.22, 2.62); body.add(stripe);
-    }
-    if (kind === 'fire') {
-      this.mesh(body, 'box', 'metal', 0, 1.15 + cabinH + 0.25, 0.4, 0.5, 0.12, 4.2); // ladder
-      for (const side of [-1, 1]) this.mesh(body, 'box', 'white', side * 0.4, 1.4, 0.6, 0.5, 0.08, 1.6);
-    }
-    if (kind === 'boxTruck') {
-      this.mesh(body, 'box', 'white', 0, 1.6, 1.6, width - 0.1, 1.8, 3.4); // cargo box
-      this.mesh(body, 'box', 'ink', 0, 1.6, 3.32, width - 0.2, 1.6, 0.06);
-    }
-    if (!openTop) paint(body, 0, 1.15 + cabinH, 0.1, width - 0.1, 0.15, cabinLength + 0.15); // roof
-    else {
-      // Roadster tonneau + low windscreen frame.
-      paint(body, 0, 1.18, 0.9, width - 0.4, 0.1, 1.0);
-      this.mesh(body, 'box', 'glass', 0, 1.35, frontZ + 0.25, width - 0.4, 0.3, 0.06);
-    }
-    // Swing doors for the GTA enter/exit beat — WorldEngine opens the left door with sim.transition.
-    const doors: THREE.Group[] = [];
-    for (const side of [-1, 1]) {
-      const pivot = new THREE.Group(); pivot.position.set(side * (width / 2), 1.0, -0.5); body.add(pivot);
-      const slab = new THREE.Mesh(this.geometry.box, paintMat);
-      slab.position.set(0, 0.05, 0.55); slab.scale.set(0.07, 0.62, 1.15); slab.castShadow = true; pivot.add(slab);
-      doors.push(pivot);
-    }
-    // Dedicated lamp materials per vehicle so brake glow doesn't leak across cars.
-    const brakeMat = new THREE.MeshStandardMaterial({ color: 0x7a1010, roughness: 0.4, emissive: 0xff1a1a, emissiveIntensity: 0.25 });
-    const headMat = new THREE.MeshStandardMaterial({ color: 0xf5f2df, roughness: 0.3, emissive: 0xfff6c9, emissiveIntensity: 0.35 });
-    const blinkerMat = new THREE.MeshStandardMaterial({ color: 0x7a4a00, roughness: 0.4, emissive: 0xffa500, emissiveIntensity: 0.2 });
-    this.extra.push(brakeMat, headMat, blinkerMat);
-    const spins: THREE.Object3D[] = []; const frontSteer: THREE.Group[] = [];
-    const WHEEL_R = kind === 'bus' || kind === 'fire' || kind === 'boxTruck' ? 0.48 : 0.4;
-    const trackX = width / 2 - 0.05;
-    for (const side of [-1, 1]) {
-      for (const z of [-length * 0.32, length * 0.32]) {
-        // Steer pivot (front wheels yaw) -> spin pivot (rolls with speed) -> tyre + hub.
-        const steer = new THREE.Group(); steer.position.set(side * trackX, WHEEL_R + 0.08, z); group.add(steer);
-        const spin = new THREE.Group(); steer.add(spin);
-        const tyre = new THREE.Mesh(this.geometry.cylinder, this.materials.ink);
-        tyre.scale.set(WHEEL_R, 0.24, WHEEL_R); tyre.rotation.z = Math.PI / 2;
-        tyre.castShadow = tyre.receiveShadow = true; spin.add(tyre);
-        const hub = new THREE.Mesh(this.geometry.cylinder, this.materials.metal);
-        hub.scale.set(0.17, 0.26, 0.17); hub.rotation.z = Math.PI / 2; spin.add(hub);
-        spins.push(spin);
-        if (z < 0) frontSteer.push(steer); // front = -Z (headlight end)
-      }
-      const head = new THREE.Mesh(this.geometry.box, headMat);
-      head.position.set(side * (width / 2 - 0.35), 0.86, -length / 2 - 0.02); head.scale.set(0.35, 0.2, 0.06); body.add(head);
-      const tail = new THREE.Mesh(this.geometry.box, brakeMat);
-      tail.position.set(side * (width / 2 - 0.35), 0.86, length / 2 + 0.02); tail.scale.set(0.32, 0.14, 0.06); body.add(tail);
-      // Turn-signal indicators: front fenders + rear quarters share one blinking material.
-      const blinkF = new THREE.Mesh(this.geometry.box, blinkerMat);
-      blinkF.position.set(side * (width / 2 - 0.02), 0.82, -length / 2 + 0.35); blinkF.scale.set(0.06, 0.12, 0.22); body.add(blinkF);
-      const blinkR = new THREE.Mesh(this.geometry.box, blinkerMat);
-      blinkR.position.set(side * (width / 2 - 0.02), 0.82, length / 2 - 0.35); blinkR.scale.set(0.06, 0.12, 0.22); body.add(blinkR);
-      paint(body, side * (width / 2 - 0.04), 1.6, 0.1, 0.08, cabinH, 0.15);
-    }
-    const vehicle: Vehicle = { group, body, glazing, steeringWheel, eye, spins, frontSteer, doors, brakeMat, headMat, blinkerMat, spin: 0,
-      update: (speed, steer, dt, braking, bodyTilt, blinker = 0, time = 0) => {
-        vehicle.spin += (speed * dt) / WHEEL_R;
-        for (const s of spins) s.rotation.x = vehicle.spin;
-        for (const f of frontSteer) f.rotation.y = -steer * 0.55 / (1 + Math.abs(speed) / 24);
-        steeringWheel.rotation.z = -steer * 2.4;
-        brakeMat.emissiveIntensity = braking ? 2.2 : 0.25;
-        // blinker: 0 off, 1 left, 2 right, 3 hazard. Blink at ~1.6Hz.
-        const on = blinker !== 0 && (time % 0.62) < 0.31;
-        blinkerMat.emissiveIntensity = on ? 2.4 : 0.15;
-        if (bodyTilt) { body.rotation.x = bodyTilt.pitch; body.rotation.z = bodyTilt.roll; body.position.y = 0; }
-      } };
-    return vehicle;
+  car(kind: VehicleKind = 'car', _dark = false, variant = 0): Vehicle {
+    return buildVehicle(this, kind, variant);
   }
   dispose(): void {
     Object.values(this.geometry).forEach(g => g.dispose()); Object.values(this.materials).forEach(m => m.dispose()); this.extra.forEach(item => item.dispose());

@@ -439,7 +439,11 @@ kbd { font: inherit; border: 1px solid var(--line); padding: 2px 4px; border-rad
 .race-setup h2, .race-lobby h2 { margin: 6px 0 4px; font-size: 22px; letter-spacing: -0.5px; }
 .race-setup-head, .race-lobby-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
 .race-setup p { font-size: 11px; color: var(--muted); margin: 8px 0; }
-.race-cars { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 10px 0; }
+.race-cats { display: flex; gap: 4px; overflow-x: auto; margin: 10px 0 2px; scrollbar-width: none; }
+.race-cats::-webkit-scrollbar { display: none; }
+.race-cats button { flex: 0 0 auto; min-height: 36px; padding: 0 10px; font-size: 8px; font-weight: 700; letter-spacing: 1px; color: var(--muted); background: transparent; border: 1px solid var(--line); border-radius: 14px; }
+.race-cats button.on { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+.race-cars { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 10px 0; max-height: 220px; overflow-y: auto; }
 .race-cars button { min-height: 48px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 8px; padding: 6px 4px; display: flex; flex-direction: column; gap: 2px; }
 .race-cars button b { font-size: 9px; }
 .race-cars button small { font-size: 8px; color: var(--muted); }

@@ -72,9 +72,9 @@ export class WorldEngine {
   private car: Vehicle;
   private readonly fleet = new Map<VehicleKind, Vehicle>();
   private readonly parked: Vehicle[] = [];
-  private parkedKinds: (VehicleKind | null)[] = [];
+  private parkedKinds: (string | null)[] = [];
   private readonly traffic: Vehicle[] = [];
-  private trafficKinds: (VehicleKind | null)[] = [];
+  private trafficKinds: (string | null)[] = [];
   private readonly sun = new THREE.DirectionalLight(0xffffff, 3);
   private readonly ambient = new THREE.HemisphereLight(0xffffff, 0x555555, 2.2);
   private readonly marker: THREE.Mesh;
@@ -150,7 +150,7 @@ export class WorldEngine {
     this.nameTag = new THREE.Sprite(nameMat); this.nameTag.scale.set(1.9, 0.53, 1);
     this.nameTag.renderOrder = 10; this.nameTag.visible = false; this.scene.add(this.nameTag);
     for (const kind of VEHICLE_KINDS) {
-      const vehicle = this.kit.car(kind, kind === 'sport' || kind === 'suv');
+      const vehicle = this.kit.car(kind, false, 0);
       vehicle.group.visible = false; this.fleet.set(kind, vehicle); this.scene.add(vehicle.group);
     }
     this.car = this.fleet.get('car')!;
@@ -548,7 +548,7 @@ export class WorldEngine {
       vehicle.group.visible = true;
       return vehicle;
     }
-    const fresh = this.kit.car(kind, false);
+    const fresh = this.kit.car(kind, false, this.ghostSeed % 8);
     this.scene.add(fresh.group);
     return fresh;
   }
@@ -672,31 +672,37 @@ export class WorldEngine {
   /** Keep render meshes in sync with the stealable world: rebuild on kind change, grow/shrink freely. */
   private syncWorldVehicles(initial = false): void {
     const sim = this.simulation;
+    const trafficVariant = (kind: string, i: number): number => (i * 3 + kind.length + kind.charCodeAt(0)) % 8;
+    const parkedVariant = (kind: string, i: number): number => (i * 5 + 2 + kind.charCodeAt(0)) % 8;
     while (this.traffic.length < sim.traffic.length) {
-      const v = this.kit.car(sim.traffic[this.traffic.length]?.kind ?? 'car', false);
+      const kind = sim.traffic[this.traffic.length]?.kind ?? 'car';
+      const v = this.kit.car(kind, false, trafficVariant(kind, this.traffic.length));
       this.scene.add(v.group); this.traffic.push(v); this.trafficKinds.push(null);
     }
     while (this.traffic.length > sim.traffic.length) {
       const v = this.traffic.pop()!; this.scene.remove(v.group); this.trafficKinds.pop();
     }
     sim.traffic.forEach((t, i) => {
-      if (!initial && this.trafficKinds[i] === t.kind) return;
+      const key = `${t.kind}:${trafficVariant(t.kind, i)}`;
+      if (!initial && this.trafficKinds[i] === key) return;
       this.scene.remove(this.traffic[i].group);
-      const v = this.kit.car(t.kind, false);
-      this.scene.add(v.group); this.traffic[i] = v; this.trafficKinds[i] = t.kind;
+      const v = this.kit.car(t.kind, false, trafficVariant(t.kind, i));
+      this.scene.add(v.group); this.traffic[i] = v; this.trafficKinds[i] = key;
     });
     while (this.parked.length < sim.parked.length) {
-      const v = this.kit.car(sim.parked[this.parked.length]?.kind ?? 'car', true);
+      const kind = sim.parked[this.parked.length]?.kind ?? 'car';
+      const v = this.kit.car(kind, false, parkedVariant(kind, this.parked.length));
       this.scene.add(v.group); this.parked.push(v); this.parkedKinds.push(null);
     }
     while (this.parked.length > sim.parked.length) {
       const v = this.parked.pop()!; this.scene.remove(v.group); this.parkedKinds.pop();
     }
     sim.parked.forEach((p, i) => {
-      if (!initial && this.parkedKinds[i] === p.kind) return;
+      const key = `${p.kind}:${parkedVariant(p.kind, i)}`;
+      if (!initial && this.parkedKinds[i] === key) return;
       this.scene.remove(this.parked[i].group);
-      const v = this.kit.car(p.kind, true);
-      this.scene.add(v.group); this.parked[i] = v; this.parkedKinds[i] = p.kind;
+      const v = this.kit.car(p.kind, false, parkedVariant(p.kind, i));
+      this.scene.add(v.group); this.parked[i] = v; this.parkedKinds[i] = key;
     });
   }
   begin(): void { unlockAudio(); this.simulation.begin(); this.emit(); }

@@ -73,7 +73,7 @@ export function WorldViewport({ engineRef, onSnapshot, onMap, theme, quality, po
   useEffect(() => engineRef.current?.applyQuality(quality), [quality, engineRef]);
   useEffect(() => { engineRef.current?.setSuspended(document.hidden || portrait || blocked); cameraInput.current?.refresh(); }, [portrait, blocked, engineRef]);
   return <><canvas ref={canvas} tabIndex={0} className="world-canvas" data-look-state={lookStatus} aria-label="3D neighborhood. WASD or arrows to move, click once to capture mouse or trackpad look, Escape to release, touch swipe to look, Q/C to turn camera, Space to jump or handbrake, V for cockpit, E to enter or steal any stopped car, N to cycle 16 stopped vehicles. Type your name on the intro screen to start." />
-    c
+    
     
     {error && <div className="world-error" role="alert"><h2>Unable to render the map</h2><p>{error}</p><button className="primary-button" onClick={() => location.reload()}>RELOAD</button></div>}</>;
 }

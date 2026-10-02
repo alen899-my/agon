@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import type { WorldEngine } from '../world/WorldEngine';
 import { formatRaceTime } from '../world/Track';
 import { lightStage } from '../world/RaceSim';
@@ -255,16 +255,29 @@ export function RaceLobby({ engine, inServer, onNeedServer }: LobbyProps) {
   );
 }
 
-/** Car picker grid for the race form (keeps own chosen car). */
+const PICKER_CATS = ['all', 'sport', 'car', 'suv', 'truck', 'van', 'service', 'bus'] as const;
+
+/** Car picker grid for the race form (keeps own chosen car). Category tabs keep 46 rides browsable. */
 export function RaceCarPicker({ value, onChange }: { value: VehicleKind; onChange: (k: VehicleKind) => void }) {
+  const [cat, setCat] = useState<(typeof PICKER_CATS)[number]>('all');
+  const kinds = VEHICLE_KINDS.filter((k) => cat === 'all' || VEHICLES[k].category === cat);
   return (
-    <div className="race-cars" role="radiogroup" aria-label="Choose your race car">
-      {VEHICLE_KINDS.map((k) => (
-        <button key={k} role="radio" aria-checked={value === k} className={value === k ? 'on' : ''} onClick={() => onChange(k)}>
-          <b>{VEHICLES[k].name}</b>
-          <small>{VEHICLES[k].topSpeed * 3.6 | 0} km/h</small>
-        </button>
-      ))}
+    <div>
+      <div className="race-cats" role="tablist" aria-label="Filter by category">
+        {PICKER_CATS.map((c) => (
+          <button key={c} role="tab" aria-selected={cat === c} className={cat === c ? 'on' : ''} onClick={() => setCat(c)}>
+            {c.toUpperCase()}
+          </button>
+        ))}
+      </div>
+      <div className="race-cars" role="radiogroup" aria-label="Choose your race car">
+        {kinds.map((k) => (
+          <button key={k} role="radio" aria-checked={value === k} className={value === k ? 'on' : ''} onClick={() => onChange(k)}>
+            <b>{VEHICLES[k].name}</b>
+            <small>{VEHICLES[k].topSpeed * 3.6 | 0} km/h</small>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

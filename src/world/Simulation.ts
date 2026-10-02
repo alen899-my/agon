@@ -112,7 +112,7 @@ export class Simulation {
   constructor() {
     const rng = seeded(9001);
     // A living street: 8 looping cars covering the full catalog, not just the first six.
-    const streetCast: VehicleKind[] = ['car', 'taxi', 'suv', 'bus', 'sport', 'pickup', 'police', 'boxTruck'];
+    const streetCast: VehicleKind[] = ['coupe', 'taxi', 'crossover', 'coach', 'track', 'raptor', 'patrol', 'wagon'];
     for (let i = 0; i < 8; i++) this.traffic.push({ kind: streetCast[i % streetCast.length], ...routePoint(TRAFFIC_ROUTE, i * 76 + 25), speed: 7, offset: i * 76 + 25, base: 7, steer: 0, wheelSpin: 0, braking: false, prevYaw: 0 });
     for (let i = 0; i < 16; i++) {
       const speed = 0.9 + rng() * 0.6;
@@ -188,7 +188,8 @@ export class Simulation {
   get crashed(): boolean { return this.time < this.crashUntil; }
   private spawnReplacementTraffic(): void {
     // Keep the street alive after a steal: respawn far from the player so it never pops in.
-    const kinds: VehicleKind[] = ['car', 'hatch', 'taxi', 'suv', 'sport', 'muscle', 'super', 'minivan', 'van', 'police', 'ambulance', 'boxTruck'];
+    const kinds: VehicleKind[] = ['car', 'hatch', 'taxi', 'suv', 'sport', 'muscle', 'super', 'minivan', 'van', 'police', 'ambulance', 'boxTruck',
+      'coupe', 'wagon', 'compact', 'esedan', 'crossover', 'shuttle', 'minibus', 'towtruck', 'tanker', 'rally', 'jeep', 'cruiser'];
     const kind = kinds[Math.floor(((this.time * 13.7) % 1 + 1) % 1 * kinds.length) % kinds.length];
     let best = 0, bestDist = -1;
     for (let k = 0; k < 8; k++) {

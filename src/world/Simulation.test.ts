@@ -165,10 +165,10 @@ describe('driving dynamics', () => {
     const slip = Math.abs(drift.lateralSpeed); drift.clearInput(); tick(drift, 45);
     expect(Math.abs(drift.lateralSpeed)).toBeLessThan(slip);
   });
-  it('cycles all sixteen real-life rides while stopped but rejects changes at speed', () => {
+  it('cycles all forty-six real-life rides while stopped but rejects changes at speed', () => {
     const sim = drive(); const kinds = new Set([sim.vehicleKind]);
-    for (let i = 0; i < 15; i++) { expect(sim.cycleVehicle()).toBe(true); kinds.add(sim.vehicleKind); }
-    expect(kinds.size).toBe(16); sim.car.speed = 2; expect(sim.cycleVehicle()).toBe(false);
+    for (let i = 0; i < 45; i++) { expect(sim.cycleVehicle()).toBe(true); kinds.add(sim.vehicleKind); }
+    expect(kinds.size).toBe(46); sim.car.speed = 2; expect(sim.cycleVehicle()).toBe(false);
   });
   it('keeps cockpit look relative to the car and recenters on changing views', () => {
     const sim = drive(); sim.toggleView(); sim.look(100, 0); const offset = sim.yaw - sim.car.yaw;
