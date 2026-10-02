@@ -311,7 +311,6 @@ export default function App() {
           {state?.driving && <div className="hud-speed" aria-label="Speed"><b>{state?.speed ?? 0}<small>KM/H</small></b><span>{VEHICLES[state.vehicleKind].name} · {state.acceleration.toFixed(1)} m/s^2{(state?.damage ?? 0) > 0 ? ` · DMG ${state?.damage}%` : ''}</span><button className="hud-cycle" disabled={!active || Math.abs(state?.car.speed ?? 0) > 0.2} onClick={() => { engine.current?.cycleVehicle(); focus(); }} aria-label="Next vehicle">⇄</button></div>}
         </div>
         {state?.view === 'first' && <div className="crosshair" aria-hidden="true">+</div>}
-        {state?.impact && <div className="crash-flash" role="status">CRASH · {state.impact.speed} KM/H vs {state.impact.with.toUpperCase()}</div>}
         {state != null && state.pedBloodSeq > 0 && state.time - state.pedBloodAt < 1.5 &&
           <div key={state.pedBloodSeq} className="blood-splash" aria-hidden="true"><div className="blood-splash-drip" /></div>}
         {state?.mode === 'table' && state.table && <div className="tt-score" role="status" aria-label={`Table tennis score you ${state.table.you} AI ${state.table.aiScore}`}>

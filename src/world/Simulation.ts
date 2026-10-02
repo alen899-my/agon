@@ -4,7 +4,7 @@ import { GAME_CENTER, HOOP, intersects, LIMIT, SOLIDS, PARKED_CARS, PLACES, PROP
 import { TableTennisSim, type TTShot, type TTSnapshot } from './TableTennis';
 import { BasketballSim, type BBSnapshot } from './Basketball';
 
-export type WorldAction = 'forward' | 'back' | 'left' | 'right' | 'sprint' | 'jump' | 'turnLeft' | 'turnRight' | 'handbrake' | 'signalLeft' | 'signalRight';
+export type WorldAction = 'forward' | 'back' | 'left' | 'right' | 'sprint' | 'jump' | 'turnLeft' | 'turnRight' | 'handbrake' | 'signalLeft' | 'signalRight' | 'horn';
 export type View = 'third' | 'first';
 export interface Impact { speed: number; with: string; at: number }
 export interface TrafficCar { kind: VehicleKind; x: number; z: number; yaw: number; speed: number; offset: number; base: number; steer: number; wheelSpin: number; braking: boolean; prevYaw: number }

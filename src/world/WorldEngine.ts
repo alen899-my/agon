@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { RealtimeClient, type RaceDirEntry, type RemoteDot, type RemotePos } from '../api/realtime';
 import { GameLoop } from '../game/GameLoop';
 import type { Theme } from '../game/State';
-import { barrelSound, bbSound, countdownBeep, crowdCheerSound, ttSound, unlockAudio } from '../game/Sound';
+import { barrelSound, bbSound, countdownBeep, crashThud, crowdCheerSound, horn, ttSound, unlockAudio } from '../game/Sound';
 import { AssetKit, buildMap, type Stickman, type Vehicle } from './Assets';
 import { BUILDINGS, GAME_CENTER, HOOP, PLACES, RACE_ARENA, RACE_CROWD, RIM, TABLE, seeded } from './Map';
 import { BarrelSim, createBarrelMesh } from './Barrels';
@@ -11,6 +11,8 @@ import { Simulation, type WorldAction, type WorldSnapshot } from './Simulation';
 import { RaceSim, type RacerState } from './RaceSim';
 import { gridSlots } from './Track';
 import { RaceRoute } from './RaceRoute';
+import { SkidMarks } from './SkidMarks';
+import { VehicleAudio } from '../game/VehicleAudio';
 import type { TTShot } from './TableTennis';
 
 export type { RacerState };
@@ -130,6 +132,10 @@ export class WorldEngine {
   private readonly cameraBoxes = BUILDINGS.map(b => new THREE.Box3(new THREE.Vector3(b.x - b.w / 2 - 0.35, 0, b.z - b.d / 2 - 0.35), new THREE.Vector3(b.x + b.w / 2 + 0.35, b.h + 0.5, b.z + b.d / 2 + 0.35)));
   private target = new THREE.Vector3(); private desired = new THREE.Vector3(); private direction = new THREE.Vector3(); private hit = new THREE.Vector3(); private ray = new THREE.Ray();
   private suspended = false; private disposed = false; private hudTime = 0;
+  /** Drift skid marks: twin rubber ribbons behind the rear wheels, fading over a minute. */
+  private readonly skids = new SkidMarks();
+  /** Continuous engine voices: player car + nearest traffic, skid screech. */
+  private readonly vehicleAudio = new VehicleAudio();
 
   constructor(private canvas: HTMLCanvasElement, private publish: (value: WorldSnapshot) => void) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
@@ -154,6 +160,7 @@ export class WorldEngine {
       vehicle.group.visible = false; this.fleet.set(kind, vehicle); this.scene.add(vehicle.group);
     }
     this.car = this.fleet.get('car')!;
+    this.scene.add(this.skids.group);
     this.parkedKinds = [];
     this.trafficKinds = [];
     const random = seeded(8008);
@@ -233,6 +240,28 @@ export class WorldEngine {
       this.prevRacePhase = this.race.phase;
 
       if (this.race.phase !== 'countdown') this.simulation.update(dt);
+      // Drift rubber: lay twin skid marks while sliding, fade out over a minute.
+      // Engine voices: player car + nearest traffic, skid screech while sliding.
+      {
+        const sm = this.simulation;
+        const spec = VEHICLES[sm.vehicleKind];
+        const sliding = sm.driving && sm.skidding && Math.abs(sm.car.speed) > 3;
+        this.skids.update({
+          active: sm.phase === 'playing' && sliding,
+          x: sm.car.x, z: sm.car.z, yaw: sm.car.yaw,
+          slip: Math.abs(sm.lateralSpeed), time: sm.time,
+          rearOff: spec.length * 0.32, trackHalf: spec.width / 2 - 0.03,
+        });
+        const live = sm.phase === 'playing' && !sm.paused;
+        this.vehicleAudio.updatePlayer({
+          kind: sm.vehicleKind, speed: sm.car.speed, topSpeed: spec.topSpeed,
+          load: Math.max(0, Math.min(1, sm.acceleration / 8)),
+          audible: live && sm.driving,
+        });
+        // Surrounding traffic stays silent — player engine only.
+        this.vehicleAudio.updateTraffic([], sm.driving ? sm.car.x : sm.x, sm.driving ? sm.car.z : sm.z);
+        this.vehicleAudio.setSkid(live && sliding, Math.min(1, Math.abs(sm.lateralSpeed) / 6 + 0.3));
+      }
       this.hudTime += dt;
       if (this.hudTime >= 0.1) { this.hudTime = 0; this.emit(); }
     }, this.render);
@@ -733,11 +762,21 @@ export class WorldEngine {
   cycleVehicle(): void { if (this.race.phase !== 'idle') return; this.simulation.cycleVehicle(); this.emit(); }
   interact(): void { if (this.race.phase === 'countdown' || this.race.phase === 'racing') return; this.simulation.interact(); this.emit(); }
   waypoint(id: string): void { if (PLACES.some(p => p.id === id)) { this.simulation.waypoint = id; this.emit(); } }
-  input(action: WorldAction, down: boolean, source: string): void { if (!this.suspended || !down) this.simulation.setInput(action, down, source); }
+  input(action: WorldAction, down: boolean, source: string): void {
+    if (action === 'horn') { if (down) this.honk(); return; }
+    if (!this.suspended || !down) this.simulation.setInput(action, down, source);
+  }
+  /** Horn for the driven car: polite meep, air horn for rigs. */
+  honk(): void {
+    const sm = this.simulation;
+    if (!sm.driving || sm.phase !== 'playing') return;
+    const category = VEHICLES[sm.vehicleKind].category;
+    horn(category === 'truck' || category === 'bus' || category === 'van' || category === 'service');
+  }
   joystick(x: number, y: number): void { if (!this.suspended) this.simulation.setStick(x, y); }
   look(dx: number, dy: number): void { if (!this.suspended) this.simulation.look(dx, dy); }
   clearInput(): void { this.simulation.clearInput(); }
-  setSuspended(value: boolean): void { this.suspended = value; this.clearInput(); if (value) this.loop.stop(); else this.loop.start(); }
+  setSuspended(value: boolean): void { this.suspended = value; this.clearInput(); this.vehicleAudio.setSuspended(value); if (value) this.loop.stop(); else this.loop.start(); }
   setTheme(theme: Theme): void {
     const mats = this.kit.materials;
     if (theme === 'color') {
@@ -974,7 +1013,7 @@ export class WorldEngine {
       this.avatar.group.visible = false;
     }
     // Camera kick on fresh impacts.
-    if (sim.impact && sim.impact.at !== this.lastImpactAt) { this.lastImpactAt = sim.impact.at; this.shake = Math.min(1, sim.impact.speed / 40 + 0.35); }
+    if (sim.impact && sim.impact.at !== this.lastImpactAt) { this.lastImpactAt = sim.impact.at; this.shake = Math.min(1, sim.impact.speed / 40 + 0.35); crashThud(sim.impact.speed); }
     this.shake *= 0.9;
     const shakeX = this.shake * Math.sin(sim.time * 70) * 0.35, shakeY = this.shake * Math.cos(sim.time * 55) * 0.25;
     const waypoint = PLACES.find(p => p.id === sim.waypoint);
@@ -1050,6 +1089,7 @@ export class WorldEngine {
     this.scene.traverse(object => { if (object instanceof THREE.InstancedMesh) object.dispose(); });
     this.marker.geometry.dispose(); (this.marker.material as THREE.Material).dispose();
     this.nameTexture.dispose(); (this.nameTag.material as THREE.Material).dispose();
+    this.skids.dispose(); this.vehicleAudio.dispose();
     this.sun.shadow.dispose(); this.kit.dispose(); this.renderer.dispose();
     this.scene.clear();
   }

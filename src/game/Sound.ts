@@ -92,3 +92,48 @@ export function countdownBeep(kind: 'red' | 'green'): void {
   if (kind === 'red') blip(440, 0.12, 0.16, 'square');
   else blip(880, 0.28, 0.22, 'square');
 }
+
+export function crashThud(speedKmh = 0): void {
+  const ac = audio(); if (!ac) return;
+  const now = ac.currentTime;
+  const vol = Math.min(0.5, 0.16 + speedKmh / 110);
+  // Low impact thump, pitch dropping as the chassis absorbs it.
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(120, now);
+  o.frequency.exponentialRampToValueAtTime(34, now + 0.25);
+  g.gain.setValueAtTime(vol, now);
+  g.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+  o.connect(g).connect(ac.destination);
+  o.start(now); o.stop(now + 0.3);
+  // Metal crunch: short filtered noise burst.
+  const dur = 0.2;
+  const buf = ac.createBuffer(1, Math.floor(ac.sampleRate * dur), ac.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / data.length);
+  const noise = ac.createBufferSource(); noise.buffer = buf;
+  const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 900;
+  const ng = ac.createGain();
+  ng.gain.setValueAtTime(vol * 0.7, now);
+  ng.gain.exponentialRampToValueAtTime(0.001, now + dur);
+  noise.connect(lp).connect(ng).connect(ac.destination);
+  noise.start(now); noise.stop(now + dur);
+}
+
+/** Dual-tone horn: polite meep for cars, air horn for rigs. */
+export function horn(airHorn = false): void {
+  const ac = audio(); if (!ac) return;
+  const now = ac.currentTime;
+  const dur = airHorn ? 0.55 : 0.28;
+  const freqs = airHorn ? [392, 494] : [400, 505];
+  for (const f of freqs) {
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = airHorn ? 'sawtooth' : 'triangle';
+    o.frequency.value = f;
+    g.gain.setValueAtTime(airHorn ? 0.07 : 0.11, now);
+    g.gain.setValueAtTime(airHorn ? 0.07 : 0.11, now + dur - 0.05);
+    g.gain.exponentialRampToValueAtTime(0.001, now + dur);
+    o.connect(g).connect(ac.destination);
+    o.start(now); o.stop(now + dur);
+  }
+}

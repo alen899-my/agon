@@ -4,7 +4,7 @@ import { WorldEngine, type QualityLevel } from '../world/WorldEngine';
 import type { Theme } from '../game/State';
 import type { WorldAction, WorldSnapshot } from '../world/Simulation';
 
-const KEYS: Record<string, WorldAction> = { KeyW: 'forward', KeyS: 'back', KeyA: 'left', KeyD: 'right', ArrowUp: 'forward', ArrowDown: 'back', ArrowLeft: 'left', ArrowRight: 'right', KeyQ: 'turnLeft', KeyC: 'turnRight', ShiftLeft: 'sprint', ShiftRight: 'sprint', Space: 'jump', KeyZ: 'signalLeft', KeyX: 'signalRight' };
+const KEYS: Record<string, WorldAction> = { KeyW: 'forward', KeyS: 'back', KeyA: 'left', KeyD: 'right', ArrowUp: 'forward', ArrowDown: 'back', ArrowLeft: 'left', ArrowRight: 'right', KeyQ: 'turnLeft', KeyC: 'turnRight', ShiftLeft: 'sprint', ShiftRight: 'sprint', Space: 'jump', KeyZ: 'signalLeft', KeyX: 'signalRight', KeyH: 'horn' };
 interface Props { engineRef: MutableRefObject<WorldEngine | null>; onSnapshot: (s: WorldSnapshot) => void; onMap: () => void; theme: Theme; quality: QualityLevel; portrait: boolean; blocked: boolean; onDismissOverlay: () => void; lookSettings: LookSettings; lookEnabled: boolean }
 
 export function WorldViewport({ engineRef, onSnapshot, onMap, theme, quality, portrait, blocked, onDismissOverlay, lookSettings, lookEnabled }: Props) {

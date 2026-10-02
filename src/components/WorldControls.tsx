@@ -65,7 +65,13 @@ export function WorldControls({ disabled, driving, speed, onStick, onInput }: Pr
   };
   if (driving) return <div className={`world-controls driving-controls ${disabled ? 'inactive' : ''}`}>
     <div className="drive-steering">{driveButton('left', '◀', 'LEFT', 'Steer left')}{driveButton('right', '▶', 'RIGHT', 'Steer right')}</div>
-    <div className="drive-pedals">{driveButton('back', '▼', 'BRAKE', 'Brake')}{driveButton('forward', '▲', 'GAS', 'Gas')}</div>
+    <div className="drive-pedals">{driveButton('back', '▼', 'BRAKE', 'Brake')}{driveButton('forward', '▲', 'GAS', 'Gas')}
+      <button className="drive-pad" disabled={disabled} aria-label="Honk horn"
+        onContextMenu={event => event.preventDefault()}
+        onPointerDown={event => { if (!disabled) { event.preventDefault(); onInput('horn', true, `pad:${event.pointerId}`); } }}
+        onPointerUp={event => onInput('horn', false, `pad:${event.pointerId}`)} onPointerCancel={event => onInput('horn', false, `pad:${event.pointerId}`)}>
+        <span className="drive-arrow" aria-hidden="true">🔊</span><small>HORN</small></button>
+    </div>
   </div>;
   return <div className={`world-controls ${disabled ? 'inactive' : ''}`}>
     <div className="stick-wrap"><div className="joystick" aria-label="Movement joystick" role="group"
