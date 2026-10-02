@@ -158,7 +158,7 @@ interface Model {
   wheels: Record<'-1' | '1', Map<string, THREE.BufferGeometry>>;
   wheelPos: { x: number; z: number; front: boolean }[];
   WR: number; style: WheelStyle;
-  eye: THREE.Vector3; steerPos: THREE.Vector3;
+  eye: THREE.Vector3; steerPos: THREE.Vector3; steerTilt: number;
   doors: { x: number; y: number; z: number; dl: number; dh: number }[];
   dispose: () => void;
 }
@@ -242,17 +242,35 @@ function buildModel(kit: KitLike, kind: VehicleKind): Model {
     bx(t.contrastRoof ? 'white' : 'paint', 0, roofY - 0.025, roofMid, W * 0.9, 0.09, roofLen + 0.14);
     const topSill = Math.max(cowlF, cowlR);
     for (const s of [-1, 1]) {
-      const px = s * (W * 0.44 + 0.015);
-      bar('paint', px, zf, cowlF, topF, roofY - 0.03, 0.09);
-      bar('paint', px, zr, cowlR, topR, roofY - 0.03, 0.1);
-      if (spec.category !== 'bus' && glen > 1.9 && sil.sill < 0.25) bx('ink', px, (topSill + roofY) / 2, zf + glen * 0.5, 0.07, roofY - topSill, 0.09);
+      const px = s * (W * 0.46 + 0.01);
+      bar('paint', px, zf, cowlF, topF, roofY - 0.03, 0.07);
+      bar('paint', px, zr, cowlR, topR, roofY - 0.03, 0.075);
+      if (spec.category !== 'bus' && glen > 1.9 && sil.sill < 0.25) bx('ink', px, (topSill + roofY) / 2, zf + glen * 0.5, 0.06, roofY - topSill, 0.08);
+    }
+    // front windshield: light panel proud of the dark cabin glass (sides/rear stay dark)
+    {
+      const sDy = (roofY - 0.03) - (cowlF - 0.02), sDz = Math.max(0.05, topF - zf);
+      const sLen = Math.hypot(sDy, sDz);
+      const offZ = -0.02 * (sDy / sLen), offY = 0.02 * (sDz / sLen);
+      P.add('windshield', B, 0, (cowlF + roofY) / 2 + offY, (zf + topF) / 2 + offZ, W * 0.8, 0.03, sLen + 0.06, Math.atan2(-sDy, sDz));
+    }
+    // windshield wipers parked at the glass base (ink role = stays visible in cockpit view)
+    {
+      const wDy = roofY - cowlF, wDz = Math.max(0.08, topF - zf);
+      const wRx = -Math.atan2(wDy, wDz);
+      for (const s of [-1, 1]) {
+        P.add('ink', B, s * W * 0.19, cowlF + 0.055, zf + 0.16, 0.035, 0.022, 0.62, wRx, s * 0.22, 0);
+        P.add('ink', B, s * W * 0.05, cowlF + 0.035, zf + 0.09, 0.028, 0.02, 0.3, wRx, s * 0.12, 0);
+      }
     }
     if (spec.category === 'bus' || kind === 'van' || kind === 'minibus' || kind === 'shuttle' || kind === 'camper') {
       for (let z = zf + 1.1; z < zr - 0.6; z += 1.0) for (const s of [-1, 1]) bx('ink', s * (W * 0.44 + 0.015), (cowlF + roofY) / 2, z, 0.07, roofY - cowlF, 0.07);
     }
   } else {
-    bar('glass', 0, zf, cowlF, zf + 0.42, cowlF + 0.3, W * 0.84, 0.03);
+    bar('windshield', 0, zf, cowlF, zf + 0.42, cowlF + 0.3, W * 0.84, 0.03);
     for (const s of [-1, 1]) bar('metal', s * (W * 0.42), zf, cowlF, zf + 0.42, cowlF + 0.3, 0.05);
+    // short wipers on the low roadster screen
+    for (const s of [-1, 1]) P.add('ink', B, s * W * 0.18, cowlF + 0.04, zf + 0.1, 0.03, 0.02, 0.4, -0.62, s * 0.2, 0);
     ink(0, (cowlF + cowlR) / 2 + 0.02, (zf + zr) / 2 + 0.1, W - 0.45, 0.04, glen - 0.3);
     for (const s of [-1, 1]) {
       bx('seat', s * 0.4, (cowlF + cowlR) / 2 + 0.1, (zf + zr) / 2 + 0.25, 0.5, 0.12, 0.5);
@@ -260,16 +278,57 @@ function buildModel(kit: KitLike, kind: VehicleKind): Model {
     }
   }
 
-  // ---- cockpit ----
+  // ---- cockpit: industry-standard interior (dash, cluster, console, seats, mirror) ----
   const tallCab = H > 1.6 || kind === 'bus' || kind === 'fire' || kind === 'boxTruck';
-  const eye = new THREE.Vector3(-0.36, belt + H * 0.65 + (tallCab ? 0.5 : 0), zf + 0.7);
+  const driverX = kind === 'buggy' ? 0 : -0.36; // LHD, centered for buggy
+  const dashY = cowlF - 0.02;
+  const seatY = G + 0.32;
+  const eye = new THREE.Vector3(driverX, dashY + 0.55 + (tallCab ? 0.35 : 0), zf + 0.62);
+  if (eye.y > roofY - 0.22) eye.y = roofY - 0.22; // never clip the roof
+  // floor pan + center console tunnel
+  ink(0, G + 0.18, (zf + zr) / 2, W - 0.5, 0.06, glen);
+  ink(0, seatY - 0.06, eye.z - 0.02, 0.32, 0.26, 0.95);
+  ink(0, seatY + 0.1, eye.z - 0.15, 0.34, 0.06, 0.5); // armrest
+  // dashboard: full-width pad + driver binnacle + dark cluster + center stack
+  ink(0, dashY, zf + 0.08, W - 0.25, 0.15, 0.36);
+  ink(driverX, dashY + 0.1, zf + 0.16, 0.42, 0.13, 0.26); // binnacle hump
+  ink(driverX, dashY + 0.13, zf + 0.28, 0.34, 0.09, 0.03); // cluster face (faces driver)
+  ink(0.28, dashY + 0.02, zf + 0.24, 0.36, 0.16, 0.04); // center stack
+  // front seats: cushion + back + headrest (both sides)
   for (const s of [-1, 1]) {
-    ink(s * 0.44, belt + 0.04, eye.z + 0.15, 0.62, 0.14, 0.65);
-    const bh = Math.min(0.55, H * 0.7);
-    ink(s * 0.44, belt + 0.1 + bh / 2, eye.z + 0.55, 0.55, bh, 0.12);
+    bx('seat', s * 0.44, seatY, eye.z + 0.28, 0.55, 0.13, 0.55);
+    bx('seat', s * 0.44, seatY + 0.32, eye.z + 0.55, 0.52, 0.55, 0.13);
+    bx('seat', s * 0.44, seatY + 0.68, eye.z + 0.57, 0.28, 0.17, 0.1);
   }
-  ink(0, Math.max(belt - 0.02, eye.y - 0.55), zf + 0.1, W - 0.3, 0.12, 0.3);
-  const steerPos = new THREE.Vector3(-0.36, eye.y - 0.25, eye.z - 0.45);
+  // rear bench for longer cabins / extra rows for buses
+  if (spec.category === 'bus') {
+    for (let r = 0; r < 3; r++) {
+      const bz = eye.z + 1.5 + r * 0.85;
+      if (bz > zr - 0.3) break;
+      bx('seat', 0, seatY, bz, W - 0.6, 0.12, 0.45);
+      bx('seat', 0, seatY + 0.3, bz + 0.26, W - 0.6, 0.5, 0.12);
+    }
+  } else if (glen > 2.4) {
+    bx('seat', 0, seatY, eye.z + 1.15, W - 0.6, 0.12, 0.5);
+    bx('seat', 0, seatY + 0.3, eye.z + 1.4, W - 0.6, 0.5, 0.12);
+  }
+  // windshield header + rear-view mirror (visible in cockpit, anchors the view)
+  ink(0, roofY - 0.08, topF + 0.06, W * 0.8, 0.07, 0.1);
+  ink(0, roofY - 0.16, topF + 0.1, 0.03, 0.09, 0.03); // mirror stalk
+  ink(0, roofY - 0.24, topF + 0.12, 0.36, 0.11, 0.03); // mirror
+  // steering column + tilted wheel, clamped behind the windshield plane at wheel height
+  // (raked glass leans back over the cabin, so a fixed eye offset pokes the rim through it)
+  const steerY = openTop ? dashY + 0.2 : dashY + 0.28;
+  const gTopY = openTop ? cowlF + 0.3 : roofY;
+  const gTopZ = openTop ? zf + 0.42 : topF;
+  const gH = Math.max(0.2, gTopY - cowlF);
+  const glassZatWheel = zf + Math.min(1, Math.max(0, (steerY - cowlF) / gH)) * (gTopZ - zf);
+  let steerZ = eye.z - 0.32;
+  if (steerZ < glassZatWheel + 0.12) steerZ = glassZatWheel + 0.12; // rim radius + clearance
+  steerZ = Math.min(steerZ, eye.z - 0.2); // never jam into the driver
+  const steerPos = new THREE.Vector3(driverX, steerY, steerZ);
+  bar('ink', driverX, zf + 0.14, dashY + 0.02, steerPos.z, steerPos.y - 0.04, 0.055);
+  const steerTilt = -0.42;
 
   // ---- fascia ----
   const faceTop = hoodY - sil.sn;
@@ -493,7 +552,7 @@ function buildModel(kit: KitLike, kind: VehicleKind): Model {
 
   const parts = P.build();
   const model: Model = {
-    parts, wheels, wheelPos, WR, style, eye, steerPos, doors,
+    parts, wheels, wheelPos, WR, style, eye, steerPos, steerTilt, doors,
     dispose: () => {
       parts.forEach(g => g.dispose());
       (['-1', '1'] as const).forEach(k => wheels[k].forEach(g => g.dispose()));
@@ -513,6 +572,7 @@ export function buildVehicle(kit: KitLike, kind: VehicleKind = 'car', variant = 
   const color = pickVehiclePaint(kind, variant);
   const paintMat = cached(kit, `paint:${color}`, () => new THREE.MeshPhysicalMaterial({ color, roughness: 0.32, metalness: 0.3, clearcoat: 0.7, clearcoatRoughness: 0.2 }));
   const glassMat = cached(kit, 'glass', () => new THREE.MeshStandardMaterial({ color: 0x14202b, roughness: 0.06, metalness: 0.7 }));
+  const shieldMat = cached(kit, 'glass-windshield', () => new THREE.MeshStandardMaterial({ color: 0xbdd5e4, roughness: 0.05, metalness: 0.1, transparent: true, opacity: 0.42 }));
   const lamp = (k: string, color: number, emissive: number) => cached(kit, `lamp:${k}`, () => new THREE.MeshStandardMaterial({ color, emissive, emissiveIntensity: 1.2 }));
   const crossMat = cached(kit, 'cross', () => new THREE.MeshStandardMaterial({ color: 0xd00f0f, roughness: 0.5 }));
   const rimMat = (dark: boolean) => cached(kit, `rim:${dark}`, () => new THREE.MeshStandardMaterial({ color: dark ? 0x1e2126 : 0xb9bec6, roughness: 0.35, metalness: 0.8 }));
@@ -525,22 +585,27 @@ export function buildVehicle(kit: KitLike, kind: VehicleKind = 'car', variant = 
   kit.extra.push(brakeMat, headMat, blinkerMat);
 
   const roleMat: Record<string, THREE.Material> = {
-    paint: paintMat, ink: M.ink, metal: M.metal, white: M.white, glass: glassMat, seat: M.wall2,
+    paint: paintMat, ink: M.ink, metal: M.metal, white: M.white, glass: glassMat, windshield: shieldMat, seat: M.wall2,
     accent: lum > 0.55 ? M.ink : M.white,
     red: lamp('red', 0xff2020, 0xff0000), blue: lamp('blue', 0x2040ff, 0x0022ff), amber: lamp('amber', 0xffa500, 0xff8800),
     cross: crossMat, head: headMat, brake: brakeMat, blink: blinkerMat,
   };
   let glazing!: THREE.Mesh;
+  let shield!: THREE.Mesh;
   model.parts.forEach((geo, role) => {
     const mesh = new THREE.Mesh(geo, roleMat[role] ?? M.ink);
-    mesh.castShadow = role !== 'glass'; mesh.receiveShadow = true;
+    mesh.castShadow = role !== 'glass' && role !== 'windshield'; mesh.receiveShadow = true;
     body.add(mesh);
     if (role === 'glass') glazing = mesh;
+    if (role === 'windshield') shield = mesh;
   });
-  if (!glazing) { glazing = new THREE.Mesh(new THREE.BufferGeometry(), glassMat); glazing.visible = false; body.add(glazing); }
+  // windshield rides with the cabin glass so cockpit view hides both together
+  if (shield && glazing && shield !== glazing) { body.remove(shield); glazing.add(shield); }
+  if (!glazing) { glazing = shield ?? new THREE.Mesh(new THREE.BufferGeometry(), glassMat); if (!glazing.parent) body.add(glazing); }
+  if (glazing && !glazing.parent) body.add(glazing);
 
   // steering wheel
-  const steeringWheel = new THREE.Group(); steeringWheel.position.copy(model.steerPos); steeringWheel.scale.setScalar(0.65); body.add(steeringWheel);
+  const steeringWheel = new THREE.Group(); steeringWheel.position.copy(model.steerPos); steeringWheel.scale.setScalar(0.65); steeringWheel.rotation.x = model.steerTilt; body.add(steeringWheel);
   const rimGeometry = cached(kit, 'steer-rim', () => new THREE.TorusGeometry(0.22, 0.027, 6, 16));
   steeringWheel.add(new THREE.Mesh(rimGeometry, M.ink));
   for (const [x, y, sx, sy] of [[0, 0, 0.4, 0.035], [0, -0.1, 0.035, 0.2]] as const) {
