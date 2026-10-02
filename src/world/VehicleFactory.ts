@@ -26,10 +26,12 @@ export interface VehicleParts {
   group: THREE.Group; body: THREE.Group; glazing: THREE.Mesh; steeringWheel: THREE.Group; eye: THREE.Vector3;
   spins: THREE.Object3D[]; frontSteer: THREE.Group[];
   doors: THREE.Group[];
+  /** Animated wiper sweep pivots (one per blade). */
+  wipers: THREE.Group[];
   brakeMat: THREE.MeshStandardMaterial; headMat: THREE.MeshStandardMaterial;
   blinkerMat: THREE.MeshStandardMaterial;
   spin: number;
-  update: (speed: number, steer: number, dt: number, braking: boolean, bodyTilt?: { pitch: number; roll: number }, blinker?: number, time?: number) => void;
+  update: (speed: number, steer: number, dt: number, braking: boolean, bodyTilt?: { pitch: number; roll: number }, blinker?: number, time?: number, wiper?: number | null) => void;
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -169,6 +171,7 @@ export function wheelDims(kind: VehicleKind, spec: VehicleSpec): { WR: number; t
   return { WR, tireW, rimR };
 }
 
+export interface WiperAnchor { x: number; y: number; z: number; tilt: number; rest: number; dir: number }
 interface Model {
   parts: Map<string, THREE.BufferGeometry>;
   wheels: Record<'-1' | '1', Map<string, THREE.BufferGeometry>>;
@@ -176,7 +179,22 @@ interface Model {
   WR: number; style: WheelStyle;
   eye: THREE.Vector3; steerPos: THREE.Vector3; steerTilt: number;
   doors: { x: number; y: number; z: number; dl: number; dh: number }[];
+  wiperAnchors: WiperAnchor[];
   dispose: () => void;
+}
+
+/**
+ * Windshield wiper sweep angle (radians, 0 = parked) for a world clock.
+ * Smooth out-and-back sine; intermittent dwell at low intensity, continuous at 4–5.
+ */
+export function wiperAngle(time: number, level: number): number {
+  const fast = level >= 4;
+  const sweepT = level >= 5 ? 0.9 : 1.2;
+  const pause = fast ? 0 : level === 3 ? 1.5 : level === 2 ? 3 : 5;
+  const T = sweepT + pause;
+  const u = (((time % T) + T) % T);
+  if (u >= sweepT) return 0;
+  return 2.0 * Math.sin(Math.PI * (u / sweepT));
 }
 
 const caches = new WeakMap<KitLike, Map<string, { dispose: () => void }>>();
@@ -213,6 +231,7 @@ function buildModel(kit: KitLike, kind: VehicleKind): Model {
   const topF = zf + a, topR = zr - b;
   const roofMid = (topF + topR) / 2, roofLen = Math.max(0.2, topR - topF);
   const t: Trim = TRIM[kind] ?? {};
+  const wiperAnchors: WiperAnchor[] = [];
 
   const bx = (role: string, x: number, y: number, z: number, sx: number, sy: number, sz: number) => P.add(role, B, x, y, z, sx, sy, sz);
   const paint = (x: number, y: number, z: number, sx: number, sy: number, sz: number) => bx('paint', x, y, z, sx, sy, sz);
@@ -270,13 +289,15 @@ function buildModel(kit: KitLike, kind: VehicleKind): Model {
       const offZ = -0.02 * (sDy / sLen), offY = 0.02 * (sDz / sLen);
       P.add('windshield', B, 0, (cowlF + roofY) / 2 + offY, (zf + topF) / 2 + offZ, W * 0.8, 0.03, sLen + 0.06, Math.atan2(-sDy, sDz));
     }
-    // windshield wipers parked at the glass base (ink role = stays visible in cockpit view)
+    // Windshield wiper anchors (animated per-instance pivots built below, not merged).
     {
       const wDy = roofY - cowlF, wDz = Math.max(0.08, topF - zf);
-      const wRx = -Math.atan2(wDy, wDz);
-      for (const s of [-1, 1]) {
-        P.add('ink', B, s * W * 0.19, cowlF + 0.055, zf + 0.16, 0.035, 0.022, 0.62, wRx, s * 0.22, 0);
-        P.add('ink', B, s * W * 0.05, cowlF + 0.035, zf + 0.09, 0.028, 0.02, 0.3, wRx, s * 0.12, 0);
+      const tilt = -Math.atan2(wDy, wDz) * 0.8;
+      for (const s of [-1, 1] as const) {
+        wiperAnchors.push({
+          x: s * W * 0.19, y: cowlF + 0.06, z: zf + 0.18, tilt,
+          rest: Math.PI + 0.12, dir: 1, // tandem: both blades park left, sweep together
+        });
       }
     }
     if (spec.category === 'bus' || kind === 'van' || kind === 'minibus' || kind === 'shuttle' || kind === 'camper') {
@@ -285,8 +306,13 @@ function buildModel(kit: KitLike, kind: VehicleKind): Model {
   } else {
     bar('windshield', 0, zf, cowlF, zf + 0.42, cowlF + 0.3, W * 0.84, 0.03);
     for (const s of [-1, 1]) bar('metal', s * (W * 0.42), zf, cowlF, zf + 0.42, cowlF + 0.3, 0.05);
-    // short wipers on the low roadster screen
-    for (const s of [-1, 1]) P.add('ink', B, s * W * 0.18, cowlF + 0.04, zf + 0.1, 0.03, 0.02, 0.4, -0.62, s * 0.2, 0);
+    // short wipers on the low roadster screen (animated pivots, not merged)
+    for (const s of [-1, 1] as const) {
+      wiperAnchors.push({
+        x: s * W * 0.18, y: cowlF + 0.05, z: zf + 0.12, tilt: -0.5,
+        rest: s < 0 ? Math.PI + 0.12 : -0.12, dir: s < 0 ? 1 : -1,
+      });
+    }
     ink(0, (cowlF + cowlR) / 2 + 0.02, (zf + zr) / 2 + 0.1, W - 0.45, 0.04, glen - 0.3);
     for (const s of [-1, 1]) {
       bx('seat', s * 0.4, (cowlF + cowlR) / 2 + 0.1, (zf + zr) / 2 + 0.25, 0.5, 0.12, 0.5);
@@ -299,7 +325,9 @@ function buildModel(kit: KitLike, kind: VehicleKind): Model {
   const driverX = kind === 'buggy' ? 0 : -0.36; // LHD, centered for buggy
   const dashY = cowlF - 0.02;
   const seatY = G + 0.32;
-  const eye = new THREE.Vector3(driverX, dashY + 0.55 + (tallCab ? 0.35 : 0), zf + 0.62);
+  // Cockpit eye sits low and rearward so the wheel lands ~25° below view
+  // center (inside the 30° half-FOV) instead of vanishing under the frame.
+  const eye = new THREE.Vector3(driverX, dashY + 0.44 + (tallCab ? 0.15 : 0), zf + 0.75);
   if (eye.y > roofY - 0.22) eye.y = roofY - 0.22; // never clip the roof
   // floor pan + center console tunnel
   ink(0, G + 0.18, (zf + zr) / 2, W - 0.5, 0.06, glen);
@@ -334,14 +362,14 @@ function buildModel(kit: KitLike, kind: VehicleKind): Model {
   ink(0, roofY - 0.24, topF + 0.12, 0.36, 0.11, 0.03); // mirror
   // steering column + tilted wheel, clamped behind the windshield plane at wheel height
   // (raked glass leans back over the cabin, so a fixed eye offset pokes the rim through it)
-  const steerY = openTop ? dashY + 0.2 : dashY + 0.28;
+  const steerY = tallCab ? dashY + 0.45 : openTop ? dashY + 0.32 : dashY + 0.3;
   const gTopY = openTop ? cowlF + 0.3 : roofY;
   const gTopZ = openTop ? zf + 0.42 : topF;
   const gH = Math.max(0.2, gTopY - cowlF);
   const glassZatWheel = zf + Math.min(1, Math.max(0, (steerY - cowlF) / gH)) * (gTopZ - zf);
-  let steerZ = eye.z - 0.32;
-  if (steerZ < glassZatWheel + 0.12) steerZ = glassZatWheel + 0.12; // rim radius + clearance
-  steerZ = Math.min(steerZ, eye.z - 0.2); // never jam into the driver
+  let steerZ = eye.z - 0.28;
+  if (steerZ < glassZatWheel + 0.1) steerZ = glassZatWheel + 0.1; // rim radius + clearance
+  steerZ = Math.min(steerZ, eye.z - 0.22); // never jam into the driver
   const steerPos = new THREE.Vector3(driverX, steerY, steerZ);
   bar('ink', driverX, zf + 0.14, dashY + 0.02, steerPos.z, steerPos.y - 0.04, 0.055);
   const steerTilt = -0.42;
@@ -581,7 +609,7 @@ function buildModel(kit: KitLike, kind: VehicleKind): Model {
 
   const parts = P.build();
   const model: Model = {
-    parts, wheels, wheelPos, WR, style, eye, steerPos, steerTilt, doors,
+    parts, wheels, wheelPos, WR, style, eye, steerPos, steerTilt, doors, wiperAnchors,
     dispose: () => {
       parts.forEach(g => g.dispose());
       (['-1', '1'] as const).forEach(k => wheels[k].forEach(g => g.dispose()));
@@ -650,6 +678,21 @@ export function buildVehicle(kit: KitLike, kind: VehicleKind = 'car', variant = 
     doors.push(pivot);
   }
 
+  // wipers: per-instance sweep pivots hugging the windshield base
+  const wipers: THREE.Group[] = [];
+  for (const a of model.wiperAnchors) {
+    const sweep = new THREE.Group(); sweep.position.set(a.x, a.y, a.z); body.add(sweep);
+    const tiltG = new THREE.Group(); tiltG.rotation.x = a.tilt; sweep.add(tiltG);
+    const bladeLen = Math.min(0.62, VEHICLES[kind].width * 0.32);
+    const blade = new THREE.Mesh(kit.geometry.box, M.ink);
+    blade.scale.set(bladeLen, 0.022, 0.04); blade.position.x = bladeLen / 2;
+    blade.castShadow = false;
+    tiltG.add(blade);
+    sweep.userData.rest = a.rest; sweep.userData.dir = a.dir;
+    sweep.rotation.y = a.rest;
+    wipers.push(sweep);
+  }
+
   // wheels
   const spins: THREE.Object3D[] = []; const frontSteer: THREE.Group[] = [];
   const dark = model.style === 'sport' || model.style === 'offroad';
@@ -667,12 +710,14 @@ export function buildVehicle(kit: KitLike, kind: VehicleKind = 'car', variant = 
   }
 
   const WR = model.WR;
-  const vehicle: VehicleParts = { group, body, glazing, steeringWheel, eye: model.eye.clone(), spins, frontSteer, doors, brakeMat, headMat, blinkerMat, spin: 0,
-    update: (speed, steer, dt, braking, bodyTilt, blinker = 0, time = 0) => {
+  const vehicle: VehicleParts = { group, body, glazing, steeringWheel, eye: model.eye.clone(), spins, frontSteer, doors, wipers, brakeMat, headMat, blinkerMat, spin: 0,
+    update: (speed, steer, dt, braking, bodyTilt, blinker = 0, time = 0, wiper = 0) => {
       vehicle.spin += (speed * dt) / WR;
       for (const s of spins) s.rotation.x = vehicle.spin;
       for (const f of frontSteer) f.rotation.y = -steer * 0.55 / (1 + Math.abs(speed) / 24);
       steeringWheel.rotation.z = -steer * 2.4;
+      const sweep = wiper ?? 0;
+      for (const w of wipers) w.rotation.y = (w.userData.rest as number) + sweep * (w.userData.dir as number);
       brakeMat.emissiveIntensity = braking ? 2.2 : 0.25;
       const on = blinker !== 0 && (time % 0.62) < 0.31; // 0 off, 1 left, 2 right, 3 hazard
       blinkerMat.emissiveIntensity = on ? 2.4 : 0.15;

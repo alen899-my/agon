@@ -117,6 +117,29 @@ const PARTICLE_COUNTS: Record<string, number> = {
   low: 300, balanced: 650, high: 1100, ultra: 1600,
 };
 
+/** 5-step intensity: 1 = light, 3 = normal (today's look), 5 = extreme. */
+export type IntensityLevel = 1 | 2 | 3 | 4 | 5;
+/** Fraction of the over-allocated buffer actually drawn per level. */
+const INTENSITY_FRAC: Record<IntensityLevel, number> = { 1: 0.2, 2: 0.35, 3: 0.45, 4: 0.7, 5: 1 };
+const INTENSITY_SPEED: Record<IntensityLevel, number> = { 1: 0.8, 2: 0.9, 3: 1, 4: 1.2, 5: 1.4 };
+const INTENSITY_ALPHA: Record<IntensityLevel, number> = { 1: 0.75, 2: 0.9, 3: 1, 4: 1, 5: 1 };
+/** Buffers are over-allocated so level 5 draws past the old maximum. */
+const INTENSITY_OVERALLOC = 2.2;
+/** Sun + exposure multiplier per level (brightens noon at 4–5, dims at 1–2). */
+export const INTENSITY_SUN: Record<IntensityLevel, number> = { 1: 0.9, 2: 0.95, 3: 1, 4: 1.2, 5: 1.4 };
+/** Rain-loop volume per level. */
+export const INTENSITY_RAIN_VOL: Record<IntensityLevel, number> = { 1: 0.02, 2: 0.035, 3: 0.05, 4: 0.07, 5: 0.1 };
+/** Fog range multipliers: low = crystal clear air, 5 = can't see far. */
+export const INTENSITY_FOG_NEAR: Record<IntensityLevel, number> = { 1: 1.2, 2: 1.1, 3: 1, 4: 0.8, 5: 0.6 };
+export const INTENSITY_FOG_FAR: Record<IntensityLevel, number> = { 1: 1.15, 2: 1.05, 3: 1, 4: 0.75, 5: 0.5 };
+/** Storm gloom: extra exposure dip while raining/snowing at high levels. */
+export const INTENSITY_GLOOM: Record<IntensityLevel, number> = { 1: 1.03, 2: 1.01, 3: 1, 4: 0.94, 5: 0.86 };
+
+export function clampIntensity(n: number): IntensityLevel {
+  const c = Math.max(1, Math.min(5, Math.round(n)));
+  return c as IntensityLevel;
+}
+
 export type QualityLevelLike = 'low' | 'balanced' | 'high' | 'ultra';
 
 /**
@@ -130,6 +153,9 @@ export class WeatherParticles {
   private weather: Weather = 'normal';
   private season: Season = 'spring';
   private count = 0;
+  private intensity: IntensityLevel = 3;
+  /** Particles actually drawn/updated (subset of the over-allocated buffer). */
+  private activeN = 0;
   private boxW = 44; private boxH = 30; private boxD = 44;
   private rainPos: Float32Array = new Float32Array(0);
   private rainVel: Float32Array = new Float32Array(0);
@@ -167,10 +193,38 @@ export class WeatherParticles {
       return;
     }
     this.count = n;
-    this.allocRain(n);
-    this.allocSnow(n);
-    this.allocDrift(n);
+    const over = Math.ceil(n * INTENSITY_OVERALLOC);
+    this.allocRain(over);
+    this.allocSnow(over);
+    this.allocDrift(over);
+    this.applyIntensityRange();
     this.applyVisibility();
+  }
+
+  /** 1 = light … 5 = extreme. Level 3 reproduces the classic look. */
+  setIntensityLevel(level: number): void {
+    const next = clampIntensity(level);
+    if (next === this.intensity && this.activeN > 0) return;
+    this.intensity = next;
+    this.applyIntensityRange();
+  }
+  get intensityLevel(): IntensityLevel { return this.intensity; }
+
+  private applyIntensityRange(): void {
+    const over = Math.ceil(this.count * INTENSITY_OVERALLOC);
+    this.activeN = Math.max(1, Math.floor(over * INTENSITY_FRAC[this.intensity]));
+    if (this.rainLines) {
+      this.rainGeo.setDrawRange(0, this.activeN * 2);
+      (this.rainLines.material as THREE.LineBasicMaterial).opacity = 0.55 * INTENSITY_ALPHA[this.intensity];
+    }
+    if (this.snowPoints) {
+      this.snowGeo.setDrawRange(0, this.activeN);
+      (this.snowPoints.material as THREE.PointsMaterial).opacity = 0.9 * INTENSITY_ALPHA[this.intensity];
+    }
+    if (this.driftPoints) {
+      this.driftGeo.setDrawRange(0, this.activeN);
+      (this.driftPoints.material as THREE.PointsMaterial).opacity = 0.85 * INTENSITY_ALPHA[this.intensity];
+    }
   }
 
   private allocRain(n: number): void {
@@ -264,18 +318,18 @@ export class WeatherParticles {
     // Keep the box centered on the camera (group offset), particles in local space.
     this.group.position.set(cx - this.boxW / 2, 0, cz - this.boxD / 2);
     if (this.weather === 'rain' && this.rainLines) {
-      const p = this.rainPos, n = this.count;
+      const p = this.rainPos, n = this.activeN, spd = INTENSITY_SPEED[this.intensity];
       for (let i = 0; i < n; i++) {
-        let y = p[i * 6 + 1] - this.rainVel[i] * clamped;
+        let y = p[i * 6 + 1] - this.rainVel[i] * spd * clamped;
         if (y < 0) y += this.boxH;
         p[i * 6 + 1] = y;
         p[i * 6 + 4] = y + 0.7;
       }
       this.rainGeo.attributes.position.needsUpdate = true;
     } else if (this.weather === 'snow' && this.snowPoints) {
-      const p = this.snowPos, n = this.count;
+      const p = this.snowPos, n = this.activeN, spd = INTENSITY_SPEED[this.intensity];
       for (let i = 0; i < n; i++) {
-        let y = p[i * 3 + 1] - this.snowVel[i] * clamped;
+        let y = p[i * 3 + 1] - this.snowVel[i] * spd * clamped;
         if (y < 0) y += this.boxH;
         p[i * 3 + 1] = y;
         // Gentle sinusoidal drift (cheap sin per flake, no allocs).
@@ -287,10 +341,10 @@ export class WeatherParticles {
     }
     if (this.driftKind !== 'none' && this.driftPoints) {
       // Petals/leaves: slow fall, wide sway, full-box wrap.
-      const p = this.driftPos, n = this.count;
+      const p = this.driftPos, n = this.activeN, spd = INTENSITY_SPEED[this.intensity];
       const sway = this.driftKind === 'petal' ? 1.4 : 1.0;
       for (let i = 0; i < n; i++) {
-        let y = p[i * 3 + 1] - this.driftVel[i] * clamped;
+        let y = p[i * 3 + 1] - this.driftVel[i] * spd * clamped;
         if (y < 0) y += this.boxH;
         p[i * 3 + 1] = y;
         p[i * 3] += Math.sin(this.time * 0.9 + this.driftPhase[i]) * clamped * sway;

@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type PointerEvent } from 'react';
-import type { WorldAction } from '../world/Simulation';
+import type { WiperMode, WorldAction } from '../world/Simulation';
 
-interface Props { disabled: boolean; driving: boolean; speed: number; onStick: (x: number, y: number) => void; onInput: (action: WorldAction, down: boolean, source: string) => void }
-export function WorldControls({ disabled, driving, speed, onStick, onInput }: Props) {
+interface Props { disabled: boolean; driving: boolean; speed: number; wiperMode: WiperMode; onStick: (x: number, y: number) => void; onInput: (action: WorldAction, down: boolean, source: string) => void; onWipers: () => void }
+export function WorldControls({ disabled, driving, speed, wiperMode, onStick, onInput, onWipers }: Props) {
   const pointer = useRef<number | null>(null); const [stick, setStick] = useState({ x: 0, y: 0 });
   const callbacks = useRef({ onStick, onInput }); callbacks.current = { onStick, onInput };
   const sources = useRef(new Map<string, WorldAction>());
@@ -71,6 +71,10 @@ export function WorldControls({ disabled, driving, speed, onStick, onInput }: Pr
         onPointerDown={event => { if (!disabled) { event.preventDefault(); onInput('horn', true, `pad:${event.pointerId}`); } }}
         onPointerUp={event => onInput('horn', false, `pad:${event.pointerId}`)} onPointerCancel={event => onInput('horn', false, `pad:${event.pointerId}`)}>
         <span className="drive-arrow" aria-hidden="true">🔊</span><small>HORN</small></button>
+      <button className={`drive-pad${wiperMode !== 'auto' ? ' on' : ''}`} disabled={disabled} aria-label={`Wipers ${wiperMode}`}
+        onContextMenu={event => event.preventDefault()}
+        onPointerDown={event => { if (!disabled) { event.preventDefault(); onWipers(); } }}>
+        <span className="drive-arrow" aria-hidden="true">{wiperMode === 'off' ? '🚫' : '💧'}</span><small>WIPER{wiperMode === 'auto' ? '' : ` ${wiperMode.toUpperCase()}`}</small></button>
     </div>
   </div>;
   return <div className={`world-controls ${disabled ? 'inactive' : ''}`}>

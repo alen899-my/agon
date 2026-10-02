@@ -303,6 +303,7 @@ kbd { font: inherit; border: 1px solid var(--line); padding: 2px 4px; border-rad
 .drive-pad small { font-size: 9px; letter-spacing: 1.5px; font-weight: 700; }
 .drive-pad:active { transform: translateY(2px); background: var(--line); }
 .drive-pad:disabled { opacity: .4; }
+.drive-pad.on { outline: 2px solid var(--ink); outline-offset: -2px; }
 .driving-readout { position: absolute; top: 72px; left: 22px; display: grid; gap: 5px; padding: 12px; background: var(--surface); border: 1px solid var(--line); font-size: 11px; }
 .driving-readout button { padding: 7px; cursor: pointer; background: var(--surface); color: inherit; border: 1px solid var(--line); }
 .driving-readout small { font-size: 8px; color: var(--muted); }
@@ -392,6 +393,16 @@ kbd { font: inherit; border: 1px solid var(--line); padding: 2px 4px; border-rad
 .hud-cycle { pointer-events: auto; min-width: 44px; min-height: 44px; flex: 0 0 auto; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font-size: 18px; }
 .hud-cycle:disabled { opacity: .4; }
 .hud-weather { align-self: center; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; font-size: 11px; font-weight: 700; letter-spacing: 1px; white-space: nowrap; }
+/* Storm veil: snow whiteout over the 3D view, scaled by intensity. Rain reads via fog only. */
+.weather-veil { position: absolute; inset: 0; z-index: 4; pointer-events: none; }
+.weather-veil.is-snow {
+  background:
+    radial-gradient(ellipse at 50% 42%, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0.5) 78%, rgba(255, 255, 255, 0.85) 100%);
+  animation: veil-snow 3.2s ease-in-out infinite alternate;
+}
+@keyframes veil-snow { from { filter: brightness(1); } to { filter: brightness(1.08); } }
+/* Cockpit windshield rain: droplets + wiper sweep over the 3D view. */
+.windshield-rain { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 3; pointer-events: none; transition: opacity 0.25s ease; }
 @media (max-width: 640px) {
   .hud-top { top: 8px; left: 8px; gap: 8px; max-width: calc(100% - 16px); }
   .hud-map { width: 60px; height: 60px; border-radius: 8px; }

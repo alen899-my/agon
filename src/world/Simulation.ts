@@ -20,9 +20,11 @@ export interface Ped {
 }
 export interface SnapshotCar { x: number; z: number; yaw: number; speed: number; steer: number; wheelSpin: number; braking: boolean }
 export type PlayMode = 'roam' | 'table' | 'basket';
+/** Wiper control: auto (rain-driven), forced on, or forced off. */
+export type WiperMode = 'auto' | 'on' | 'off';
 export type { Season, Weather };
 export interface WorldSnapshot {
-  phase: 'ready' | 'playing'; paused: boolean; view: View; driving: boolean; weather: Weather; season: Season;
+  phase: 'ready' | 'playing'; paused: boolean; view: View; driving: boolean; weather: Weather; season: Season; wiperMode: WiperMode;
   x: number; z: number; yaw: number; speed: number; distance: number;
   location: string; discovered: string[]; waypoint: string | null; nearbyCar: boolean;
   nearbyVehicleKind: VehicleKind | null; nearbyVehicleLabel: string | null; enterHint: string | null;
@@ -122,6 +124,12 @@ export class Simulation {
   get weatherGrip(): number { return WEATHER_GRIP[this.weather] ?? 1; }
   /** Season (visuals + ambience only; grip stays with the condition). Set by WorldEngine.setSeason. */
   season: Season = 'spring';
+  /** Wiper switch: auto -> on -> off -> auto (T key / touch button). */
+  wiperMode: WiperMode = 'auto';
+  cycleWipers(): WiperMode {
+    this.wiperMode = this.wiperMode === 'auto' ? 'on' : this.wiperMode === 'on' ? 'off' : 'auto';
+    return this.wiperMode;
+  }
   // --- game center: table tennis + basketball modes ---
   mode: PlayMode = 'roam';
   table = new TableTennisSim();
@@ -245,7 +253,7 @@ export class Simulation {
       : !near ? null
       : !near.enterable ? `${VEHICLES[near.kind].name} ${near.reason ?? ''}`.trim()
       : `E — drive ${VEHICLES[near.kind].name}`;
-    return { phase: this.phase, paused: this.paused, view: this.view, driving: this.driving, weather: this.weather, season: this.season,
+    return { phase: this.phase, paused: this.paused, view: this.view, driving: this.driving, weather: this.weather, season: this.season, wiperMode: this.wiperMode,
       x: this.x, z: this.z, yaw: this.yaw, speed: Math.round(Math.abs(this.driving ? this.car.speed : this.pace) * 3.6),
       distance: Math.floor(this.distance), location, discovered: [...this.discovered], waypoint: this.waypoint, nearbyCar: this.nearbyCar,
       nearbyVehicleKind: near?.enterable ? near.kind : null,

@@ -4,7 +4,8 @@ import { RealtimeClient, type RaceDirEntry, type RemoteDot, type RemotePos } fro
 import { GameLoop } from '../game/GameLoop';
 import type { Theme } from '../game/State';
 import { barrelSound, bbSound, countdownBeep, crashThud, crowdCheerSound, horn, startRainLoop, stopRainLoop, ttSound, unlockAudio } from '../game/Sound';
-import { SEASON_PRESETS, WEATHER_PRESETS, WeatherParticles, type Season, type Weather } from './Weather';
+import { INTENSITY_FOG_FAR, INTENSITY_FOG_NEAR, INTENSITY_GLOOM, INTENSITY_RAIN_VOL, INTENSITY_SUN, SEASON_PRESETS, WEATHER_PRESETS, WeatherParticles, clampIntensity, type IntensityLevel, type Season, type Weather } from './Weather';
+import { wiperAngle } from './VehicleFactory';
 import { LAMPS } from './Map';
 import { AssetKit, buildMap, type Stickman, type Vehicle } from './Assets';
 import { BUILDINGS, GAME_CENTER, HOOP, PLACES, RACE_ARENA, RACE_CROWD, RIM, TABLE, seeded } from './Map';
@@ -115,6 +116,7 @@ export class WorldEngine {
   get nightFactor(): number { return this._nightFactor; }
   get currentWeather(): Weather { return this.weather; }
   get currentSeason(): Season { return this.season; }
+  get intensityLevel(): IntensityLevel { return this.intensity; }
   get glowCount(): number { return this.glowSprites.length; }
   /** Arena directory: joinable races in this server (refreshed by server push + request). */
   raceDir: RaceDirEntry[] = [];
@@ -145,6 +147,8 @@ export class WorldEngine {
   private theme: Theme = 'light';
   private weather: Weather = 'normal';
   private season: Season = 'spring';
+  /** 1 = light … 5 = extreme. Scales precip + sun. Default 3 = classic look. */
+  private intensity: IntensityLevel = 3;
   private _nightFactor = 0;
   private precip: WeatherParticles | null = null;
   private readonly glowSprites: THREE.Sprite[] = [];
@@ -694,7 +698,7 @@ export class WorldEngine {
         ghost.vehicle.group.position.set(ghost.x, 0.08, ghost.z);
         ghost.vehicle.group.rotation.y = -ghost.yaw;
         ghost.blinker = r.blinker;
-        ghost.vehicle.update(r.pos.speed, 0, dt, false, undefined, ghost.blinker, sim.time);
+        ghost.vehicle.update(r.pos.speed, 0, dt, false, undefined, ghost.blinker, sim.time, sim.weather === 'rain' ? wiperAngle(sim.time, this.intensity) : 0);
         ghost.tag.visible = sim.view === 'third';
         ghost.tag.position.set(ghost.x, ghost.y + 2.6, ghost.z);
       } else {
@@ -816,13 +820,43 @@ export class WorldEngine {
       this.precip = new WeatherParticles(this.scene);
       this.precip.setQuality(this.quality);
       this.precip.setSeason(this.season);
+      this.precip.setIntensityLevel(this.intensity);
     }
     this.precip.setWeather(w);
     this.precip.snapTo(this.simulation.x, this.simulation.z);
-    if (w === 'rain') startRainLoop(this.theme === 'dark' ? 0.035 : 0.05);
+    if (w === 'rain') startRainLoop(this.rainVolume());
     else stopRainLoop();
     this.applyLook();
     this.emit();
+  }
+  /** 1 = light … 5 = extreme precip + sun. */
+  setIntensityLevel(level: number): void {
+    const next = clampIntensity(level);
+    if (next === this.intensity && this.precip) return;
+    this.intensity = next;
+    this.precip?.setIntensityLevel(next);
+    // Re-loop rain so the patter volume matches the new level.
+    if (this.weather === 'rain') { stopRainLoop(); startRainLoop(this.rainVolume()); }
+    this.applyLook();
+    this.emit();
+  }
+  private rainVolume(): number {
+    const base = INTENSITY_RAIN_VOL[this.intensity];
+    return this.theme === 'dark' ? base * 0.7 : base;
+  }
+  /** Manual wiper switch (T key / touch button): auto -> on -> off -> auto. */
+  cycleWipers(): string {
+    const mode = this.simulation.cycleWipers();
+    this.emit();
+    return mode;
+  }
+  /** Effective blade angle: manual override wins, otherwise auto in rain. */
+  private wiperSweep(offset: number): number {
+    const sim = this.simulation;
+    if (!sim.active) return 0;
+    if (sim.wiperMode === 'off') return 0;
+    if (sim.wiperMode === 'on' || sim.weather === 'rain') return wiperAngle(sim.time + offset, this.intensity);
+    return 0;
   }
   /** Season: foliage/ambience restyle + petal/leaf drift. Grip stays with the condition. */
   setSeason(s: Season): void {
@@ -833,6 +867,7 @@ export class WorldEngine {
       this.precip = new WeatherParticles(this.scene);
       this.precip.setQuality(this.quality);
       this.precip.setWeather(this.weather);
+      this.precip.setIntensityLevel(this.intensity);
     }
     this.precip.setSeason(s);
     this.precip.snapTo(this.simulation.x, this.simulation.z);
@@ -849,7 +884,7 @@ export class WorldEngine {
     const preset = WEATHER_PRESETS[this.weather];
     if (this.theme === 'color') {
       // Real-life palette: asphalt, concrete, brick, glass blue, green trees.
-      mats.road.color.setHex(0x3c4046);
+      mats.road.color.setHex(0x0a0a0a);
       mats.pavement.color.setHex(0xb8b2a4);
       mats.white.color.setHex(0xf7f4ec);
       mats.ink.color.setHex(0x22252a);
@@ -878,10 +913,17 @@ export class WorldEngine {
         if (preset.fogNear > 0) { fogNear = preset.fogNear; fogFar = preset.fogFar; }
         this.sun.color.setHex(preset.sunColor); sunI *= preset.sunIntensity;
         ambI *= preset.ambientIntensity; exposure *= preset.exposure;
-        mats.road.color.setHex(preset.roadTint);
-        mats.road.roughness = preset.roadRoughness;
-        mats.road.metalness = preset.wetGloss * 0.4;
-      } else { mats.road.roughness = 1; mats.road.metalness = 0; }
+        // Rain never repaints the road; only snow blankets it.
+        if (preset.snowBlanket) {
+          mats.road.color.setHex(preset.roadTint);
+          mats.road.roughness = preset.roadRoughness;
+          mats.road.metalness = preset.wetGloss * 0.4;
+        } else {
+          // Restore dry asphalt (e.g. switching snow -> rain).
+          mats.road.color.setHex(0x0a0a0a);
+          mats.road.roughness = 1; mats.road.metalness = 0;
+        }
+      } else { mats.road.color.setHex(0x0a0a0a); mats.road.roughness = 1; mats.road.metalness = 0; }
       // Winter blankets the verges even when clear; snow condition buries the roads too.
       if (season.snowBlanket || preset.snowBlanket) {
         mats.pavement.color.setHex(0xe9eef5); mats.leaf.color.setHex(0xd7e4e4);
@@ -892,15 +934,21 @@ export class WorldEngine {
       sky.multiplyScalar(Math.max(0.06, 1 - darken));
       // True night sky fades toward deep blue, not pure black.
       if (night > 0) sky.lerp(new THREE.Color(0x0b1026), night * 0.75);
+      // Intensity owns the air clarity: 1 = crystal clear, 5 = wall of weather.
+      fogNear *= INTENSITY_FOG_NEAR[this.intensity]; fogFar *= INTENSITY_FOG_FAR[this.intensity];
       this.scene.background = sky.clone(); this.scene.fog = new THREE.Fog(sky.getHex(), fogNear, fogFar);
-      this.sun.intensity = sunI * (1 - night * 0.88);
+      // Intensity dials the sun last: level 1 softens noon, 4–5 make it blaze.
+      // Heavy precip also glooms the exposure so downpours/whiteouts read dark.
+      const boost = INTENSITY_SUN[this.intensity];
+      const gloom = this.weather === 'normal' ? 1 : INTENSITY_GLOOM[this.intensity];
+      this.sun.intensity = sunI * boost * (1 - night * 0.88);
       this.ambient.intensity = ambI * (1 - night * 0.55);
-      this.renderer.toneMappingExposure = exposure * (1 - night * 0.25);
+      this.renderer.toneMappingExposure = exposure * boost * gloom * (1 - night * 0.25);
       if (this.marker) (this.marker.material as THREE.MeshBasicMaterial).color.setHex(0xe11d48);
     } else {
       // Monochrome palettes (light / dark-day base; true night via nightFactor).
       const light = this.theme === 'light';
-      mats.road.color.setHex(0x373737);
+      mats.road.color.setHex(0x0a0a0a);
       mats.pavement.color.setHex(0x9b9b9b);
       mats.white.color.setHex(0xf1f1f1);
       mats.ink.color.setHex(0x181818);
@@ -922,10 +970,17 @@ export class WorldEngine {
         if (preset.fogNear > 0) { fogNear = preset.fogNear; fogFar = preset.fogFar; }
         this.sun.color.setHex(preset.sunColor); sunI *= preset.sunIntensity;
         ambI *= preset.ambientIntensity; exposure *= preset.exposure;
-        mats.road.color.setHex(preset.roadTint);
-        mats.road.roughness = preset.roadRoughness;
-        mats.road.metalness = preset.wetGloss * 0.4;
-      } else { mats.road.roughness = 1; mats.road.metalness = 0; this.sun.color.setHex(0xffffff); }
+        // Rain never repaints the road; only snow blankets it.
+        if (preset.snowBlanket) {
+          mats.road.color.setHex(preset.roadTint);
+          mats.road.roughness = preset.roadRoughness;
+          mats.road.metalness = preset.wetGloss * 0.4;
+        } else {
+          // Restore dry asphalt (e.g. switching snow -> rain).
+          mats.road.color.setHex(0x0a0a0a);
+          mats.road.roughness = 1; mats.road.metalness = 0;
+        }
+      } else { mats.road.color.setHex(0x0a0a0a); mats.road.roughness = 1; mats.road.metalness = 0; this.sun.color.setHex(0xffffff); }
       if (seasonM.snowBlanket || preset.snowBlanket) {
         mats.pavement.color.setHex(0xe6e6e6); mats.leaf.color.setHex(0xc9c9c9);
         mats.wall0.color.setHex(0xefefef); mats.wall1.color.setHex(0xe2e2e2);
@@ -934,10 +989,15 @@ export class WorldEngine {
       const darken = night * (0.8 + preset.nightDarken + seasonM.nightDarken);
       color.multiplyScalar(Math.max(0.05, 1 - darken));
       if (night > 0) color.lerp(new THREE.Color(0x0b1026), night * 0.7);
+      fogNear *= INTENSITY_FOG_NEAR[this.intensity]; fogFar *= INTENSITY_FOG_FAR[this.intensity];
       this.scene.background = color.clone(); this.scene.fog = new THREE.Fog(color.getHex(), fogNear, fogFar);
-      this.sun.intensity = sunI * (1 - night * 0.88);
+      // Intensity dials the sun last: level 1 softens noon, 4–5 make it blaze.
+      // Heavy precip also glooms the exposure so downpours/whiteouts read dark.
+      const boost = INTENSITY_SUN[this.intensity];
+      const gloom = this.weather === 'normal' ? 1 : INTENSITY_GLOOM[this.intensity];
+      this.sun.intensity = sunI * boost * (1 - night * 0.88);
       this.ambient.intensity = ambI * (1 - night * 0.55);
-      this.renderer.toneMappingExposure = exposure * (1 - night * 0.25);
+      this.renderer.toneMappingExposure = exposure * boost * gloom * (1 - night * 0.25);
       if (this.marker) (this.marker.material as THREE.MeshBasicMaterial).color.setHex(night > 0.5 ? 0xffffff : light ? 0x111111 : 0xffffff);
     }
     // Night glow: warm lamp heads + lit windows fade in with nightFactor.
@@ -1057,11 +1117,16 @@ export class WorldEngine {
     for (const [kind, vehicle] of this.fleet) vehicle.group.visible = kind === sim.vehicleKind;
     this.car = this.fleet.get(sim.vehicleKind)!;
     this.car.group.position.set(sim.car.x, 0.08, sim.car.z); this.car.group.rotation.y = -sim.car.yaw;
+    // Wipers: auto sweeps in rain, manual T-key override (on = always, off = parked).
+    const wiper = this.wiperSweep(0);
     this.car.update(sim.car.speed, sim.car.steer, dt, sim.car.braking, {
       pitch: THREE.MathUtils.clamp(-accel * 0.012, -0.06, 0.08),
       roll: sim.skidding ? Math.sin(sim.time * 20) * 0.02 : -sim.car.steer * Math.min(0.05, Math.abs(sim.car.speed) * 0.003),
-    }, sim.blinker, sim.time);
+    }, sim.blinker, sim.time, wiper);
     this.car.glazing.visible = !(sim.driving && sim.view === 'first');
+    // Cockpit hides the 3D cowl blades (the screen overlay draws the sweep instead).
+    const hideBlades = sim.driving && sim.view === 'first';
+    for (const w of this.car.wipers) w.visible = !hideBlades;
     // Smooth GTA doors: swing the driver door while slipping in/out, ease shut after.
     const doorOpen = sim.transition > 0 ? Math.min(1, sim.transition / 0.3) * 1.15 : 0;
     for (const [i, door] of this.car.doors.entries()) door.rotation.y = (i === 0 ? 1 : -1) * doorOpen;
@@ -1119,7 +1184,7 @@ export class WorldEngine {
       const p = sim.traffic[i]; if (!p) { vehicle.group.visible = false; return; }
       vehicle.group.visible = true;
       vehicle.group.position.set(p.x, 0.08, p.z); vehicle.group.rotation.y = -p.yaw;
-      vehicle.update(p.speed, p.steer, dt, p.braking);
+      vehicle.update(p.speed, p.steer, dt, p.braking, undefined, 0, sim.time, wiperAngle(sim.time + i * 0.53, this.intensity) * (sim.weather === 'rain' ? 1 : 0));
     });
     this.parked.forEach((vehicle, i) => {
       const p = sim.parked[i]; if (!p) { vehicle.group.visible = false; return; }

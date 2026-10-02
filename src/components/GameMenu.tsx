@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { DEFAULT_LOOK, type LookSettings } from '../game/CameraInput';
 import type { Theme } from '../game/State';
 import type { WorldSnapshot } from '../world/Simulation';
-import type { Season, Weather } from '../world/Weather';
+import type { IntensityLevel, Season, Weather } from '../world/Weather';
 import type { QualityLevel } from '../world/WorldEngine';
 
 export type MenuTab = 'display' | 'camera' | 'world' | 'game';
@@ -47,6 +47,8 @@ interface Props {
   onWeather: (w: Weather) => void;
   season: Season;
   onSeason: (s: Season) => void;
+  intensity: IntensityLevel;
+  onIntensity: (n: IntensityLevel) => void;
   quality: QualityLevel;
   onQuality: (q: QualityLevel) => void;
   fullscreen: boolean;
@@ -70,7 +72,7 @@ interface Props {
   onClose: () => void;
 }
 
-function Segmented<T extends string>({ label, options, value, onPick, namePrefix }: {
+function Segmented<T extends string | number>({ label, options, value, onPick, namePrefix }: {
   label: string;
   options: { id: T; label: string; icon?: string }[];
   value: T;
@@ -121,6 +123,14 @@ export function GameMenu(props: Props) {
             <Segmented label="Theme" options={THEMES} value={props.theme} onPick={props.onTheme} namePrefix="theme" />
             <Segmented label="Weather" options={WEATHERS} value={props.weather} onPick={props.onWeather} namePrefix="weather" />
             <Segmented label="Season" options={SEASONS} value={props.season} onPick={props.onSeason} namePrefix="season" />
+            <Segmented
+              label="Intensity"
+              options={([1, 2, 3, 4, 5] as IntensityLevel[]).map(n => ({ id: n, label: String(n) }))}
+              value={props.intensity}
+              onPick={props.onIntensity}
+              namePrefix="intensity"
+            />
+            <p className="menu-hint">Intensity 1 softens rain, snow and sunlight; 5 pushes all three to the extreme. 3 is the classic look.</p>
             <Segmented label="Graphics" options={QUALITIES} value={props.quality} onPick={props.onQuality} namePrefix="graphics" />
             <p className="menu-hint">Graphics sets pixel sharpness and shadow detail. Lower it if the frame rate drops. Saved on this device.</p>
             <div className="menu-row">
@@ -203,7 +213,7 @@ export function GameMenu(props: Props) {
                 : snap?.mode === 'basket'
                 ? <><li><span>Pump</span><i>TAP SPACE</i></li><li><span>Throw</span><i>TAP AGAIN</i></li></>
                 : snap?.driving
-                ? <><li><span>Gas / Brake</span><i>W / S</i></li><li><span>Steer</span><i>A / D</i></li><li><span>Drift</span><i>SPACE</i></li><li><span>Cockpit</span><i>V</i></li><li><span>Exit</span><i>E</i></li><li><span>16 rides</span><i>N</i></li></>
+                ? <><li><span>Gas / Brake</span><i>W / S</i></li><li><span>Steer</span><i>A / D</i></li><li><span>Drift</span><i>SPACE</i></li><li><span>Cockpit</span><i>V</i></li><li><span>Exit</span><i>E</i></li><li><span>Wipers</span><i>T</i></li><li><span>16 rides</span><i>N</i></li></>
                 : <><li><span>Move</span><i>W A S D</i></li><li><span>Sprint</span><i>SHIFT</i></li><li><span>Jump</span><i>SPACE</i></li><li><span>Steal any car</span><i>E</i></li></>}
             </ul>
           </>}

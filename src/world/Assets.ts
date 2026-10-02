@@ -16,10 +16,11 @@ export interface Vehicle {
   group: THREE.Group; body: THREE.Group; glazing: THREE.Mesh; steeringWheel: THREE.Group; eye: THREE.Vector3;
   spins: THREE.Object3D[]; frontSteer: THREE.Group[];
   doors: THREE.Group[];
+  wipers: THREE.Group[];
   brakeMat: THREE.MeshStandardMaterial; headMat: THREE.MeshStandardMaterial;
   blinkerMat: THREE.MeshStandardMaterial;
   spin: number;
-  update: (speed: number, steer: number, dt: number, braking: boolean, bodyTilt?: { pitch: number; roll: number }, blinker?: number, time?: number) => void;
+  update: (speed: number, steer: number, dt: number, braking: boolean, bodyTilt?: { pitch: number; roll: number }, blinker?: number, time?: number, wiper?: number | null) => void;
 }
 
 /** One asset kit. All copies share geometry/materials; static copies are GPU-instanced. */
@@ -30,7 +31,7 @@ export class AssetKit {
     cylinder: new THREE.CylinderGeometry(1, 1, 1, 16),
   };
   readonly materials: Record<MaterialName, THREE.MeshStandardMaterial> = {
-    road: new THREE.MeshStandardMaterial({ color: 0x373737, roughness: 1 }),
+    road: new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 1 }),
     pavement: new THREE.MeshStandardMaterial({ color: 0x9b9b9b, roughness: 1 }),
     white: new THREE.MeshStandardMaterial({ color: 0xf1f1f1, roughness: 0.7 }),
     ink: new THREE.MeshStandardMaterial({ color: 0x181818, roughness: 0.85 }),

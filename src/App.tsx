@@ -5,6 +5,7 @@ import { loadSession, saveSession, type Session } from './api/session';
 ﻿import { useEffect, useRef, useState } from 'react';
 import { GameMenu } from './components/GameMenu';
 import { WorldViewport } from './components/WorldViewport';
+import { WindshieldRain } from './components/WindshieldRain';
 import { WorldControls } from './components/WorldControls';
 import { TableTennisControls } from './components/TableTennisControls';
 import { BasketballControls } from './components/BasketballControls';
@@ -16,7 +17,7 @@ import type { VehicleKind } from './world/Vehicles';
 import type { Theme } from './game/State';
 import type { WorldEngine, QualityLevel } from './world/WorldEngine';
 import type { WorldSnapshot } from './world/Simulation';
-import type { Season, Weather } from './world/Weather';
+import { clampIntensity, type IntensityLevel, type Season, type Weather } from './world/Weather';
 
 function initialTheme(): Theme {
   try { const saved = localStorage.getItem('agon-theme'); if (saved === 'light' || saved === 'dark' || saved === 'color') return saved; } catch { /* Optional storage. */ }
@@ -96,6 +97,16 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem('agon-season', season); } catch { /* Optional storage. */ }
   }, [season]);
+  const [intensity, setIntensity] = useState<IntensityLevel>(() => {
+    try {
+      const saved = Number(localStorage.getItem('agon-intensity'));
+      if (Number.isFinite(saved)) return clampIntensity(saved);
+    } catch { /* Optional storage. */ }
+    return 3;
+  });
+  useEffect(() => {
+    try { localStorage.setItem('agon-intensity', String(intensity)); } catch { /* Optional storage. */ }
+  }, [intensity]);
   const focus = () => document.querySelector<HTMLCanvasElement>('canvas')?.focus();
   const rememberRoom = (session: Session) => {
     saveSession(session);
@@ -279,9 +290,29 @@ export default function App() {
   };
   return <main className={`district-shell${fullscreen ? ' is-fullscreen' : ''}`}>
     <section className={`world-stage${state?.driving ? ' is-driving' : ''}`} aria-label="Open world neighborhood">
-      <WorldViewport engineRef={engine} onSnapshot={setState} onMap={toggleMap} theme={theme} weather={weather} season={season} quality={quality} portrait={portrait} blocked={mapOpen || physicsOpen || menuOpen}
+      <WorldViewport engineRef={engine} onSnapshot={setState} onMap={toggleMap} theme={theme} weather={weather} season={season} intensity={intensity} quality={quality} portrait={portrait} blocked={mapOpen || physicsOpen || menuOpen}
         onDismissOverlay={() => { if (physicsOpen) setPhysicsOpen(false); else if (menuOpen) { toggleMenu(false); focus(); } else if (mapOpen) toggleMap(); }}
         lookSettings={lookSettings} lookEnabled={active && state?.mode === 'roam'} />
+      {state && state.phase === 'playing' && state.driving && state.view === 'first' && (state.weather === 'rain' || state.wiperMode === 'on') && (
+        <WindshieldRain
+          level={intensity} paused={state.paused}
+          raining={state.weather === 'rain'}
+          wipersActive={state.wiperMode === 'on' || (state.wiperMode === 'auto' && state.weather === 'rain')}
+          visible={(() => {
+            let d = state.yaw - state.car.yaw;
+            while (d > Math.PI) d -= Math.PI * 2;
+            while (d < -Math.PI) d += Math.PI * 2;
+            return Math.abs(d) < 0.35;
+          })()}
+        />
+      )}
+      {state && state.phase !== 'ready' && state.weather === 'snow' && (
+        <div
+          className="weather-veil is-snow"
+          aria-hidden="true"
+          style={{ opacity: [0.08, 0.12, 0.16, 0.24, 0.34][intensity - 1] }}
+        />
+      )}
       <div className="canvas-corner">
         <button className="control" onClick={enterFullscreen} aria-label={fullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}>⛶</button>
         <button className="control" onClick={() => toggleMenu(true)} aria-label="Open menu" aria-expanded={menuOpen}>☰</button>
@@ -290,6 +321,7 @@ export default function App() {
         theme={theme} onTheme={setTheme}
         weather={weather} onWeather={setWeather}
         season={season} onSeason={setSeason}
+        intensity={intensity} onIntensity={setIntensity}
         quality={quality} onQuality={setQuality}
         fullscreen={fullscreen} onToggleFullscreen={enterFullscreen}
         view={state?.view} onToggleView={() => { engine.current?.toggleView(); }}
@@ -364,11 +396,12 @@ export default function App() {
         <RaceFinishToast engine={engine.current} />
         <RaceResults engine={engine.current} onRematch={() => { const e = engine.current; if (!e || !e.race.isHost) return; e.rematchRace(); focus(); }} onExit={() => { engine.current?.leaveRace(); setRaceOpen(false); focus(); }} />
         {state?.driving && state?.blinkerManual && (state?.blinker ?? 0) !== 0 && <div className="blinker-hud" role="status" aria-label="Turn signal">{state.blinker === 1 ? '◀ LEFT' : state.blinker === 2 ? 'RIGHT ▶' : '◀ HAZARD ▶'}</div>}
+        {state?.driving && state?.wiperMode !== 'auto' && <div className="blinker-hud" role="status" aria-label={`Wipers ${state?.wiperMode}`}>💧 WIPERS {state?.wiperMode?.toUpperCase()}</div>}
         {state?.mode === 'table'
           ? <TableTennisControls disabled={!active} onSwing={shot => engine.current?.tableSwing(shot)} />
           : state?.mode === 'basket'
           ? <BasketballControls disabled={!active} pumping={state?.basket?.pumping ?? false} onTap={() => engine.current?.basketTap()} />
-          : <WorldControls disabled={!active} driving={state?.driving ?? false} speed={state?.car.speed ?? 0} onStick={(x, y) => engine.current?.joystick(x, y)} onInput={(action, down, source) => engine.current?.input(action, down, source)} />}
+          : <WorldControls disabled={!active} driving={state?.driving ?? false} speed={state?.car.speed ?? 0} wiperMode={state?.wiperMode ?? 'auto'} onStick={(x, y) => engine.current?.joystick(x, y)} onInput={(action, down, source) => engine.current?.input(action, down, source)} onWipers={() => { engine.current?.cycleWipers(); focus(); }} />}
       </>}
       {state?.paused && !mapOpen && !physicsOpen && !menuOpen && <div className="pause-cover"><div><p className="eyebrow">THE CITY CAN WAIT</p><h2>A moment to yourself.</h2><button className="primary-button" onClick={() => { engine.current?.togglePause(); focus(); }}>KEEP EXPLORING <span>→</span></button></div></div>}
       {mapOpen && <div className="map-cover"><div className="map-sheet" role="dialog" aria-labelledby="map-title">
