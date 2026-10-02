@@ -65,14 +65,6 @@ export function WorldControls({ disabled, driving, speed, onStick, onInput }: Pr
   };
   if (driving) return <div className={`world-controls driving-controls ${disabled ? 'inactive' : ''}`}>
     <div className="drive-steering">{driveButton('left', '◀', 'LEFT', 'Steer left')}{driveButton('right', '▶', 'RIGHT', 'Steer right')}</div>
-    <div className="drive-signals" role="group" aria-label="Turn signals">
-      {(['signalLeft', 'signalRight'] as const).map(action => <button key={action} className="signal-pad" disabled={disabled} aria-label={action === 'signalLeft' ? 'Left turn signal' : 'Right turn signal'}
-        onContextMenu={event => event.preventDefault()}
-        onPointerDown={event => { event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); onInput(action, true, `sig:${event.pointerId}:${action}`); }}
-        onPointerUp={event => onInput(action, false, `sig:${event.pointerId}:${action}`)} onPointerCancel={event => onInput(action, false, `sig:${event.pointerId}:${action}`)}
-        onLostPointerCapture={event => onInput(action, false, `sig:${event.pointerId}:${action}`)}>
-        <span aria-hidden="true">{action === 'signalLeft' ? '◀' : '▶'}</span><small>{action === 'signalLeft' ? 'SIGNAL' : 'SIGNAL'}</small></button>)}
-    </div>
     <div className="drive-pedals">{driveButton('back', '▼', 'BRAKE', 'Brake')}{driveButton('forward', '▲', 'GAS', 'Gas')}</div>
   </div>;
   return <div className={`world-controls ${disabled ? 'inactive' : ''}`}>
