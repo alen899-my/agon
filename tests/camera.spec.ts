@@ -17,8 +17,9 @@ test('captured look releases for map, Escape, pause and focus loss', async ({ pa
   await capture(); await page.keyboard.down('w'); await page.keyboard.press('m');
   await expect(page.getByRole('dialog')).toBeVisible();
   await expect(canvas).toHaveAttribute('data-look-state', 'free');
-  const before = await page.locator('.district-footer').textContent();
-  await page.clock.runFor(250); expect(await page.locator('.district-footer').textContent()).toBe(before);
+  const before = await page.evaluate(() => (window as unknown as { __worldEngine?: { simulation: { distance: number } } }).__worldEngine?.simulation.distance ?? null);
+  await page.clock.runFor(250);
+  expect(await page.evaluate(() => (window as unknown as { __worldEngine?: { simulation: { distance: number } } }).__worldEngine?.simulation.distance ?? null)).toBe(before);
   await page.keyboard.up('w'); await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toBeHidden();
   await expect(page.getByRole('heading', { name: 'A moment to yourself.' })).toBeHidden();
@@ -33,18 +34,21 @@ test('captured look releases for map, Escape, pause and focus loss', async ({ pa
 
 test('camera preferences persist and the settings overlay suspends movement', async ({ page }) => {
   await page.goto('/'); await page.getByLabel('Your display name').fill('Ava'); await page.getByRole('button', { name: 'EXPLORE DISTRICT' }).click();
-  await page.getByRole('button', { name: 'Camera controls and sensitivity' }).click();
+  await page.getByRole('button', { name: 'Open menu' }).click();
+  await page.getByRole('tab', { name: 'CAMERA' }).click();
   await page.getByRole('slider', { name: 'Mouse and trackpad sensitivity' }).focus();
   await page.keyboard.press('End');
   await expect(page.getByRole('slider', { name: 'Mouse and trackpad sensitivity' })).toHaveValue('3');
-  await page.getByRole('checkbox', { name: 'Invert vertical look' }).check();
-  const before = await page.locator('.district-footer').textContent();
+  await page.getByRole('switch', { name: 'Invert vertical look' }).click();
+  await expect(page.getByRole('switch', { name: 'Invert vertical look' })).toHaveAttribute('aria-checked', 'true');
+  const before = await page.evaluate(() => (window as unknown as { __worldEngine?: { simulation: { distance: number } } }).__worldEngine?.simulation.distance ?? null);
   await page.keyboard.down('w'); await page.clock.runFor(300); await page.keyboard.up('w');
-  expect(await page.locator('.district-footer').textContent()).toBe(before);
+  expect(await page.evaluate(() => (window as unknown as { __worldEngine?: { simulation: { distance: number } } }).__worldEngine?.simulation.distance ?? null)).toBe(before);
   await page.keyboard.press('Escape'); await expect(page.getByRole('dialog')).toBeHidden();
-  await page.reload(); await page.getByRole('button', { name: 'Camera controls and sensitivity' }).click();
+  await page.reload(); await page.getByRole('button', { name: 'Open menu' }).click();
+  await page.getByRole('tab', { name: 'CAMERA' }).click();
   await expect(page.getByRole('slider', { name: 'Mouse and trackpad sensitivity' })).toHaveValue('3');
-  await expect(page.getByRole('checkbox', { name: 'Invert vertical look' })).toBeChecked();
+  await expect(page.getByRole('switch', { name: 'Invert vertical look' })).toHaveAttribute('aria-checked', 'true');
 });
 
 test('capture rejection falls back without errors or a held mouse button', async ({ page, isMobile }) => {

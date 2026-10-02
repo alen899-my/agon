@@ -1,10 +1,9 @@
-import { DEFAULT_LOOK, readLookSettings } from './game/CameraInput';
+import { readLookSettings } from './game/CameraInput';
 import { VEHICLES } from './world/Vehicles';
 import { ApiRequestError, createRoom as apiCreateRoom, joinRoom as apiJoinRoom, leaveRoom as apiLeaveRoom, login as apiLogin, me as apiMe } from './api/client';
 import { loadSession, saveSession, type Session } from './api/session';
 ﻿import { useEffect, useRef, useState } from 'react';
-import { ThemeToggle } from './components/ThemeToggle';
-import { QualityToggle } from './components/QualityToggle';
+import { GameMenu } from './components/GameMenu';
 import { WorldViewport } from './components/WorldViewport';
 import { WorldControls } from './components/WorldControls';
 import { TableTennisControls } from './components/TableTennisControls';
@@ -41,7 +40,8 @@ export default function App() {
   const [notice, setNotice] = useState('');
   const [fullscreen, setFullscreen] = useState(false);
   const [physicsOpen, setPhysicsOpen] = useState(false);
-  const [lookOpen, setLookOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const resumeAfterMenu = useRef(false);
   const [lookSettings, setLookSettings] = useState(readLookSettings);
   const [name, setName] = useState(() => loadSession()?.name ?? '');
   const [entering, setEntering] = useState(false);
@@ -233,27 +233,52 @@ export default function App() {
     } catch { setNotice('Fullscreen was unavailable. You can explore in this window.'); }
   };
   const ready = !state || state.phase === 'ready';
-  const active = !ready && !state?.paused && !portrait && !mapOpen && !physicsOpen && !lookOpen;
+  const active = !ready && !state?.paused && !portrait && !mapOpen && !physicsOpen && !menuOpen;
+  /** In-canvas menu: pauses like the map, resumes on close only if it paused. */
+  const toggleMenu = (open: boolean) => {
+    if (open) {
+      resumeAfterMenu.current = engine.current?.simulation.active ?? false;
+      if (resumeAfterMenu.current) engine.current?.togglePause();
+    } else if (resumeAfterMenu.current && engine.current?.simulation.paused) {
+      engine.current.togglePause();
+      resumeAfterMenu.current = false;
+    }
+    setMenuOpen(open);
+  };
+  const copyServerCode = async () => {
+    if (!state?.room) return;
+    try {
+      await navigator.clipboard.writeText(state.room.code);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setCopied(false);
+    }
+  };
   return <main className={`district-shell${fullscreen ? ' is-fullscreen' : ''}`}>
-    <header className="district-header">
-      <div className="wordmark">agon<span>↗</span><div>OPEN<br />DISTRICT</div></div>
-      <div className="header-center"><span className="tiny-dot" /> {theme === 'color' ? 'A WORLD IN FULL COLOR' : 'A WORLD IN MONOCHROME'}</div>
-      <nav aria-label="Game settings">
-        <button className="control" onClick={enterFullscreen} aria-label={fullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}>⛶</button>
-        <ThemeToggle theme={theme} onChange={setTheme} />
-        <QualityToggle quality={quality} onChange={setQuality} />
-        <button className="control" onClick={() => setLookOpen(true)} aria-label="Camera controls and sensitivity">LOOK</button>
-        <button className="control" onClick={() => engine.current?.toggleView()} aria-label="Switch camera view">{state?.view === 'first' ? '1ST PERSON' : '3RD PERSON'} <kbd>V</kbd></button>
-        <button className="control" onClick={toggleMap} aria-expanded={mapOpen}>MAP <kbd>M</kbd></button>
-        <button className="control" onClick={() => setPhysicsOpen(!physicsOpen)} aria-expanded={physicsOpen} aria-label="Physics checklist">⚙ PHYSICS</button>
-        <button className="control" disabled={ready || mapOpen} onClick={() => { engine.current?.togglePause(); focus(); }} aria-label={state?.paused ? 'Resume' : 'Pause'}>{state?.paused ? '▶' : 'Ⅱ'}</button>
-      </nav>
-    </header>
     <section className={`world-stage${state?.driving ? ' is-driving' : ''}`} aria-label="Open world neighborhood">
-      <WorldViewport engineRef={engine} onSnapshot={setState} onMap={toggleMap} theme={theme} quality={quality} portrait={portrait} blocked={mapOpen || physicsOpen || lookOpen}
-        onDismissOverlay={() => { if (lookOpen) setLookOpen(false); else if (physicsOpen) setPhysicsOpen(false); else if (mapOpen) toggleMap(); }}
+      <WorldViewport engineRef={engine} onSnapshot={setState} onMap={toggleMap} theme={theme} quality={quality} portrait={portrait} blocked={mapOpen || physicsOpen || menuOpen}
+        onDismissOverlay={() => { if (physicsOpen) setPhysicsOpen(false); else if (menuOpen) { toggleMenu(false); focus(); } else if (mapOpen) toggleMap(); }}
         lookSettings={lookSettings} lookEnabled={active && state?.mode === 'roam'} />
-      {fullscreen && <button className="fullscreen-exit" onClick={enterFullscreen} aria-label="Exit fullscreen">⛶ EXIT</button>}
+      <div className="canvas-corner">
+        <button className="control" onClick={enterFullscreen} aria-label={fullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}>⛶</button>
+        <button className="control" onClick={() => toggleMenu(true)} aria-label="Open menu" aria-expanded={menuOpen}>☰</button>
+      </div>
+      {menuOpen && <GameMenu
+        theme={theme} onTheme={setTheme}
+        quality={quality} onQuality={setQuality}
+        fullscreen={fullscreen} onToggleFullscreen={enterFullscreen}
+        view={state?.view} onToggleView={() => { engine.current?.toggleView(); }}
+        look={lookSettings} onLook={setLookSettings}
+        onOpenMap={() => { toggleMenu(false); toggleMap(); focus(); }}
+        physicsOpen={physicsOpen} onTogglePhysics={() => { toggleMenu(false); setPhysicsOpen(true); focus(); }}
+        paused={state?.paused ?? false} pauseDisabled={ready || mapOpen}
+        onTogglePause={() => { toggleMenu(false); engine.current?.togglePause(); focus(); }}
+        roomCode={state?.room?.code ?? null} roomMembers={state?.room?.members ?? 0}
+        copied={copied} onCopyCode={() => void copyServerCode()} onLeaveServer={() => { toggleMenu(false); void leaveServer(); }}
+        snapshot={state}
+        onClose={() => { toggleMenu(false); focus(); }}
+      />}
       {ready && <div className="world-intro">
         <p className="eyebrow">THE FIRST BLOCK OF SOMETHING BIGGER</p>
         <h1>OUTSIDE.<br />IS YOURS.</h1>
@@ -285,7 +310,6 @@ export default function App() {
           <button className="hud-map" onClick={toggleMap} aria-label="Open district map"><DistrictMap state={state} theme={theme} raceActive={engine.current?.raceGuidanceActive ?? false} /></button>
           {state?.driving && <div className="hud-speed" aria-label="Speed"><b>{state?.speed ?? 0}<small>KM/H</small></b><span>{VEHICLES[state.vehicleKind].name} · {state.acceleration.toFixed(1)} m/s^2{(state?.damage ?? 0) > 0 ? ` · DMG ${state?.damage}%` : ''}</span><button className="hud-cycle" disabled={!active || Math.abs(state?.car.speed ?? 0) > 0.2} onClick={() => { engine.current?.cycleVehicle(); focus(); }} aria-label="Next vehicle">⇄</button></div>}
         </div>
-        {state?.room && <div className="room-chip" role="status" aria-label="Private server">SERVER {state.room.code} · {state.room.members}<button disabled={entering} onClick={() => void leaveServer()} aria-label="Leave server">✕</button></div>}
         {state?.view === 'first' && <div className="crosshair" aria-hidden="true">+</div>}
         {state?.impact && <div className="crash-flash" role="status">CRASH · {state.impact.speed} KM/H vs {state.impact.with.toUpperCase()}</div>}
         {state?.mode === 'table' && state.table && <div className="tt-score" role="status" aria-label={`Table tennis score you ${state.table.you} AI ${state.table.aiScore}`}>
@@ -320,7 +344,7 @@ export default function App() {
           ? <BasketballControls disabled={!active} pumping={state?.basket?.pumping ?? false} onTap={() => engine.current?.basketTap()} />
           : <WorldControls disabled={!active} driving={state?.driving ?? false} speed={state?.car.speed ?? 0} onStick={(x, y) => engine.current?.joystick(x, y)} onInput={(action, down, source) => engine.current?.input(action, down, source)} />}
       </>}
-      {state?.paused && !mapOpen && !physicsOpen && !lookOpen && <div className="pause-cover"><div><p className="eyebrow">THE CITY CAN WAIT</p><h2>A moment to yourself.</h2><button className="primary-button" onClick={() => { engine.current?.togglePause(); focus(); }}>KEEP EXPLORING <span>→</span></button></div></div>}
+      {state?.paused && !mapOpen && !physicsOpen && !menuOpen && <div className="pause-cover"><div><p className="eyebrow">THE CITY CAN WAIT</p><h2>A moment to yourself.</h2><button className="primary-button" onClick={() => { engine.current?.togglePause(); focus(); }}>KEEP EXPLORING <span>→</span></button></div></div>}
       {mapOpen && <div className="map-cover"><div className="map-sheet" role="dialog" aria-labelledby="map-title">
         <div className="map-heading"><div><p className="eyebrow">224 × 224 METERS / ONE CONNECTED NEIGHBORHOOD</p><h2 id="map-title">Make your own way.</h2></div><button className="control" onClick={toggleMap} aria-label="Close map">✕</button></div>
         <div className="map-content"><DistrictMap state={state} large theme={theme} raceActive={engine.current?.raceGuidanceActive ?? false} /><div className="place-list">{PLACES.map((place, index) => <button key={place.id} onClick={() => { engine.current?.waypoint(place.id); toggleMap(); focus(); }}>
@@ -328,19 +352,9 @@ export default function App() {
         </button>)}</div></div>
         <p className="map-caption">Select a place to set a waypoint. Walk or drive there to discover it.</p>
       </div></div>}
-      {lookOpen && <div className="map-cover"><div className="look-settings" role="dialog" aria-modal="true" aria-labelledby="look-title">
-        <div className="map-heading"><h2 id="look-title">Camera controls</h2><button className="control" autoFocus onClick={() => setLookOpen(false)} aria-label="Close camera settings">CLOSE</button></div>
-        <p>Mouse / laptop: click the world once, then move without holding a button. Escape releases the cursor and pauses. Q / C also turn the camera.</p>
-        <p>Touch: swipe the world with a free finger while moving or steering with the other hand.</p>
-        <label>Mouse / trackpad sensitivity <output>{lookSettings.pointer.toFixed(2)}x</output><input aria-label="Mouse and trackpad sensitivity" type="range" min="0.25" max="3" step="0.05" value={lookSettings.pointer} onChange={event => setLookSettings({ ...lookSettings, pointer: Number(event.target.value) })} /></label>
-        <label>Touch sensitivity <output>{lookSettings.touch.toFixed(2)}x</output><input aria-label="Touch look sensitivity" type="range" min="0.25" max="3" step="0.05" value={lookSettings.touch} onChange={event => setLookSettings({ ...lookSettings, touch: Number(event.target.value) })} /></label>
-        <label className="invert-look"><input type="checkbox" checked={lookSettings.invertY} onChange={event => setLookSettings({ ...lookSettings, invertY: event.target.checked })} /> Invert vertical look</label>
-        <button className="control" onClick={() => setLookSettings({ ...DEFAULT_LOOK })}>RESET CAMERA SETTINGS</button>
-      </div></div>}
       {physicsOpen && !ready && <div className="physics-cover"><div className="physics-sheet" role="dialog" aria-label="Physics checklist"><div className="map-heading"><div><p className="eyebrow">REALISTIC PHYSICS · ONE BY ONE</p><h2>Systems online.</h2></div><button className="control" onClick={() => setPhysicsOpen(false)} aria-label="Close physics">✕</button></div><PhysicsChecklist state={state} /><p className="map-caption">Drive into walls, traffic and crowds to tick crash events. Repair at South Station.</p></div></div>}
       {portrait && <div className="rotate-cover"><span className="rotate-symbol">↻</span><p className="eyebrow">MORE ROOM TO EXPLORE</p><h2>Turn your world.</h2><p>Rotate your phone to landscape.<br />Your neighborhood will be waiting.</p><button className="primary-button" onClick={enterFullscreen}>GO FULLSCREEN <span>⛶</span></button></div>}
     </section>
-    <footer className="district-footer"><span>{state?.mode === 'table' ? <>AUTO MOVE <i>●</i> · SPACE <i>HIT</i> · W <i>TOP</i> · S <i>CHOP</i> · SHIFT <i>SMASH</i></> : state?.mode === 'basket' ? <>TAP SPACE <i>PUMP</i> · TAP AGAIN <i>THROW</i></> : state?.driving ? <>W / S <i>GAS / BRAKE</i> | A / D <i>STEER</i> | SPACE <i>DRIFT</i> | V <i>COCKPIT</i> | E <i>EXIT</i> | N <i>16 RIDES</i></> : <>W A S D <i>MOVE</i> · SHIFT <i>SPRINT</i> · SPACE <i>JUMP</i> · E <i>STEAL ANY CAR</i></>}</span><span>{state?.mode === 'table' ? 'GAME CENTER — TABLE TENNIS' : state?.mode === 'basket' ? 'GAME CENTER — HOOPS' : 'STAGE 01 — THE NEIGHBORHOOD'}</span><span>{state?.distance ?? 0} m EXPLORED</span></footer>
     {notice && <div className="notice" role="status">{notice}<button className="control" onClick={() => setNotice('')}>Dismiss</button></div>}
   </main>;
 }
