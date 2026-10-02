@@ -312,6 +312,8 @@ export default function App() {
         </div>
         {state?.view === 'first' && <div className="crosshair" aria-hidden="true">+</div>}
         {state?.impact && <div className="crash-flash" role="status">CRASH · {state.impact.speed} KM/H vs {state.impact.with.toUpperCase()}</div>}
+        {state != null && state.pedBloodSeq > 0 && state.time - state.pedBloodAt < 1.5 &&
+          <div key={state.pedBloodSeq} className="blood-splash" aria-hidden="true"><div className="blood-splash-drip" /></div>}
         {state?.mode === 'table' && state.table && <div className="tt-score" role="status" aria-label={`Table tennis score you ${state.table.you} AI ${state.table.aiScore}`}>
           <div><small>YOU</small><b>{state.table.you}</b>{state.table.server === 'you' && <i>●</i>}</div>
           <div className="tt-mid"><span>{state.table.phase === 'over' ? 'MATCH' : `RALLY ${state.table.rally}`}</span><small>{state.table.ballSpeedKmh} KM/H</small></div>

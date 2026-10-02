@@ -153,6 +153,22 @@ function wheelRadius(kind: VehicleKind, spec: VehicleSpec): number {
   return 0.4;
 }
 
+/**
+ * Shared wheel dimensions. Tyre width scales with radius so heavy rigs get fat
+ * rubber instead of bicycle tyres (fixed widths made every large wheel look
+ * razor-thin — worst at full steering lock). Exported for unit tests.
+ */
+export function wheelDims(kind: VehicleKind, spec: VehicleSpec): { WR: number; tireW: number; rimR: number } {
+  const WR = wheelRadius(kind, spec);
+  const style = VEHICLE_WHEELS[kind];
+  const factor = style === 'sport' ? 0.8 : style === 'offroad' ? 0.8 : style === 'dually' ? 0.75 : 0.7;
+  const tireW = Math.min(0.42, Math.max(0.26, WR * factor));
+  // Small center by design: the rim disc must read as a hub inside one black
+  // tyre — never as a second big circle filling the middle of the wheel face.
+  const rimR = WR * (style === 'sport' ? 0.48 : style === 'offroad' ? 0.38 : 0.36);
+  return { WR, tireW, rimR };
+}
+
 interface Model {
   parts: Map<string, THREE.BufferGeometry>;
   wheels: Record<'-1' | '1', Map<string, THREE.BufferGeometry>>;
@@ -351,8 +367,8 @@ function buildModel(kit: KitLike, kind: VehicleKind): Model {
   }
 
   // ---- wheels (positions + arches) ----
-  const WR = wheelRadius(kind, spec);
-  const trackX = W / 2 - 0.05;
+  const { WR, tireW } = wheelDims(kind, spec);
+  const trackX = W / 2 - 0.03;
   const wheelZ = L * 0.32;
   const wheelPos: Model['wheelPos'] = [];
   for (const s of [-1, 1]) for (const z of [-wheelZ, wheelZ]) {
@@ -495,8 +511,7 @@ function buildModel(kit: KitLike, kind: VehicleKind): Model {
   // Rounded primitives only (cylinders + spheres) — no boxes, so nothing reads as spiked.
   const style = VEHICLE_WHEELS[kind];
   const SPH = kit.geometry.sphere;
-  const tireW = style === 'sport' ? 0.3 : style === 'offroad' ? 0.34 : style === 'dually' ? 0.3 : 0.24;
-  const rimR = WR * (style === 'sport' ? 0.62 : style === 'offroad' ? 0.5 : 0.46);
+  const { rimR } = wheelDims(kind, spec);
   const wheels = {} as Model['wheels'];
   for (const s of [-1, 1] as const) {
     const WP = new Parts();
@@ -513,10 +528,24 @@ function buildModel(kit: KitLike, kind: VehicleKind): Model {
           WP.add('tyre', SPH, ss * tireW * 0.42, Math.cos(a2) * WR * 0.99, Math.sin(a2) * WR * 0.99, tireW * 0.28, 0.055, 0.11);
         }
       }
+    } else {
+      // shallow staggered tread blocks, oriented radially (rx = a2) so they read
+      // as tread, not lumps. Subtle from the front — but they make the spin
+      // visible from the side, so the rim no longer looks detached from the tyre.
+      const rows = 14;
+      for (let k = 0; k < rows; k++) {
+        const ang = (k / rows) * Math.PI * 2;
+        for (const ss of [-1, 1]) {
+          const a2 = ang + (ss > 0 ? Math.PI / rows : 0);
+          WP.add('tyre', SPH, ss * tireW * 0.38, Math.cos(a2) * WR * 0.985, Math.sin(a2) * WR * 0.985,
+            tireW * 0.18, 0.028, 0.08, a2, 0, 0);
+        }
+      }
     }
-    // rim disc
-    WP.add('rim', C, s * 0.01, 0, 0, rimR, tireW + 0.02, rimR, 0, 0, Math.PI / 2);
-    const fx = s * (tireW / 2 + 0.012);
+    // rim disc stays NARROWER than the rubber — no metal ring poking past the sidewalls
+    WP.add('rim', C, 0, 0, 0, rimR, tireW - 0.04, rimR, 0, 0, Math.PI / 2);
+    // spokes/hub sit just inside the outer sidewall plane, never floating in the air
+    const fx = s * (tireW / 2 - 0.015);
     // round spokes: small cylinders pointing radially (axis Y rotated about X by ang)
     const roundSpokes = (n: number, r: number, len: number) => {
       for (let k = 0; k < n; k++) {

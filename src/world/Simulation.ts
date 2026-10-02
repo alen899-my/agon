@@ -12,7 +12,11 @@ export interface ParkedVehicle { kind: VehicleKind; x: number; z: number; yaw: n
 /** Map dot for a far-away room member (1 Hz, no full transform). */
 export interface RemoteDot { id: string; x: number; z: number; driving: boolean }
 export interface VehicleTarget { type: 'player' | 'parked' | 'traffic'; index: number; kind: VehicleKind; x: number; z: number; yaw: number; speed: number; dist: number; enterable: boolean; reason: string | null }
-export interface Ped { x: number; z: number; yaw: number; route: Point[]; dist: number; speed: number; phase: number; seed: number; move: number; cur: number; scaredUntil: number }
+export interface Ped {
+  x: number; z: number; yaw: number; route: Point[]; dist: number; speed: number; phase: number; seed: number; move: number; cur: number; scaredUntil: number;
+  /** Ragdoll state — active while ped is tumbling after a vehicle hit. */
+  ragdoll: boolean; ry: number; rvx: number; rvz: number; rvy: number; rpitch: number; rpitchRate: number; rollYaw: number;
+}
 export interface SnapshotCar { x: number; z: number; yaw: number; speed: number; steer: number; wheelSpin: number; braking: boolean }
 export type PlayMode = 'roam' | 'table' | 'basket';
 export interface WorldSnapshot {
@@ -29,12 +33,18 @@ export interface WorldSnapshot {
   dots: RemoteDot[];
   stridePhase: number; moveBlend: number; airborne: boolean; landDip: number;
   traffic: (SnapshotCar)[];
-  peds: { x: number; z: number; yaw: number; phase: number; moving: number }[];
+  peds: { x: number; z: number; yaw: number; phase: number; moving: number; ragdoll: boolean; ry: number; rpitch: number; rollYaw: number }[];
   mode: PlayMode; nearTable: boolean; nearHoop: boolean; table: TTSnapshot | null;
   tableFlags: { topspin: boolean; smash: boolean; netCord: boolean; edge: boolean };
   basket: BBSnapshot | null;
   basketFlags: { played: boolean; swish: boolean; streak3: boolean };
   blinker: number; blinkerManual: boolean; nearArena: boolean;
+  /** World time of last pedestrian blood hit, -999 if never. Used to trigger blood-splash FX. */
+  pedBloodAt: number;
+  /** Increments on every pedestrian hit — remounts the blood overlay even for same-tick hits. */
+  pedBloodSeq: number;
+  /** Current world time (lets the HUD expire one-shot FX like the blood splash). */
+  time: number;
 }
 const clamp = (n: number, low: number, high: number) => Math.max(low, Math.min(high, n));
 
@@ -99,6 +109,10 @@ export class Simulation {
   blinkerManual = false;
   traffic: TrafficCar[] = [];
   peds: Ped[] = [];
+  /** World time of the most recent pedestrian hit (for blood-splash overlay). */
+  pedBloodAt = -999;
+  /** Hit counter — guarantees a fresh overlay key for every hit. */
+  pedBloodSeq = 0;
   // --- character locomotion: smoothed velocity, stride phase, landing dip ---
   pvx = 0; pvz = 0; stride = 0; moveBlend = 0; landDip = 0;
   // --- game center: table tennis + basketball modes ---
@@ -116,7 +130,7 @@ export class Simulation {
     for (let i = 0; i < 8; i++) this.traffic.push({ kind: streetCast[i % streetCast.length], ...routePoint(TRAFFIC_ROUTE, i * 76 + 25), speed: 7, offset: i * 76 + 25, base: 7, steer: 0, wheelSpin: 0, braking: false, prevYaw: 0 });
     for (let i = 0; i < 16; i++) {
       const speed = 0.9 + rng() * 0.6;
-      this.peds.push({ x: 0, z: 0, yaw: 0, route: PED_ROUTES[i], dist: rng() * 240, speed, phase: rng() * 6.28, seed: rng(), move: 1, cur: speed, scaredUntil: 0 });
+      this.peds.push({ x: 0, z: 0, yaw: 0, route: PED_ROUTES[i], dist: rng() * 240, speed, phase: rng() * 6.28, seed: rng(), move: 1, cur: speed, scaredUntil: 0, ragdoll: false, ry: 0, rvx: 0, rvz: 0, rvy: 0, rpitch: 0, rpitchRate: 0, rollYaw: 0 });
     }
     this.syncCrowd(0);
   }
@@ -239,7 +253,10 @@ export class Simulation {
       dots: [],
       stridePhase: this.stride, moveBlend: this.moveBlend, airborne: this.y > 0.02, landDip: Math.max(0, Math.min(1, this.landDip)),
       traffic: this.traffic.map(t => ({ x: t.x, z: t.z, yaw: t.yaw, speed: t.speed, steer: t.steer, wheelSpin: t.wheelSpin, braking: t.braking })),
-      peds: this.peds.map(p => ({ x: p.x, z: p.z, yaw: p.yaw, phase: p.phase, moving: p.move })),
+      peds: this.peds.map(p => ({ x: p.x, z: p.z, yaw: p.yaw, phase: p.phase, moving: p.move, ragdoll: p.ragdoll, ry: p.ry, rpitch: p.rpitch, rollYaw: p.rollYaw })),
+      pedBloodAt: this.pedBloodAt,
+      pedBloodSeq: this.pedBloodSeq,
+      time: this.time,
       mode: this.mode, nearTable: this.nearTable, nearHoop: this.nearHoop,
       table: this.mode === 'table' ? this.table.snapshot : null,
       tableFlags: { ...this.table.flags },
@@ -413,10 +430,25 @@ export class Simulation {
         if (!this.contact(vehicleBody(sx, sz, this.car.yaw, this.vehicleKind))) { this.car.x = sx; this.car.z = sz; }
       }
       const body = vehicleBody(this.car.x, this.car.z, this.car.yaw, this.vehicleKind);
-      for (const ped of this.peds) if (this.time >= ped.scaredUntil && circleContact(body, ped.x, ped.z, 0.5)) {
-        ped.scaredUntil = this.time + 4;
-        this.registerImpact(Math.hypot(vx, vz), 'pedestrian');
-        vx *= 0.5; vz *= 0.5;
+      const carSpeed = Math.hypot(vx, vz);
+      for (const ped of this.peds) if (!ped.ragdoll && this.time >= ped.scaredUntil && circleContact(body, ped.x, ped.z, 0.5)) {
+        // Launch ragdoll — vehicle rolls right over at full speed.
+        ped.ragdoll = true;
+        ped.ry = 0;
+        // Inherit vehicle velocity + upward launch to arc over the hood.
+        const launchSpeed = Math.max(carSpeed, 4);
+        ped.rvx = vx * 0.85 + Math.cos(this.car.yaw) * 1.5;
+        ped.rvz = vz * 0.85 + Math.sin(this.car.yaw) * 1.5;
+        ped.rvy = launchSpeed * 0.55 + 2.2; // upward impulse
+        ped.rpitch = 0;
+        ped.rpitchRate = (carSpeed > 4 ? -6.5 : -3.5); // forward tumble rate
+        ped.rollYaw = ped.yaw; // preserve yaw at moment of impact
+        ped.scaredUntil = this.time + 12; // long recover time
+        // No registerImpact here: pedestrian hits never flash "CRASH vs PEDESTRIAN",
+        // never shake the camera, damage the car, or slow it (no crashUntil lockout).
+        this.pedBloodAt = this.time;
+        this.pedBloodSeq += 1;
+        // Vehicle does NOT slow down — roll right over.
       }
     }
     this.x = this.car.x; this.z = this.car.z;
@@ -473,6 +505,37 @@ export class Simulation {
       }
     }
     for (const ped of this.peds) {
+      // Ragdoll physics: arc through the air then slide on the ground.
+      if (ped.ragdoll) {
+        ped.rvy -= 18 * dt; // gravity
+        ped.ry = Math.max(0, ped.ry + ped.rvy * dt);
+        ped.x += ped.rvx * dt;
+        ped.z += ped.rvz * dt;
+        ped.rpitch += ped.rpitchRate * dt;
+        if (ped.ry <= 0) {
+          // Landed: friction stops the slide, recover after scaredUntil.
+          const friction = Math.exp(-5.5 * dt);
+          ped.rvx *= friction; ped.rvz *= friction; ped.rvy = 0;
+          ped.rpitchRate *= friction;
+          const groundSpeed = Math.hypot(ped.rvx, ped.rvz);
+          if (groundSpeed < 0.05 && this.time >= ped.scaredUntil - 6) {
+            // Ped gets up: snap back onto their route closest to current position.
+            ped.ragdoll = false; ped.ry = 0; ped.rvx = 0; ped.rvz = 0; ped.rvy = 0; ped.rpitch = 0; ped.rpitchRate = 0;
+            // Find closest point on their route.
+            let bestDist = ped.dist, bestD = 999;
+            for (let k = 0; k < 600; k += 2) {
+              const q = routePoint(ped.route, ped.dist + k - 300);
+              const d = Math.hypot(q.x - ped.x, q.z - ped.z);
+              if (d < bestD) { bestD = d; bestDist = ped.dist + k - 300; }
+            }
+            ped.dist = bestDist;
+            const q = routePoint(ped.route, ped.dist);
+            ped.x = q.x; ped.z = q.z; ped.yaw = q.yaw;
+          }
+        }
+        ped.move = 0;
+        continue;
+      }
       if (this.time < ped.scaredUntil) { ped.move += (0 - ped.move) * Math.min(1, 6 * dt); continue; }
       // Ease off before sharp corners so turns look walked, not snapped.
       const yawNow = routePoint(ped.route, ped.dist).yaw;

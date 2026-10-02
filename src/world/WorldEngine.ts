@@ -843,8 +843,16 @@ export class WorldEngine {
     // Ped + traffic + parked positions are owned by the simulation (braking / collisions).
     this.people.forEach((person, i) => {
       const point = sim.peds[i]; if (!point) return;
-      person.actor.group.position.set(point.x, 0.08, point.z); person.actor.group.rotation.y = -point.yaw;
-      person.actor.animate({ phase: point.phase, intensity: point.move, airborne: false, dip: 0, idle: sim.time + i * 1.7 });
+      if (point.ragdoll) {
+        // Ragdoll: elevate to ry height, pitch forward (tumble), use rollYaw from moment of impact.
+        person.actor.group.position.set(point.x, 0.08 + point.ry, point.z);
+        person.actor.group.rotation.set(point.rpitch, -point.rollYaw, 0, 'YXZ');
+        person.actor.animate({ phase: point.phase, intensity: 0, airborne: point.ry > 0.05, dip: 0, idle: sim.time + i * 1.7 });
+      } else {
+        person.actor.group.position.set(point.x, 0.08, point.z);
+        person.actor.group.rotation.set(0, -point.yaw, 0);
+        person.actor.animate({ phase: point.phase, intensity: point.move, airborne: false, dip: 0, idle: sim.time + i * 1.7 });
+      }
     });
     // Dynamic interactive barrels: vehicle & player collision, physics, and mesh sync
     if (sim.driving) {

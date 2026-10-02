@@ -218,4 +218,36 @@ describe('gta steal-any-vehicle', () => {
     expect(sim.interact()).toBe(false); // door still swinging
     expect(sim.snapshot.transition).toBeGreaterThan(0);
   });
+  it('flags a blood splash with a fresh key on every pedestrian hit', () => {
+    const sim = running(); tick(sim, 5);
+    expect(sim.snapshot.pedBloodSeq).toBe(0);
+    expect(sim.snapshot.time).toBeGreaterThanOrEqual(0);
+    const hit = () => {
+      const ped = sim.peds.find(p => !p.ragdoll)!;
+      sim.driving = true;
+      sim.car.x = ped.x; sim.car.z = ped.z; sim.car.yaw = ped.yaw; sim.car.speed = 10;
+      sim.setInput('forward', true, 'w');
+      tick(sim, 5);
+      sim.clearInput();
+      return ped;
+    };
+    const first = hit();
+    const snap = sim.snapshot;
+    expect(first.ragdoll).toBe(true);
+    expect(snap.pedBloodAt).toBeGreaterThan(-900);
+    expect(snap.pedBloodSeq).toBe(1);
+    // Pedestrian hits are silent: no crash flash, no camera-shake lockout, no slowdown.
+    expect(snap.impact).toBeNull();
+    expect(sim.crashed).toBe(false);
+    expect(sim.damage).toBe(0);
+    expect(sim.car.speed).toBeGreaterThan(9);
+    // Overlay visibility window: fresh right after the hit, expired later.
+    expect(snap.time - snap.pedBloodAt).toBeLessThan(1.5);
+    tick(sim, 120);
+    const later = sim.snapshot;
+    expect(later.time - later.pedBloodAt).toBeGreaterThanOrEqual(1.5);
+    // A second hit bumps the sequence so the overlay remounts and replays.
+    hit();
+    expect(sim.snapshot.pedBloodSeq).toBe(2);
+  });
 });
