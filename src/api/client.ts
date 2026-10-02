@@ -30,7 +30,7 @@ export class ApiRequestError extends Error {
   }
 }
 
-async function request<T>(path: string, init: RequestInit = {}, timeoutMs = 4000): Promise<T> {
+async function request<T>(path: string, init: RequestInit = {}, timeoutMs = 15000): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -49,10 +49,12 @@ async function request<T>(path: string, init: RequestInit = {}, timeoutMs = 4000
         body?.error?.message ?? `Request failed (${response.status}).`,
       );
     }
+    if (!body) throw new ApiRequestError(502, 'invalid_response', 'The server returned an invalid response. Please try again.');
     return body as T;
   } catch (error) {
     if (error instanceof ApiRequestError) throw error;
-    throw new ApiRequestError(0, 'offline', 'Server unreachable. Playing as guest.');
+    if (controller.signal.aborted) throw new ApiRequestError(0, 'timeout', 'The server took too long to respond. Please try again.');
+    throw new ApiRequestError(0, 'offline', 'Cannot reach the server. Check your connection and try again.');
   } finally {
     clearTimeout(timer);
   }

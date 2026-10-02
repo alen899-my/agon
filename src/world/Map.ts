@@ -4,6 +4,13 @@ export interface Building extends Box { kind: 'apartment' | 'shop' | 'warehouse'
 export interface Place extends Point { id: string; name: string; category: string; description: string }
 export const LIMIT = 112;
 export const ROADS = [-80, 0, 80];
+/** Road half-width (8.5m asphalt) + racing clearance. Nothing drivable may sit inside. */
+export const ROAD_HALF = 8.5;
+export const RACE_CLEARANCE = 11;
+/** True when (x,z) sits on any road band (centerlines ROADS, half-width half). */
+export function onRoad(x: number, z: number, half = ROAD_HALF): boolean {
+  return ROADS.some((line) => Math.abs(x - line) < half || Math.abs(z - line) < half);
+}
 export const PLACES: Place[] = [
   { id: 'plaza', name: 'Civic Square', category: 'PUBLIC SPACE', x: -27, z: 23, description: 'A quiet square at the heart of the district.' },
   { id: 'market', name: 'Market Street', category: 'SHOPS & CAFÉS', x: 22, z: -12, description: 'Small storefronts, long sidewalks, familiar faces.' },
@@ -12,8 +19,11 @@ export const PLACES: Place[] = [
   { id: 'station', name: 'South Station', category: 'TRANSIT', x: 42, z: 27, description: 'The beginning of a journey. Platforms open to the sky.' },
   { id: 'works', name: 'The Foundry', category: 'INDUSTRIAL', x: -45, z: 65, description: 'Old workshops at the edge of the neighborhood.' },
   { id: 'game-center', name: 'Game Center', category: 'SPORTS & ARCADE', x: -22, z: 48, description: 'Table tennis hall. Walk in to play a match.' },
+  { id: 'race-arena', name: 'Neon Paddock', category: 'RACING ARENA', x: -45, z: 82, description: 'Tokyo-drift paddock. Host a race, line up 8 cars, run the city loop.' },
 ];
 
+/** Neon Paddock race arena anchor (north edge, off the racing line). */
+export const RACE_ARENA = { x: -45, z: 82 };
 /** Game Center court anchor (off-road block between Civic Square and The Foundry). */
 export const GAME_CENTER = { x: -22, z: 48 };
 /** Basketball hoop anchor: side court north of the table hall. Shooter stands ~4.2m south of the rim. */
@@ -59,35 +69,59 @@ export const SOLIDS: Box[] = [...BUILDINGS,
 export interface Collider { x: number; z: number; r: number; kind: 'prop' | 'vehicle' | 'ped'; label?: string }
 /** Street furniture + parked cars that now block movement (Phase 0 colliders). */
 export const PARKED_CARS: Collider[] = [
-  { x: -11, z: -38, r: 2.4, kind: 'vehicle', label: 'parked-van' },
-  { x: 11, z: -54, r: 2.2, kind: 'vehicle', label: 'parked-car' },
-  { x: 55, z: 12, r: 2.2, kind: 'vehicle', label: 'parked-car' },
+  { x: -14, z: -38, r: 2.4, kind: 'vehicle', label: 'parked-van' },
+  { x: 14, z: -54, r: 2.2, kind: 'vehicle', label: 'parked-car' },
+  { x: 55, z: 16, r: 2.2, kind: 'vehicle', label: 'parked-car' },
 ];
-const LAMPS: Collider[] = [];
-for (const x of [-12, 12]) for (let z = -67; z < 80; z += 24) LAMPS.push({ x, z, r: 0.35, kind: 'prop', label: 'lamp' });
+/** Lamp posts line the x=0 avenue; any lamp falling inside a cross-road band
+ *  is pushed along the sidewalk so no post ever stands on driving asphalt. */
+export const LAMPS: Collider[] = [];
+for (const x of [-12, 12]) {
+  for (let z = -67; z < 80; z += 24) {
+    let lz = z;
+    if (ROADS.some((line) => Math.abs(lz - line) < RACE_CLEARANCE)) lz += 14;
+    LAMPS.push({ x, z: lz, r: 0.35, kind: 'prop', label: 'lamp' });
+  }
+}
+/** Shared with Assets so visuals and colliders can never drift apart. */
+export const BENCHES: readonly (readonly [number, number])[] = [[-36, 32], [-20, 32], [31, -56], [49, -56], [26, 26]];
+export const TREES: readonly (readonly [number, number])[] = [[27, -39], [28, -60], [51, -62], [53, -38], [36, -63], [-42, 16], [-43, 31], [-15, 16], [20, 62], [56, 24]];
 export const PROPS: Collider[] = [
   ...LAMPS,
   { x: -27, z: 23, r: 3.2, kind: 'prop', label: 'sculpture' },
   { x: 43, z: -48, r: 3.8, kind: 'prop', label: 'fountain' },
-  { x: -36, z: 32, r: 1.2, kind: 'prop', label: 'bench' },
-  { x: -20, z: 32, r: 1.2, kind: 'prop', label: 'bench' },
-  { x: 31, z: -56, r: 1.2, kind: 'prop', label: 'bench' },
-  { x: 49, z: -56, r: 1.2, kind: 'prop', label: 'bench' },
-  { x: 26, z: 26, r: 1.2, kind: 'prop', label: 'bench' },
-  { x: 27, z: -39, r: 0.6, kind: 'prop', label: 'tree' },
-  { x: 28, z: -60, r: 0.6, kind: 'prop', label: 'tree' },
-  { x: 51, z: -62, r: 0.6, kind: 'prop', label: 'tree' },
-  { x: 53, z: -38, r: 0.6, kind: 'prop', label: 'tree' },
-  { x: 36, z: -63, r: 0.6, kind: 'prop', label: 'tree' },
-  { x: -42, z: 16, r: 0.6, kind: 'prop', label: 'tree' },
-  { x: -43, z: 31, r: 0.6, kind: 'prop', label: 'tree' },
-  { x: -15, z: 16, r: 0.6, kind: 'prop', label: 'tree' },
-  { x: 20, z: 62, r: 0.6, kind: 'prop', label: 'tree' },
-  { x: 56, z: 24, r: 0.6, kind: 'prop', label: 'tree' },
+  ...BENCHES.map(([x, z]): Collider => ({ x, z, r: 1.2, kind: 'prop', label: 'bench' })),
+  ...TREES.map(([x, z]): Collider => ({ x, z, r: 0.6, kind: 'prop', label: 'tree' })),
   { x: 30, z: 62, r: 0.5, kind: 'prop', label: 'canopy-pillar' },
   { x: 42, z: 62, r: 0.5, kind: 'prop', label: 'canopy-pillar' },
   { x: 54, z: 62, r: 0.5, kind: 'prop', label: 'canopy-pillar' },
 ];
+/** Roomy paddock layout (slab 44x22): wide walk aisles between everything.
+ *  The z=76 racing line runs through the slab, so the display sits just north
+ *  of it, with generous gaps to traffic, tents, and the spectator rows. */
+export const RACE_SLAB = { w: 44, d: 22 };
+/** Paddock show-car display row: 6.4m spacing leaves ~4.4m walk aisles. */
+export const RACE_SHOW_CARS: readonly { kind: 'super' | 'muscle' | 'sport' | 'convertible' | 'police' | 'taxi'; x: number; z: number; yaw: number }[] = [
+  { kind: 'super', x: -61, z: 81.5, yaw: 0.15 },
+  { kind: 'muscle', x: -54.6, z: 81.5, yaw: -0.1 },
+  { kind: 'sport', x: -48.2, z: 81.5, yaw: 0.1 },
+  { kind: 'convertible', x: -41.8, z: 81.5, yaw: -0.15 },
+  { kind: 'police', x: -35.4, z: 81.5, yaw: 0.12 },
+  { kind: 'taxi', x: -29, z: 81.5, yaw: -0.08 },
+];
+/** Static spectator rows flanking the display (clear of the racing line and tents). */
+export interface CrowdSpot { x: number; z: number; yaw: number }
+export const RACE_CROWD: CrowdSpot[] = (() => {
+  const spots: CrowdSpot[] = [];
+  const cx = RACE_ARENA.x, cz = RACE_ARENA.z;
+  for (let i = 0; i < 9; i++) {
+    const x = cx - 15 + i * 3.75;
+    for (const z of [cz - 3.5, cz + 3]) {
+      spots.push({ x, z, yaw: Math.atan2(cx - x, -(cz - z)) });
+    }
+  }
+  return spots;
+})();
 export const TRAFFIC_ROUTE = [{ x: -76, z: -76 }, { x: 76, z: -76 }, { x: 76, z: 76 }, { x: -76, z: 76 }];
 export function circleHit(ax: number, az: number, ar: number, bx: number, bz: number, br: number): boolean {
   const dx = ax - bx, dz = az - bz, r = ar + br;

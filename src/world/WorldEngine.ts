@@ -1,13 +1,19 @@
 import { VEHICLE_KINDS, VEHICLES, type VehicleKind } from './Vehicles';
 import * as THREE from 'three';
-import { RealtimeClient, type RemoteDot, type RemotePos } from '../api/realtime';
+import { RealtimeClient, type RaceDirEntry, type RemoteDot, type RemotePos } from '../api/realtime';
 import { GameLoop } from '../game/GameLoop';
 import type { Theme } from '../game/State';
-import { bbSound, ttSound, unlockAudio } from '../game/Sound';
+import { barrelSound, bbSound, countdownBeep, crowdCheerSound, ttSound, unlockAudio } from '../game/Sound';
 import { AssetKit, buildMap, type Stickman, type Vehicle } from './Assets';
-import { BUILDINGS, GAME_CENTER, HOOP, PLACES, RIM, TABLE, seeded } from './Map';
+import { BUILDINGS, GAME_CENTER, HOOP, PLACES, RACE_ARENA, RACE_CROWD, RIM, TABLE, seeded } from './Map';
+import { BarrelSim, createBarrelMesh } from './Barrels';
 import { Simulation, type WorldAction, type WorldSnapshot } from './Simulation';
+import { RaceSim, type RacerState } from './RaceSim';
+import { gridSlots } from './Track';
+import { RaceRoute } from './RaceRoute';
 import type { TTShot } from './TableTennis';
+
+export type { RacerState };
 
 export type QualityLevel = 'low' | 'balanced' | 'high' | 'ultra';
 const QUALITY_PIXEL: Record<QualityLevel, number> = { low: 1, balanced: 1.5, high: 2, ultra: 2.5 };
@@ -49,6 +55,7 @@ interface Ghost {
   vehicleKind: VehicleKind | null;
   x: number; y: number; z: number; yaw: number; facing: number;
   stride: number;
+  blinker: number;
 }
 
 export class WorldEngine {
@@ -84,12 +91,32 @@ export class WorldEngine {
   private lastBBEvents = 0;
   private readonly loop: GameLoop;
   private readonly people: { actor: Stickman }[] = [];
+  /** Static paddock spectators: positioned once, cheering every frame. */
+  private readonly crowd: { actor: Stickman; phase: number }[] = [];
   /** Private-server presence. Null in solo. Remotes render as ghosts (Phase 4). */
   private realtime: RealtimeClient | null = null;
   private realtimeRoom: string | null = null;
+  connectionNotice = '';
+  private cancelRoomJoin: (() => void) | null = null;
   private realtimeMembers = 0;
   private realtimeDots: RemoteDot[] = [];
-  private readonly remotes = new Map<string, { name: string; pos: RemotePos; updatedAt: number }>();
+  private readonly remotes = new Map<string, { name: string; pos: RemotePos; updatedAt: number; blinker: number }>();
+  /** Host-authoritative race lobby. Works over the same presence socket. */
+  readonly race = new RaceSim();
+  private raceRoute: RaceRoute | null = null;
+  get raceGuidanceActive(): boolean {
+    const me = this.race.racers.get(this.localRaceId);
+    return !!me && !me.finished && (this.race.phase === 'countdown' || this.race.phase === 'racing');
+  }
+  /** Arena directory: joinable races in this server (refreshed by server push + request). */
+  raceDir: RaceDirEntry[] = [];
+  onRace: (() => void) | null = null;
+  raceNotice = '';
+  private raceJoinDeadline = 0;
+  private localRaceId = '';
+  private lastRacePosSend = 0;
+  private lastRaceStateSend = 0;
+  private raceStateDirty = false;
   /** Rendered friend ghosts (nearest MAX_GHOSTS) + pooled ghost vehicles by kind. */
   private readonly ghosts = new Map<string, Ghost>();
   private readonly ghostVehiclePool = new Map<VehicleKind, Vehicle[]>();
@@ -97,6 +124,9 @@ export class WorldEngine {
   private shake = 0; private lastImpactAt = -10; private prevSimTime = 0;
   private quality: QualityLevel = 'balanced'; private pixelCap = QUALITY_PIXEL.balanced;
   private lastW = 1; private lastH = 1;
+  readonly barrelSim = new BarrelSim();
+  private lastCountdownSec = -1;
+  private prevRacePhase: 'idle' | 'lobby' | 'countdown' | 'racing' | 'finished' = 'idle';
   private readonly cameraBoxes = BUILDINGS.map(b => new THREE.Box3(new THREE.Vector3(b.x - b.w / 2 - 0.35, 0, b.z - b.d / 2 - 0.35), new THREE.Vector3(b.x + b.w / 2 + 0.35, b.h + 0.5, b.z + b.d / 2 + 0.35)));
   private target = new THREE.Vector3(); private desired = new THREE.Vector3(); private direction = new THREE.Vector3(); private hit = new THREE.Vector3(); private ray = new THREE.Ray();
   private suspended = false; private disposed = false; private hudTime = 0;
@@ -131,6 +161,15 @@ export class WorldEngine {
       const actor = this.kit.stickman(false, i); actor.group.scale.setScalar(0.9 + random() * 0.15);
       this.scene.add(actor.group); this.people.push({ actor });
     }
+    // Neon Paddock meet crowd: static ring around the show-car display.
+    RACE_CROWD.forEach((spot, i) => {
+      const actor = this.kit.stickman(false, (i * 5) % 9);
+      actor.group.scale.setScalar(0.88 + random() * 0.2);
+      actor.group.position.set(spot.x, 0.08, spot.z);
+      actor.group.rotation.y = -spot.yaw;
+      this.scene.add(actor.group);
+      this.crowd.push({ actor, phase: random() * 6.28 });
+    });
     this.syncWorldVehicles(true);
     this.marker = new THREE.Mesh(new THREE.TorusGeometry(1.2, 0.07, 8, 48), new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false }));
     this.marker.rotation.x = -Math.PI / 2; this.marker.renderOrder = 5; this.scene.add(this.marker);
@@ -169,26 +208,207 @@ export class WorldEngine {
     this.bbNet = new THREE.LineSegments(netGeo, new THREE.LineBasicMaterial({ color: 0xf5f5f5, transparent: true, opacity: 0.85 }));
     this.bbNet.frustumCulled = false; this.scene.add(this.bbNet);
     this.setTheme('light');
+    // Interactive dynamic barrels in the street racing arena
+    for (const b of this.barrelSim.barrels) {
+      const mesh = createBarrelMesh(b.color);
+      mesh.position.set(b.x, b.y, b.z);
+      mesh.rotation.set(b.pitch, b.yaw, b.roll);
+      this.scene.add(mesh);
+      b.mesh = mesh;
+    }
     this.loop = new GameLoop(dt => {
-      this.simulation.update(dt); this.hudTime += dt;
+      const nowMs = Date.now();
+      this.race.pollCountdown(nowMs);
+      if (this.race.phase === 'countdown') {
+        const sec = Math.ceil(Math.max(0, this.race.countdownEndsAt - nowMs) / 1000);
+        if (sec !== this.lastCountdownSec && sec >= 1) {
+          this.lastCountdownSec = sec;
+          countdownBeep('red');
+        }
+      } else if (this.prevRacePhase === 'countdown' && this.race.phase === 'racing') {
+        countdownBeep('green');
+        crowdCheerSound();
+        this.lastCountdownSec = -1;
+      }
+      this.prevRacePhase = this.race.phase;
+
+      if (this.race.phase !== 'countdown') this.simulation.update(dt);
+      this.hudTime += dt;
       if (this.hudTime >= 0.1) { this.hudTime = 0; this.emit(); }
     }, this.render);
     this.emit();
   }
   private emit(): void {
     const sim = this.simulation;
+    const nowMs = Date.now();
+    if (this.raceJoinDeadline && nowMs > this.raceJoinDeadline) {
+      this.leaveRace(); this.raceNotice = 'The race host did not respond. Please try joining again.';
+    }
     if (this.realtime?.connected && sim.phase === 'playing') {
       this.realtime.sendPos({
         x: sim.x, z: sim.z, y: sim.y, yaw: sim.yaw, facing: sim.facing,
         driving: sim.driving, vehicleKind: sim.vehicleKind,
         speed: sim.driving ? sim.car.speed : sim.pace,
       });
+      // Race progress @10Hz (same cadence as pos). Works solo too (host relays when joined).
+      if (this.race.phase !== 'idle') {
+        const me = this.race.racers.get(this.localRaceId);
+        if (me && !this.race.isHost && nowMs - this.lastRacePosSend > 90) {
+          this.lastRacePosSend = nowMs;
+          this.realtime.sendRacePos({
+            hostId: this.race.hostId,
+            lap: me.lap, cp: me.checkpoint, dist: me.dist,
+            finished: me.finished, finishMs: me.finishMs, bestLapMs: me.bestLapMs,
+            vehicleKind: me.vehicleKind, ready: me.ready, blinker: sim.blinker,
+          });
+        }
+        // Host broadcasts authoritative snapshot on change + 2Hz heartbeat during countdown/racing.
+        if (this.race.isHost && (this.raceStateDirty || nowMs - this.lastRaceStateSend > 500)) {
+          this.lastRaceStateSend = nowMs;
+          this.raceStateDirty = false;
+          this.realtime.sendRaceState(this.race.snapshot());
+        }
+      }
+    }
+    // Local race ticking (countdown -> racing -> lap/finish) runs even solo-offline.
+    if (sim.phase === 'playing' && this.race.phase !== 'idle') {
+      this.race.pollCountdown(nowMs);
+      if (this.race.phase === 'racing' && sim.driving) {
+        const evt = this.race.tickLocal(sim.car.x, sim.car.z, nowMs);
+        if (evt.finished) {
+          crowdCheerSound();
+          // Fast-path: a finish goes out immediately (bypasses the 90ms
+          // throttle) so P1's board pops within ~200ms, not a heartbeat later.
+          this.sendRacePosNow();
+          if (this.race.isHost) this.raceStateDirty = true;
+          this.onRace?.();
+        } else if (evt.lapped) this.onRace?.();
+      }
+      if (this.race.isHost) {
+        const done = this.race.pollFinish(nowMs);
+        if (done) {
+          this.raceStateDirty = true;
+          this.onRace?.();
+        }
+      }
     }
     this.publish({
       ...sim.snapshot,
       room: this.realtimeRoom ? { code: this.realtimeRoom, members: this.realtimeMembers } : null,
       dots: this.realtimeDots,
     });
+    this.onRace?.();
+  }
+
+  get raceId(): string {
+    return this.localRaceId;
+  }
+  get raceName(): string {
+    return this.playerName;
+  }
+  /** Race lobby API (host-authoritative, max 8, min 2 to start). */
+  ensureRaceId(): string {
+    if (!this.localRaceId) this.localRaceId = `r-${Math.random().toString(36).slice(2, 9)}`;
+    return this.localRaceId;
+  }
+  createRace(laps: number, vehicleKind = this.simulation.vehicleKind): boolean {
+    if (!this.realtime?.connected || this.race.phase !== 'idle' || this.simulation.mode !== 'roam') return false;
+    this.raceNotice = '';
+    const id = this.ensureRaceId();
+    this.race.create(id, this.playerName || 'YOU', vehicleKind, laps);
+    this.raceStateDirty = true;
+    this.emit();
+    return true;
+  }
+  private joinRaceLobby(hostId: string, vehicleKind: VehicleKind): void {
+    this.raceNotice = '';
+    this.raceJoinDeadline = Date.now() + 6000;
+    const id = this.ensureRaceId();
+    this.race.joinAs(id, this.playerName || 'YOU', vehicleKind, hostId);
+    this.raceStateDirty = true;
+    // Announce immediately so the host merges us into the lobby roster.
+    this.lastRacePosSend = 0;
+    this.emit();
+  }
+  /**
+   * Join a specific advertised race: reset any stale local lobby, enter as
+   * waiter (paddock, no teleport) and let the host snapshot merge us in.
+   * Returns false when that race is full or already started.
+   */
+  joinRaceByHost(hostId: string, vehicleKind = this.simulation.vehicleKind): boolean {
+    if (!this.realtime?.connected || this.race.phase !== 'idle' || this.simulation.mode !== 'roam') return false;
+    const entry = this.raceDir.find((r) => r.hostId === hostId);
+    if (!entry || entry.phase !== 'lobby' || entry.count >= 8) return false;
+    this.joinRaceLobby(hostId, vehicleKind);
+    this.realtime?.requestRaceDir();
+    return true;
+  }
+  requestRaceDir(): void {
+    this.realtime?.requestRaceDir();
+  }
+  /** Unthrottled progress send (finish fast-path). Hosts fold it into the snapshot instead. */
+  private sendRacePosNow(): void {
+    const sim = this.simulation;
+    const me = this.race.racers.get(this.localRaceId);
+    if (!this.realtime?.connected || !me || this.race.phase === 'idle' || this.race.isHost) return;
+    this.lastRacePosSend = Date.now();
+    this.realtime.sendRacePos({
+      hostId: this.race.hostId,
+      lap: me.lap, cp: me.checkpoint, dist: me.dist,
+      finished: me.finished, finishMs: me.finishMs, bestLapMs: me.bestLapMs,
+      vehicleKind: me.vehicleKind, ready: me.ready, blinker: sim.blinker,
+    });
+  }
+  toggleRaceReady(): void {
+    const me = this.race.racers.get(this.localRaceId);
+    if (me && this.race.phase === 'lobby') {
+      me.ready = !me.ready;
+      this.raceStateDirty = true;
+      this.emit();
+    }
+  }
+  setRaceLaps(laps: number): void {
+    if (this.race.isHost) {
+      this.race.setLaps(laps);
+      this.raceStateDirty = true;
+      this.emit();
+    }
+  }
+  startRaceCountdown(): boolean {
+    const ok = this.race.startCountdown(Date.now());
+    if (ok) {
+      this.raceStateDirty = true;
+      this.teleportToGrid();
+      this.emit();
+    }
+    return ok;
+  }
+  rematchRace(): void {
+    if (this.race.rematch()) { this.raceStateDirty = true; this.emit(); }
+  }
+  leaveRace(): void {
+    this.raceJoinDeadline = 0;
+    const me = this.race.racers.get(this.localRaceId);
+    if (this.race.isHost) this.realtime?.sendRaceState({ ...this.race.snapshot(), phase: 'idle', racers: [] });
+    else if (me) this.realtime?.sendRacePos({ hostId: this.race.hostId, leaving: true,
+      lap: me.lap, cp: me.checkpoint, dist: me.dist, finished: me.finished,
+      finishMs: me.finishMs, bestLapMs: me.bestLapMs, vehicleKind: me.vehicleKind, ready: false, blinker: 0 });
+    this.race.reset();
+    this.emit();
+  }
+  teleportToGrid(): void {
+    const slots = gridSlots();
+    const order = [...this.race.racers.keys()];
+    let idx = order.indexOf(this.localRaceId);
+    if (idx < 0) idx = 0;
+    const slot = slots[idx % slots.length];
+    const me = this.race.racers.get(this.localRaceId);
+    if (!me) return;
+    this.simulation.vehicleKind = me.vehicleKind as VehicleKind;
+    this.simulation.driving = true;
+    this.simulation.repair();
+    this.simulation.placeAt(slot.x, slot.z, slot.yaw);
+    this.emit();
   }
   /**
    * Joins a private server's presence channel. Resolves once the server
@@ -201,33 +421,101 @@ export class WorldEngine {
       const done = (fn: () => void): void => {
         if (!settled) {
           settled = true;
+          this.cancelRoomJoin = null;
           fn();
         }
       };
+      this.cancelRoomJoin = () => done(() => reject(new Error('Server connection cancelled.')));
       const client = new RealtimeClient(token, code, {
-        onWelcome: (_room, _you, roster) => {
+        onWelcome: (_room, you, roster) => {
+          this.connectionNotice = '';
           this.realtimeRoom = code;
           this.realtimeMembers = roster.length;
+          // Stable race id per socket: server player id.
+          this.localRaceId = you;
+          this.realtime?.requestRaceDir();
           this.emit();
           done(resolve);
         },
         onRoster: (roster) => {
           this.realtimeMembers = roster.length;
+          // Roster change may mean host left: drop stale directory rows locally too.
+          const present = new Set(roster.map((r) => r.id));
+          for (const id of this.race.racers.keys()) {
+            if (!present.has(id)) { this.race.removeParticipant(id); this.raceStateDirty = this.race.isHost; }
+          }
+          const before = this.raceDir.length;
+          this.raceDir = this.raceDir.filter((r) => present.has(r.hostId));
+          if (before !== this.raceDir.length) this.onRace?.();
           this.emit();
         },
         onPos: (id, name, pos) => {
-          this.remotes.set(id, { name, pos, updatedAt: performance.now() });
+          const prev = this.remotes.get(id);
+          this.remotes.set(id, { name, pos, updatedAt: performance.now(), blinker: prev?.blinker ?? 0 });
+        },
+        onRacePos: (id, name, r) => {
+          if (this.race.phase === 'idle' || r.hostId !== this.race.hostId) return;
+          if (r.leaving) {
+            this.race.removeParticipant(id);
+            this.raceStateDirty = this.race.isHost;
+            this.emit(); return;
+          }
+          const prev = this.remotes.get(id);
+          if (prev) prev.blinker = r.blinker;
+          // Host tracks joiners for standings; non-host applies progress.
+          const knownFinished = this.race.racers.get(id)?.finished ?? false;
+          this.race.upsertRemote({
+            id, name, ready: r.ready, vehicleKind: r.vehicleKind,
+            lap: r.lap, checkpoint: r.cp, dist: r.dist,
+            finished: r.finished, finishMs: r.finishMs, bestLapMs: r.bestLapMs, isLocal: false,
+          });
+          // New joiner arrived while we host the lobby: rebroadcast roster promptly.
+          if (this.race.isHost && this.race.phase === 'lobby') this.raceStateDirty = true;
+          // Just learned a finish: rebroadcast the snapshot now so every
+          // client's live board/toast updates instead of waiting 500ms.
+          if (this.race.isHost && this.race.racers.get(id)?.finished && !knownFinished) this.raceStateDirty = true;
+          this.onRace?.();
+        },
+        onRaceState: (id, _name, s) => {
+          if (this.race.phase === 'idle' || id !== this.race.hostId || this.race.isHost) return;
+          if (s.phase === 'idle') { this.race.reset(); this.emit(); return; }
+          if (!s.racers.some(r => r.id === this.localRaceId)) return; // host is authority, ignore echoes
+          this.raceJoinDeadline = 0;
+          const before = this.race.phase;
+          this.race.applySnapshot(s);
+          // Grid teleport ONLY on countdown entry (joiners stay in paddock until lights).
+          if (before !== 'countdown' && s.phase === 'countdown') this.teleportToGrid();
+          if (before !== this.race.phase) this.onRace?.();
+          this.emit();
+        },
+        onRaceDir: (races) => {
+          this.raceDir = races;
+          this.onRace?.();
         },
         onDots: (players) => {
           this.realtimeDots = players;
           this.emit();
         },
-        onError: (_code, message) => done(() => reject(new Error(message))),
+        onError: (code, message) => {
+          if (code === 'race_join_failed') { this.race.reset(); this.raceJoinDeadline = 0; this.raceNotice = message; this.emit(); return; }
+          this.connectionNotice = message;
+          this.emit();
+          done(() => reject(new Error(message)));
+        },
+        onReconnecting: () => {
+          this.connectionNotice = 'Connection interrupted. Reconnecting to your server...';
+          this.realtimeRoom = null; this.realtimeMembers = 0; this.realtimeDots = [];
+          this.remotes.clear(); this.race.reset(); this.raceDir = []; this.raceJoinDeadline = 0;
+          this.emit();
+        },
         onClose: () => {
           this.realtimeRoom = null;
           this.realtimeMembers = 0;
           this.realtimeDots = [];
           this.remotes.clear();
+          this.race.reset();
+          this.raceJoinDeadline = 0;
+          this.raceDir = [];
           this.emit();
           done(() => reject(new Error('Lost connection to the server.')));
         },
@@ -238,13 +526,19 @@ export class WorldEngine {
   }
   /** Leaves presence (stays in the world solo). Membership rows are left for REST /leave. */
   leaveRoomSession(): void {
+    this.cancelRoomJoin?.();
+    this.connectionNotice = '';
+    this.raceJoinDeadline = 0;
     this.realtime?.dispose();
     this.realtime = null;
     this.realtimeRoom = null;
     this.realtimeMembers = 0;
     this.realtimeDots = [];
+    this.raceDir = [];
     this.remotes.clear();
     for (const id of [...this.ghosts.keys()]) this.removeGhost(id);
+    // Leaving the server drops any race (host authority lives in the room).
+    if (this.race.phase !== 'idle') this.race.reset();
     this.emit();
   }
   private acquireGhostVehicle(kind: VehicleKind): Vehicle {
@@ -316,7 +610,7 @@ export class WorldEngine {
         this.scene.add(tag);
         ghost = {
           id, actor, tag, tagCanvas, tagTexture, vehicle: null, vehicleKind: null,
-          x: r.pos.x, y: r.pos.y, z: r.pos.z, yaw: r.pos.yaw, facing: r.pos.facing, stride: 0,
+          x: r.pos.x, y: r.pos.y, z: r.pos.z, yaw: r.pos.yaw, facing: r.pos.facing, stride: 0, blinker: 0,
         };
         this.ghosts.set(id, ghost);
       }
@@ -350,7 +644,8 @@ export class WorldEngine {
         ghost.vehicle.group.visible = true;
         ghost.vehicle.group.position.set(ghost.x, 0.08, ghost.z);
         ghost.vehicle.group.rotation.y = -ghost.yaw;
-        ghost.vehicle.update(r.pos.speed, 0, dt, false);
+        ghost.blinker = r.blinker;
+        ghost.vehicle.update(r.pos.speed, 0, dt, false, undefined, ghost.blinker, sim.time);
         ghost.tag.visible = sim.view === 'third';
         ghost.tag.position.set(ghost.x, ghost.y + 2.6, ghost.z);
       } else {
@@ -370,6 +665,8 @@ export class WorldEngine {
   setPlayerName(name: string): void {
     this.playerName = name.trim().slice(0, 24);
     drawNameTag(this.nameCanvas, this.nameTexture, this.playerName);
+    const me = this.race.racers.get(this.localRaceId);
+    if (me) { me.name = this.playerName; this.raceStateDirty = true; }
     this.emit();
   }
   /** Keep render meshes in sync with the stealable world: rebuild on kind change, grow/shrink freely. */
@@ -403,9 +700,13 @@ export class WorldEngine {
     });
   }
   begin(): void { unlockAudio(); this.simulation.begin(); this.emit(); }
-  enterTable(): void { unlockAudio(); this.simulation.enterTable(); this.lastTTEvents = this.simulation.table.events.length; this.emit(); }
+  /** Leave the optional race before returning to the entry screen. */
+  exitToIntro(): void {
+    this.leaveRace(); this.clearInput(); this.simulation.exitToIntro(); this.emit();
+  }
+  enterTable(): void { if (this.race.phase !== 'idle') return; unlockAudio(); this.simulation.enterTable(); this.lastTTEvents = this.simulation.table.events.length; this.emit(); }
   rematch(): void { unlockAudio(); this.simulation.table.reset(); this.lastTTEvents = this.simulation.table.events.length; this.emit(); }
-  enterBasket(): void { unlockAudio(); this.simulation.enterBasket(); this.lastBBEvents = this.simulation.basket.events.length; this.emit(); }
+  enterBasket(): void { if (this.race.phase !== 'idle') return; unlockAudio(); this.simulation.enterBasket(); this.lastBBEvents = this.simulation.basket.events.length; this.emit(); }
   exitBasket(): void { this.simulation.exitBasket(); this.emit(); }
   resetBasket(): void { unlockAudio(); this.simulation.basket.resetStats(); this.lastBBEvents = this.simulation.basket.events.length; this.emit(); }
   basketTap(): void { unlockAudio(); if (this.simulation.mode === 'basket') this.simulation.basket.pressMeter(); }
@@ -423,8 +724,8 @@ export class WorldEngine {
   start(): void { if (!this.suspended) this.loop.start(); }
   togglePause(): void { this.simulation.togglePause(); this.emit(); }
   toggleView(): void { this.simulation.toggleView(); this.emit(); }
-  cycleVehicle(): void { this.simulation.cycleVehicle(); this.emit(); }
-  interact(): void { this.simulation.interact(); this.emit(); }
+  cycleVehicle(): void { if (this.race.phase !== 'idle') return; this.simulation.cycleVehicle(); this.emit(); }
+  interact(): void { if (this.race.phase === 'countdown' || this.race.phase === 'racing') return; this.simulation.interact(); this.emit(); }
   waypoint(id: string): void { if (PLACES.some(p => p.id === id)) { this.simulation.waypoint = id; this.emit(); } }
   input(action: WorldAction, down: boolean, source: string): void { if (!this.suspended || !down) this.simulation.setInput(action, down, source); }
   joystick(x: number, y: number): void { if (!this.suspended) this.simulation.setStick(x, y); }
@@ -500,6 +801,12 @@ export class WorldEngine {
   private render = (alpha: number): void => {
     if (this.disposed) return;
     const sim = this.simulation; if (!sim.active) alpha = 1;
+    const raceGuidance = this.raceGuidanceActive;
+    if (raceGuidance && !this.raceRoute) {
+      this.raceRoute = new RaceRoute();
+      this.scene.add(this.raceRoute.group);
+    }
+    if (this.raceRoute) this.raceRoute.group.visible = raceGuidance && sim.phase === 'playing' && sim.mode === 'roam';
     const x = THREE.MathUtils.lerp(sim.previous.x, sim.x, alpha), z = THREE.MathUtils.lerp(sim.previous.z, sim.z, alpha), y = THREE.MathUtils.lerp(sim.previous.y, sim.y, alpha);
     this.avatar.group.position.set(x, y + 0.08, z); this.avatar.group.rotation.y = -sim.facing;
     // Model forward is -Z; a positive world yaw turns it toward +X.
@@ -522,7 +829,7 @@ export class WorldEngine {
     this.car.update(sim.car.speed, sim.car.steer, dt, sim.car.braking, {
       pitch: THREE.MathUtils.clamp(-accel * 0.012, -0.06, 0.08),
       roll: sim.skidding ? Math.sin(sim.time * 20) * 0.02 : -sim.car.steer * Math.min(0.05, Math.abs(sim.car.speed) * 0.003),
-    });
+    }, sim.blinker, sim.time);
     this.car.glazing.visible = !(sim.driving && sim.view === 'first');
     // Smooth GTA doors: swing the driver door while slipping in/out, ease shut after.
     const doorOpen = sim.transition > 0 ? Math.min(1, sim.transition / 0.3) * 1.15 : 0;
@@ -533,6 +840,41 @@ export class WorldEngine {
       person.actor.group.position.set(point.x, 0.08, point.z); person.actor.group.rotation.y = -point.yaw;
       person.actor.animate({ phase: point.phase, intensity: point.move, airborne: false, dip: 0, idle: sim.time + i * 1.7 });
     });
+    // Dynamic interactive barrels: vehicle & player collision, physics, and mesh sync
+    if (sim.driving) {
+      this.barrelSim.checkVehicleHit(sim.car.x, sim.car.z, sim.car.yaw, sim.car.speed, sim.vehicleKind, sim.lateralSpeed);
+    } else {
+      this.barrelSim.checkPlayerHit(sim.x, sim.z, sim.pvx, sim.pvz);
+    }
+    for (let i = 0; i < sim.traffic.length; i++) {
+      const t = sim.traffic[i];
+      if (t) this.barrelSim.checkVehicleHit(t.x, t.z, t.yaw, t.speed, t.kind);
+    }
+    this.barrelSim.update(dt, BUILDINGS);
+    for (let i = 0; i < this.barrelSim.barrels.length; i++) {
+      const b = this.barrelSim.barrels[i];
+      if (b.mesh) {
+        b.mesh.position.set(b.x, b.y, b.z);
+        b.mesh.rotation.set(b.pitch, b.yaw, b.roll);
+      }
+    }
+
+    // Paddock crowd: movie street-racing crowd cheering (excited jumping, waving arms overhead)
+    const arenaDist = Math.hypot(sim.x - RACE_ARENA.x, sim.z - RACE_ARENA.z);
+    const nearArena = arenaDist < 36;
+    const isRacing = this.race.phase === 'countdown' || this.race.phase === 'racing';
+    const cheerLevel = isRacing ? 1.0 : nearArena ? 0.85 : 0.45;
+    for (let i = 0; i < this.crowd.length; i++) {
+      const fan = this.crowd[i];
+      fan.actor.animate({
+        phase: fan.phase + sim.time * (4.8 + (i % 3) * 0.7),
+        intensity: 0,
+        airborne: false,
+        dip: 0,
+        idle: sim.time + i * 0.9,
+        cheer: cheerLevel,
+      });
+    }
     this.syncWorldVehicles();
     this.traffic.forEach((vehicle, i) => {
       const p = sim.traffic[i]; if (!p) { vehicle.group.visible = false; return; }
@@ -623,7 +965,7 @@ export class WorldEngine {
     const shakeX = this.shake * Math.sin(sim.time * 70) * 0.35, shakeY = this.shake * Math.cos(sim.time * 55) * 0.25;
     const waypoint = PLACES.find(p => p.id === sim.waypoint);
     // Hide the waypoint ring during a match — it sits on the court otherwise.
-    this.marker.visible = Boolean(waypoint) && !inTable && !inBasket;
+    this.marker.visible = Boolean(waypoint) && !inTable && !inBasket && this.race.phase === 'idle';
     if (waypoint && !inTable && !inBasket) this.marker.position.set(waypoint.x, 0.25, waypoint.z);
     if (inBasket) {
       // Shooter POV from the current random spot: stand behind the release point, eyes on the rim.
@@ -685,10 +1027,12 @@ export class WorldEngine {
   };
   destroy(): void {
     this.disposed = true; this.loop.stop(); this.clearInput();
+    this.cancelRoomJoin?.();
     this.realtime?.dispose(); this.realtime = null;
     for (const id of [...this.ghosts.keys()]) this.removeGhost(id);
     for (const pooled of this.ghostVehiclePool.values()) for (const v of pooled) this.scene.remove(v.group);
     this.ghostVehiclePool.clear();
+    this.raceRoute?.dispose();
     this.scene.traverse(object => { if (object instanceof THREE.InstancedMesh) object.dispose(); });
     this.marker.geometry.dispose(); (this.marker.material as THREE.Material).dispose();
     this.nameTexture.dispose(); (this.nameTag.material as THREE.Material).dispose();

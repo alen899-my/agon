@@ -2,7 +2,6 @@ import type { WebSocket } from 'ws';
 import {
   MAX_ROOM_MEMBERS,
   ROOM_TTL_HOURS,
-  deleteRoom,
   getMembership,
   getRoom,
   normalizeRoomCode,
@@ -11,6 +10,8 @@ import {
 import { ApiError } from '../utils/http.js';
 import {
   type PosPayload,
+  type RaceSnapshotMsg,
+  type RacePosPayload,
   type RosterEntry,
   type ServerMessage,
 } from './protocol.js';
@@ -24,7 +25,7 @@ import {
 const CULL_DISTANCE = 130;
 const POS_PER_SECOND_LIMIT = 30;
 const DOTS_INTERVAL_MS = 1000;
-const HELLO_TIMEOUT_MS = 5_000;
+const HELLO_TIMEOUT_MS = 15_000;
 const HELLO_PER_MINUTE_PER_IP = 12;
 const ROOM_TOUCH_THROTTLE_MS = 60_000;
 const WORLD_BOUND = 130;
@@ -63,10 +64,15 @@ function validPos(p: unknown): p is PosPayload {
 }
 
 export class RoomHub {
+  private readonly pendingHellos = new WeakSet<MemberState>();
+  private readonly raceSnapshots = new Map<string, RaceSnapshotMsg>();
+  private readonly raceTargets = new Map<string, string>();
   private readonly rooms = new Map<string, Map<string, MemberState>>();
   private readonly dotsTimers = new Map<string, NodeJS.Timeout>();
   private readonly helloStamps = new Map<string, number[]>();
   private readonly roomTouch = new Map<string, number>();
+  /** Arena directory: joinable race lobbies per room, keyed by host player id. */
+  private readonly raceDir = new Map<string, Map<string, { hostId: string; hostName: string; laps: number; count: number; phase: 'lobby' | 'countdown' | 'racing' | 'finished' | 'idle' }>>();
 
   /** Creates tracked state for an authenticated socket; callers wire events. */
   admit(ws: WebSocket, playerId: string, name: string): MemberState {
@@ -113,6 +119,7 @@ export class RoomHub {
         this.dotsTimers.delete(code);
         return;
       }
+      this.touchThrottled(code);
       const players = [...room.values()]
         .filter((m) => m.pos)
         .map((m) => ({ id: m.playerId, x: m.pos!.x, z: m.pos!.z, driving: m.pos!.driving }));
@@ -123,7 +130,10 @@ export class RoomHub {
   }
 
   async onHello(state: MemberState, rawCode: unknown, ip: string): Promise<void> {
-    if (!this.helloAllowed(ip)) {
+    if (state.helloed || this.pendingHellos.has(state) || state.ws.readyState !== state.ws.OPEN) return;
+    this.pendingHellos.add(state);
+    try {
+    if (!this.helloAllowed(ip + ':' + state.playerId)) {
       send(state.ws, { t: 'error', code: 'rate_limited', message: 'Too many join attempts. Wait a minute.' });
       state.ws.close(4413, 'rate limited');
       return;
@@ -141,7 +151,6 @@ export class RoomHub {
       return;
     }
     if (Date.now() - new Date(room.last_active_at).getTime() > ROOM_TTL_HOURS * 3_600_000) {
-      await deleteRoom(code);
       send(state.ws, { t: 'error', code: 'room_expired', message: 'That server expired.' });
       return;
     }
@@ -150,6 +159,7 @@ export class RoomHub {
       send(state.ws, { t: 'error', code: 'not_a_member', message: 'Join this server with its code first.' });
       return;
     }
+    if (state.ws.readyState !== state.ws.OPEN) return;
     let present = this.rooms.get(code);
     if (!present) {
       present = new Map();
@@ -160,22 +170,27 @@ export class RoomHub {
       return;
     }
     // Single socket per player: drop a stale duplicate.
-    present.get(state.playerId)?.ws.close(4409, 'superseded');
+    const previous = present.get(state.playerId);
     state.role = membership.role;
     state.roomCode = code;
     state.helloed = true;
     present.set(state.playerId, state);
+    previous?.ws.close(4409, 'superseded');
     this.touchThrottled(code);
     this.ensureDots(code);
     send(state.ws, { t: 'welcome', room: code, you: state.playerId, roster: this.presentRoster(code) });
     const roster = this.presentRoster(code);
     for (const [id, member] of present) {
-      if (id !== state.playerId) send(member.ws, { t: 'roster', roster });
+      if (id !== state.playerId) {
+        send(member.ws, { t: 'roster', roster });
+        if (member.pos) send(state.ws, { t: 'pos', id, name: member.name, p: member.pos });
+      }
     }
+    } finally { this.pendingHellos.delete(state); }
   }
 
   onPos(state: MemberState, payload: unknown): void {
-    if (!state.helloed || !state.roomCode) return;
+    if (!state.helloed || !state.roomCode || this.rooms.get(state.roomCode)?.get(state.playerId) !== state) return;
     const now = Date.now();
     state.msgStamps = state.msgStamps.filter((t) => now - t < 1000);
     if (state.msgStamps.length >= POS_PER_SECOND_LIMIT) return; // drop abuse, keep socket
@@ -192,15 +207,152 @@ export class RoomHub {
     }
   }
 
+  private validRacePos(r: unknown): r is RacePosPayload {
+    if (typeof r !== 'object' || r === null) return false;
+    const v = r as Record<string, unknown>;
+    return (
+      typeof v.hostId === 'string' && v.hostId.length > 0 && v.hostId.length <= 100 &&
+      (v.leaving === undefined || typeof v.leaving === 'boolean') &&
+      Number.isInteger(v.lap) && (v.lap as number) >= 1 && (v.lap as number) <= 11 &&
+      Number.isInteger(v.cp) && (v.cp as number) >= 0 && (v.cp as number) < 8 &&
+      Number.isFinite(v.dist) && (v.dist as number) >= 0 && (v.dist as number) <= 7000 &&
+      typeof v.finished === 'boolean' &&
+      Number.isFinite(v.finishMs) && (v.finishMs as number) >= 0 && (v.finishMs as number) <= 3600000 &&
+      Number.isFinite(v.bestLapMs) && (v.bestLapMs as number) >= 0 && (v.bestLapMs as number) <= 3600000 &&
+      typeof v.vehicleKind === 'string' && (v.vehicleKind as string).length >= 1 && (v.vehicleKind as string).length <= 24 &&
+      typeof v.ready === 'boolean' &&
+      Number.isFinite(v.blinker) && (v.blinker as number) >= 0 && (v.blinker as number) <= 3
+    );
+  }
+
+  private validRaceSnapshot(s: unknown): boolean {
+    if (typeof s !== 'object' || s === null) return false;
+    const v = s as Record<string, unknown>;
+    if (!['idle', 'lobby', 'countdown', 'racing', 'finished'].includes(v.phase as string)) return false;
+    if (!Number.isInteger(v.laps) || (v.laps as number) < 1 || (v.laps as number) > 10) return false;
+    if (!Array.isArray(v.racers) || (v.racers as unknown[]).length > 8) return false;
+    if (!Number.isFinite(v.sentAt) || !Number.isFinite(v.countdownEndsAt) || !Number.isFinite(v.startedAt)) return false;
+    const ids = new Set<string>();
+    return v.racers.every((r: unknown) => {
+      if (!r || typeof r !== 'object') return false;
+      const row = r as Record<string, unknown>;
+      if (typeof row.id !== 'string' || !row.id || ids.has(row.id) || typeof row.name !== 'string' || row.name.length > 24) return false;
+      ids.add(row.id);
+      return this.validRacePos({ ...row, hostId: row.id, cp: row.checkpoint, blinker: 0 });
+    });
+  }
+
+  /** Race progress: route only to members of the selected race. */
+  onRacePos(state: MemberState, payload: unknown): void {
+    if (!state.helloed || !state.roomCode) return;
+    const now = Date.now();
+    state.msgStamps = state.msgStamps.filter((t) => now - t < 1000);
+    if (state.msgStamps.length >= POS_PER_SECOND_LIMIT) return;
+    state.msgStamps.push(now);
+    if (!this.validRacePos(payload)) return;
+    const room = this.rooms.get(state.roomCode);
+    if (!room) return;
+    const host = room.get(payload.hostId);
+    const race = this.raceSnapshots.get(payload.hostId);
+    if (!host || !race) { send(state.ws, { t: 'error', code: 'race_join_failed', message: 'That race is no longer available.' }); return; }
+    const target = this.raceTargets.get(state.playerId);
+    if (payload.leaving) {
+      if (target !== payload.hostId) return;
+      this.raceTargets.delete(state.playerId);
+    } else {
+      if (target && target !== payload.hostId) return;
+      if (!target && (race.phase !== 'lobby' || [...this.raceTargets.values()].filter(id => id === payload.hostId).length >= 8)) {
+        send(state.ws, { t: 'error', code: 'race_join_failed', message: 'That race is full or has already started.' }); return;
+      }
+      this.raceTargets.set(state.playerId, payload.hostId);
+    }
+    for (const [id, member] of room) {
+      if (id === state.playerId || !member.helloed || (id !== payload.hostId && this.raceTargets.get(id) !== payload.hostId)) continue;
+      send(member.ws, { t: 'race_pos', id: state.playerId, name: state.name, r: payload as never });
+    }
+  }
+
+  /** Host-authoritative race snapshot: relayed only to opted-in members. */
+  onRaceState(state: MemberState, snapshot: unknown): void {
+    if (!state.helloed || !state.roomCode) return;
+    if (!this.validRaceSnapshot(snapshot)) return;
+    const room = this.rooms.get(state.roomCode);
+    if (!room) return;
+    const s = snapshot as RaceSnapshotMsg;
+    if (s.phase !== 'idle') {
+      if (s.racers[0]?.id !== state.playerId || s.racers.some(r => !room.has(r.id))) return;
+      const target = this.raceTargets.get(state.playerId);
+      if (target && target !== state.playerId) return;
+      if (s.racers.some(r => r.id !== state.playerId && this.raceTargets.get(r.id) !== state.playerId)) return;
+      this.raceTargets.set(state.playerId, state.playerId);
+      this.raceSnapshots.set(state.playerId, s);
+    } else if (!this.raceSnapshots.has(state.playerId)) return;
+    // Maintain the arena directory: only lobby/countdown are joinable.
+    let dir = this.raceDir.get(state.roomCode);
+    if (!dir) {
+      dir = new Map();
+      this.raceDir.set(state.roomCode, dir);
+    }
+    if (s.phase === 'lobby' || s.phase === 'countdown') {
+      dir.set(state.playerId, {
+        hostId: state.playerId, hostName: state.name, laps: s.laps,
+        count: Math.min(8, s.racers.length), phase: s.phase,
+      });
+    } else {
+      dir.delete(state.playerId);
+    }
+    for (const [id, member] of room) {
+      if (id === state.playerId || !member.helloed || this.raceTargets.get(id) !== state.playerId) continue;
+      send(member.ws, { t: 'race_state', id: state.playerId, name: state.name, s: snapshot as never });
+    }
+    if (s.phase === 'idle') {
+      this.raceSnapshots.delete(state.playerId);
+      for (const [id, hostId] of this.raceTargets) if (hostId === state.playerId) this.raceTargets.delete(id);
+    }
+    this.broadcastRaceDir(state.roomCode);
+  }
+
+  /** Arena directory request: which races can I join in this room? */
+  onRaceList(state: MemberState): void {
+    if (!state.helloed || !state.roomCode) return;
+    this.sendRaceDir(state);
+  }
+
+  private sendRaceDir(state: MemberState): void {
+    if (!state.roomCode) return;
+    const dir = this.raceDir.get(state.roomCode);
+    const races = [...(dir?.values() ?? [])].filter((r) => r.phase === 'lobby' || r.phase === 'countdown').slice(0, 12);
+    send(state.ws, { t: 'race_dir', races });
+  }
+
+  private broadcastRaceDir(code: string): void {
+    const room = this.rooms.get(code);
+    if (!room) return;
+    const dir = this.raceDir.get(code);
+    const races = [...(dir?.values() ?? [])].filter((r) => r.phase === 'lobby' || r.phase === 'countdown').slice(0, 12);
+    for (const member of room.values()) {
+      if (!member.helloed) continue;
+      send(member.ws, { t: 'race_dir', races });
+    }
+  }
+
   onLeave(state: MemberState): void {
     if (!state.roomCode) return;
-    const room = this.rooms.get(state.roomCode);
+    const code = state.roomCode;
+    const room = this.rooms.get(code);
     if (!room || room.get(state.playerId)?.ws !== state.ws) return;
     room.delete(state.playerId);
+    this.raceSnapshots.delete(state.playerId);
+    this.raceTargets.delete(state.playerId);
+    for (const [id, hostId] of this.raceTargets) if (hostId === state.playerId) this.raceTargets.delete(id);
+    // Host left: drop their advertised lobby so the directory never shows ghosts.
+    const dir = this.raceDir.get(code);
+    if (dir?.delete(state.playerId)) this.broadcastRaceDir(code);
     if (room.size === 0) {
-      this.rooms.delete(state.roomCode);
+      this.rooms.delete(code);
+      this.raceDir.delete(code);
     } else {
-      const roster = this.presentRoster(state.roomCode);
+      const roster = this.presentRoster(code);
       for (const member of room.values()) send(member.ws, { t: 'roster', roster });
     }
   }

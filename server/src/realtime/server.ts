@@ -64,11 +64,15 @@ export function attachRealtime(server: HttpServer): RoomHub {
         sendError(ws, 'bad_message', 'Expected JSON.');
         return;
       }
+      if (!message || typeof message !== 'object') { sendError(ws, 'bad_message', 'Expected a message object.'); return; }
       if (message.t === 'hello') hub.onHello(state, message.roomCode, ip).catch((error) => {
         console.error('[realtime] hello failed', error);
         sendError(ws, 'hello_failed', 'Could not join that server.');
       });
       else if (message.t === 'pos') hub.onPos(state, message.p);
+      else if (message.t === 'race_pos') hub.onRacePos(state, (message as { r: unknown }).r);
+      else if (message.t === 'race_state') hub.onRaceState(state, (message as { s: unknown }).s);
+      else if (message.t === 'race_list') hub.onRaceList(state);
       else if (message.t === 'ping') {
         if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'pong' }));
       }

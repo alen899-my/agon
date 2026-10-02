@@ -44,24 +44,23 @@ function isExpired(room: Room): boolean {
 }
 
 export async function createRoom(hostPlayerId: string): Promise<Room> {
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const code = generateRoomCode();
-    try {
-      await pool.query('INSERT INTO rooms (code, host_player_id) VALUES ($1, $2)', [code, hostPlayerId]);
-      await pool.query(
-        "INSERT INTO room_members (room_code, player_id, role) VALUES ($1, $2, 'host') ON CONFLICT DO NOTHING",
-        [code, hostPlayerId],
-      );
-      const room = await getRoom(code);
-      if (!room) throw new ApiError(500, 'room_create_failed', 'Room could not be created.');
-      return room;
-    } catch (error) {
-      // Rare code collision — retry with a fresh code.
-      if ((error as { code?: string }).code === '23505') continue;
-      throw error;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const code = generateRoomCode();
+      const { rows } = await client.query<Room>(
+        'INSERT INTO rooms (code, host_player_id) VALUES ($1, $2) ON CONFLICT (code) DO NOTHING RETURNING *', [code, hostPlayerId]);
+      if (!rows[0]) continue;
+      await client.query("INSERT INTO room_members (room_code, player_id, role) VALUES ($1, $2, 'host')", [code, hostPlayerId]);
+      await client.query('COMMIT');
+      return rows[0];
     }
-  }
-  throw new ApiError(500, 'room_create_failed', 'Room could not be created. Try again.');
+    throw new ApiError(500, 'room_create_failed', 'Could not create a server. Please try again.');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally { client.release(); }
 }
 
 export async function getRoom(code: string): Promise<Room | null> {
@@ -101,50 +100,55 @@ export async function touchRoomActivity(code: string): Promise<void> {
 
 /** Join by invite code. Idempotent for existing members. Enforces the 100-player cap. */
 export async function joinRoom(code: string, playerId: string): Promise<Room> {
-  const room = await getRoom(code);
-  if (!room) throw new ApiError(404, 'room_not_found', 'No server with that code.');
-  if (isExpired(room)) {
-    await deleteRoom(code);
-    throw new ApiError(410, 'room_expired', 'That server expired. Ask the host for a fresh code.');
-  }
-  const existing = await pool.query('SELECT 1 FROM room_members WHERE room_code = $1 AND player_id = $2', [
-    code,
-    playerId,
-  ]);
-  if (existing.rowCount === 0) {
-    if ((await memberCount(code)) >= room.max_members) {
-      throw new ApiError(409, 'room_full', 'That server is full (100 players).');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // Serialize capacity checks, duplicate joins, and concurrent leaves per room.
+    const { rows } = await client.query<Room>('SELECT * FROM rooms WHERE code = $1 FOR UPDATE', [code]);
+    const room = rows[0];
+    if (!room) throw new ApiError(404, 'room_not_found', 'No server with that code. Check the code with the host.');
+    if (isExpired(room)) throw new ApiError(410, 'room_expired', 'That server expired. Ask the host for a new code.');
+    const existing = await client.query('SELECT 1 FROM room_members WHERE room_code = $1 AND player_id = $2', [code, playerId]);
+    if (existing.rowCount === 0) {
+      const count = await client.query<{ count: string }>('SELECT COUNT(*) AS count FROM room_members WHERE room_code = $1', [code]);
+      if (Number(count.rows[0].count) >= room.max_members) throw new ApiError(409, 'room_full', 'That server is full. Ask the host to free a place, then try again.');
+      await client.query('INSERT INTO room_members (room_code, player_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [code, playerId]);
     }
-    await pool.query('INSERT INTO room_members (room_code, player_id) VALUES ($1, $2)', [code, playerId]);
-  }
-  await touchRoomActivity(code);
-  const fresh = await getRoom(code);
-  if (!fresh) throw new ApiError(404, 'room_not_found', 'No server with that code.');
-  return fresh;
+    const updated = await client.query<Room>('UPDATE rooms SET last_active_at = now() WHERE code = $1 RETURNING *', [code]);
+    await client.query('COMMIT');
+    return updated.rows[0];
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally { client.release(); }
 }
 
-/**
- * Leave a room. Host departure promotes the longest-standing member;
- * the last member out deletes the room.
- */
+/** Membership changes share the room lock with joining and host migration. */
 export async function leaveRoom(code: string, playerId: string): Promise<void> {
-  const room = await getRoom(code);
-  if (!room) return;
-  await pool.query('DELETE FROM room_members WHERE room_code = $1 AND player_id = $2', [code, playerId]);
-  const remaining = await pool.query<{ player_id: string }>(
-    'SELECT player_id FROM room_members WHERE room_code = $1 ORDER BY joined_at ASC LIMIT 1',
-    [code],
-  );
-  if (remaining.rowCount === 0) {
-    await deleteRoom(code);
-    return;
-  }
-  if (room.host_player_id === playerId) {
-    const next = remaining.rows[0].player_id;
-    await pool.query('UPDATE rooms SET host_player_id = $1 WHERE code = $2', [next, code]);
-    await pool.query("UPDATE room_members SET role = 'host' WHERE room_code = $1 AND player_id = $2", [code, next]);
-  }
-  await touchRoomActivity(code);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query<Room>('SELECT * FROM rooms WHERE code = $1 FOR UPDATE', [code]);
+    const room = rows[0];
+    if (room) {
+      await client.query('DELETE FROM room_members WHERE room_code = $1 AND player_id = $2', [code, playerId]);
+      const remaining = await client.query<{ player_id: string }>(
+        'SELECT player_id FROM room_members WHERE room_code = $1 ORDER BY joined_at ASC, player_id ASC LIMIT 1', [code]);
+      if (remaining.rowCount === 0) await client.query('DELETE FROM rooms WHERE code = $1', [code]);
+      else {
+        if (room.host_player_id === playerId) {
+          const next = remaining.rows[0].player_id;
+          await client.query('UPDATE rooms SET host_player_id = $1 WHERE code = $2', [next, code]);
+          await client.query("UPDATE room_members SET role = 'host' WHERE room_code = $1 AND player_id = $2", [code, next]);
+        }
+        await client.query('UPDATE rooms SET last_active_at = now() WHERE code = $1', [code]);
+      }
+    }
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally { client.release(); }
 }
 
 export async function roomRoster(code: string): Promise<RoomRosterEntry[]> {

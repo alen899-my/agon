@@ -4,7 +4,7 @@ import { WorldEngine, type QualityLevel } from '../world/WorldEngine';
 import type { Theme } from '../game/State';
 import type { WorldAction, WorldSnapshot } from '../world/Simulation';
 
-const KEYS: Record<string, WorldAction> = { KeyW: 'forward', KeyS: 'back', KeyA: 'left', KeyD: 'right', ArrowUp: 'forward', ArrowDown: 'back', ArrowLeft: 'left', ArrowRight: 'right', KeyQ: 'turnLeft', KeyC: 'turnRight', ShiftLeft: 'sprint', ShiftRight: 'sprint', Space: 'jump' };
+const KEYS: Record<string, WorldAction> = { KeyW: 'forward', KeyS: 'back', KeyA: 'left', KeyD: 'right', ArrowUp: 'forward', ArrowDown: 'back', ArrowLeft: 'left', ArrowRight: 'right', KeyQ: 'turnLeft', KeyC: 'turnRight', ShiftLeft: 'sprint', ShiftRight: 'sprint', Space: 'jump', KeyZ: 'signalLeft', KeyX: 'signalRight' };
 interface Props { engineRef: MutableRefObject<WorldEngine | null>; onSnapshot: (s: WorldSnapshot) => void; onMap: () => void; theme: Theme; quality: QualityLevel; portrait: boolean; blocked: boolean; onDismissOverlay: () => void; lookSettings: LookSettings; lookEnabled: boolean }
 
 export function WorldViewport({ engineRef, onSnapshot, onMap, theme, quality, portrait, blocked, onDismissOverlay, lookSettings, lookEnabled }: Props) {
@@ -73,10 +73,7 @@ export function WorldViewport({ engineRef, onSnapshot, onMap, theme, quality, po
   useEffect(() => engineRef.current?.applyQuality(quality), [quality, engineRef]);
   useEffect(() => { engineRef.current?.setSuspended(document.hidden || portrait || blocked); cameraInput.current?.refresh(); }, [portrait, blocked, engineRef]);
   return <><canvas ref={canvas} tabIndex={0} className="world-canvas" data-look-state={lookStatus} aria-label="3D neighborhood. WASD or arrows to move, click once to capture mouse or trackpad look, Escape to release, touch swipe to look, Q/C to turn camera, Space to jump or handbrake, V for cockpit, E to enter or steal any stopped car, N to cycle 16 stopped vehicles. Type your name on the intro screen to start." />
-    {lookEnabled && <div className="capture-look desktop-look">
-      {lookStatus === 'locked' ? <span>LOOK ACTIVE | ESC RELEASES CURSOR</span> : <button onClick={() => cameraInput.current?.request()} aria-label="Capture mouse or trackpad look">
-        {lookStatus === 'fallback' ? 'CAPTURE UNAVAILABLE | HOVER TO LOOK | Q / C CAMERA | CLICK TO RETRY' : 'CLICK TO LOOK | MOUSE / TRACKPAD | ESC TO RELEASE'}
-      </button>}
-    </div>}
+    c
+    
     {error && <div className="world-error" role="alert"><h2>Unable to render the map</h2><p>{error}</p><button className="primary-button" onClick={() => location.reload()}>RELOAD</button></div>}</>;
 }

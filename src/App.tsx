@@ -1,7 +1,7 @@
 import { DEFAULT_LOOK, readLookSettings } from './game/CameraInput';
 import { VEHICLES } from './world/Vehicles';
-import { ApiRequestError, createRoom as apiCreateRoom, joinRoom as apiJoinRoom, leaveRoom as apiLeaveRoom, login as apiLogin } from './api/client';
-import { loadSession, saveSession } from './api/session';
+import { ApiRequestError, createRoom as apiCreateRoom, joinRoom as apiJoinRoom, leaveRoom as apiLeaveRoom, login as apiLogin, me as apiMe } from './api/client';
+import { loadSession, saveSession, type Session } from './api/session';
 ﻿import { useEffect, useRef, useState } from 'react';
 import { ThemeToggle } from './components/ThemeToggle';
 import { QualityToggle } from './components/QualityToggle';
@@ -11,7 +11,9 @@ import { TableTennisControls } from './components/TableTennisControls';
 import { BasketballControls } from './components/BasketballControls';
 import { DistrictMap } from './components/DistrictMap';
 import { PhysicsChecklist } from './components/PhysicsChecklist';
+import { RaceCountdown, RaceDirectory, RaceFinishToast, RaceLeaderboard, RaceLobby, RaceResults } from './components/RaceUI';
 import { PLACES } from './world/Map';
+import type { VehicleKind } from './world/Vehicles';
 import type { Theme } from './game/State';
 import type { WorldEngine, QualityLevel } from './world/WorldEngine';
 import type { WorldSnapshot } from './world/Simulation';
@@ -48,7 +50,13 @@ export default function App() {
   const [roomCode, setRoomCode] = useState('');
   const [createdCode, setCreatedCode] = useState('');
   const [copied, setCopied] = useState(false);
-  const pendingToken = useRef<{ token: string } | null>(null);
+  const [raceOpen, setRaceOpen] = useState(false);
+  const [raceLaps, setRaceLaps] = useState(3);
+  const [raceCar, setRaceCar] = useState<VehicleKind>('super');
+  const pendingToken = useRef<Session | null>(null);
+  const entryLock = useRef(false);
+  const restoreTried = useRef(false);
+  const initialSession = useRef(loadSession());
   useEffect(() => { try { localStorage.setItem('agon-look', JSON.stringify(lookSettings)); } catch { /* Optional storage. */ } }, [lookSettings]);
   useEffect(() => {
     const media = matchMedia(portraitQuery);
@@ -67,100 +75,145 @@ export default function App() {
     try { localStorage.setItem('agon-quality', quality); } catch { /* Optional storage. */ }
   }, [quality]);
   const focus = () => document.querySelector<HTMLCanvasElement>('canvas')?.focus();
-  /** Entry: name required. Solo explores; create mints a code; join redeems one. */
-  const enterWorld = async () => {
-    if (!state || entering) return;
-    const display = name.trim().replace(/\s+/g, ' ');
-    if (!display) {
-      setEnterNote('Name is required to enter the district.');
-      return;
-    }
-    const code = roomCode.trim().toUpperCase().replace(/[\s-]+/g, '');
-    if (mode === 'join' && code.length !== 6) {
-      setEnterNote('Enter the 6-character server code.');
-      return;
-    }
-    setEntering(true); setEnterNote('');
-    const beginAs = (tag: string) => {
-      engine.current?.setPlayerName(tag);
-      engine.current?.begin(); focus();
-    };
+  const rememberRoom = (session: Session) => {
+    saveSession(session);
+    pendingToken.current = session;
+    setRoomCode(session.roomCode ?? '');
+  };
+  const refreshSession = async (saved: Session): Promise<Session> => {
     try {
-      // Create step 2: code already minted, just open presence and go.
+      const { player } = await apiMe(saved.token);
+      if (!player) throw new ApiRequestError(401, 'unauthorized', 'Please sign in again.');
+      return { ...saved, id: player.id, name: player.name };
+    } catch (error) {
+      if (!(error instanceof ApiRequestError) || error.status !== 401) throw error;
+      const { token, player } = await apiLogin(saved.name);
+      return { ...saved, token, id: player.id, name: player.name };
+    }
+  };
+  const connectAndEnter = async (session: Session) => {
+    const world = engine.current;
+    if (!world) throw new Error('The world is still loading. Please try again.');
+    setEnterNote('Connecting to server ' + session.roomCode + '...');
+    await world.joinRoomSession(session.token, session.roomCode!);
+    world.setPlayerName(session.name);
+    world.begin();
+    rememberRoom(session);
+    setEnterNote('');
+    focus();
+  };
+  const enterWorld = async () => {
+    if (!state || !engine.current || entryLock.current) return;
+    restoreTried.current = true;
+    const display = name.trim().replace(/\s+/g, ' ');
+    if (!display) { setEnterNote('Enter your name before continuing.'); return; }
+    const code = roomCode.trim().toUpperCase().replace(/[\s-]+/g, '');
+    if (mode === 'join' && !/^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{6}$/.test(code)) {
+      setEnterNote('Enter a valid 6-character server code. Codes do not contain I, O, 0 or 1.'); return;
+    }
+    entryLock.current = true;
+    setEntering(true); setEnterNote('Signing in...');
+    try {
       if (mode === 'create' && createdCode && pendingToken.current) {
-        await engine.current?.joinRoomSession(pendingToken.current.token, createdCode).catch((error) => {
-          setEnterNote(error instanceof Error ? `${error.message} Exploring without live sync.` : 'Exploring without live sync.');
-        });
-        beginAs(display);
+        const session = await refreshSession(pendingToken.current);
+        await apiJoinRoom(session.token, createdCode);
+        rememberRoom({ ...session, roomCode: createdCode });
+        await connectAndEnter({ ...session, roomCode: createdCode });
         return;
       }
       const { token, player } = await apiLogin(display);
+      const session: Session = { token, name: player.name, id: player.id };
       if (mode === 'solo') {
-        const prev = loadSession();
-        if (prev?.roomCode && prev.token) void apiLeaveRoom(prev.token, prev.roomCode).catch(() => undefined);
-        saveSession({ token, name: player.name, id: player.id });
+        const previous = loadSession();
+        engine.current.leaveRoomSession();
+        saveSession(session);
         pendingToken.current = null; setCreatedCode('');
-        beginAs(player.name);
+        if (previous?.roomCode && previous.token) void apiLeaveRoom(previous.token, previous.roomCode).catch(() => undefined);
+        engine.current.setPlayerName(player.name); engine.current.begin(); focus(); setEnterNote('');
         return;
       }
       if (mode === 'create') {
+        setEnterNote('Creating your server...');
         const { room } = await apiCreateRoom(token);
-        pendingToken.current = { token };
-        saveSession({ token, name: player.name, id: player.id, roomCode: room.code });
-        setCreatedCode(room.code); setCopied(false);
-        engine.current?.setPlayerName(player.name);
-        return; // stay in the intro: show the share-code panel
-      }
-      const { room } = await apiJoinRoom(token, code);
-      pendingToken.current = { token };
-      saveSession({ token, name: player.name, id: player.id, roomCode: room.code });
-      await engine.current?.joinRoomSession(token, room.code).catch((error) => {
-        setEnterNote(error instanceof Error ? `${error.message} Exploring without live sync.` : 'Exploring without live sync.');
-      });
-      beginAs(player.name);
-    } catch (error) {
-      if (error instanceof ApiRequestError && error.status !== 0) {
-        setEnterNote(error.message); // bad code, full/expired room, rejected name — stay in the form
+        rememberRoom({ ...session, roomCode: room.code });
+        setCreatedCode(room.code); setCopied(false); setEnterNote('');
         return;
       }
-      // Offline: typed name as a local tag, solo world.
-      const prev = loadSession();
-      saveSession({ token: '', name: display, id: prev?.id ?? 'offline' });
-      pendingToken.current = null; setCreatedCode('');
-      setEnterNote(error instanceof Error ? `${error.message} Playing solo.` : 'Playing solo.');
-      beginAs(display);
-    } finally {
-      setEntering(false);
-    }
-  };
-  /** Leaves the private server but stays in the world solo. */
-  const leaveServer = async () => {
-    const sess = loadSession();
-    if (sess?.roomCode && sess.token) {
-      try {
-        await apiLeaveRoom(sess.token, sess.roomCode);
-      } catch {
-        /* Presence already gone or offline — local state still clears. */
+      setEnterNote('Joining server ' + code + '...');
+      const { room } = await apiJoinRoom(token, code);
+      rememberRoom({ ...session, roomCode: room.code });
+      await connectAndEnter({ ...session, roomCode: room.code });
+    } catch (error) {
+      // Only an explicit solo choice may fall back to offline gameplay.
+      if (mode === 'solo' && error instanceof ApiRequestError && error.status === 0) {
+        engine.current?.leaveRoomSession();
+        saveSession({ token: '', name: display, id: 'offline' });
+        pendingToken.current = null; setCreatedCode('');
+        engine.current?.setPlayerName(display); engine.current?.begin(); focus();
+        setNotice('Playing solo offline. ' + error.message);
+      } else {
+        engine.current?.leaveRoomSession();
+        setEnterNote(error instanceof Error ? error.message : 'Could not join the server. Please try again.');
+        if (error instanceof ApiRequestError && ['room_not_found', 'room_expired'].includes(error.code)) {
+          const saved = loadSession();
+          if (saved?.roomCode === (createdCode || code)) saveSession({ token: saved.token, name: saved.name, id: saved.id });
+          setCreatedCode(''); pendingToken.current = null;
+        }
       }
-    }
-    engine.current?.leaveRoomSession();
-    const cur = loadSession();
-    if (cur) saveSession({ token: cur.token, name: cur.name, id: cur.id });
-    focus();
+    } finally { entryLock.current = false; setEntering(false); }
   };
+  const leaveServer = async () => {
+    if (entryLock.current) return;
+    entryLock.current = true; setEntering(true);
+    const session = loadSession();
+    // Stop reconnection and remove the reload target before awaiting the API.
+    engine.current?.leaveRoomSession(); engine.current?.exitToIntro();
+    if (session) saveSession({ token: session.token, name: session.name, id: session.id });
+    setRaceOpen(false); setCreatedCode(''); setCopied(false); setRoomCode(''); setMode('solo');
+    pendingToken.current = null; setEnterNote('');
+    try {
+      if (session?.roomCode && session.token) await apiLeaveRoom(session.token, session.roomCode);
+    } catch {
+      setEnterNote('Disconnected locally. The server could not confirm that your membership was removed.');
+    } finally { entryLock.current = false; setEntering(false); focus(); }
+  };
+  const restoreServer = async (saved: Session) => {
+    if (entryLock.current || !saved.roomCode || !engine.current) return;
+    entryLock.current = true; setEntering(true);
+    setMode('join'); setRoomCode(saved.roomCode); setName(saved.name);
+    setEnterNote('Reconnecting to server ' + saved.roomCode + '...');
+    try {
+      const session = await refreshSession(saved);
+      const { room } = await apiJoinRoom(session.token, saved.roomCode);
+      rememberRoom({ ...session, roomCode: room.code });
+      await connectAndEnter({ ...session, roomCode: room.code });
+    } catch (error) {
+      engine.current?.leaveRoomSession(); engine.current?.exitToIntro();
+      const permanent = error instanceof ApiRequestError && ['room_not_found', 'room_expired', 'invalid_code'].includes(error.code);
+      if (permanent) {
+        const current = loadSession() ?? saved;
+        saveSession({ token: current.token, name: current.name, id: current.id });
+        pendingToken.current = null;
+      }
+      setEnterNote((error instanceof Error ? error.message : 'Could not reconnect.') +
+        (permanent ? ' Create a server or enter a new code.' : ' Your server code is saved. Press JOIN WORLD to retry.'));
+    } finally { entryLock.current = false; setEntering(false); }
+  };
+  useEffect(() => {
+    if (!state || !engine.current || restoreTried.current) return;
+    // Mark even a fresh visit as checked; creating a room must not trigger restore.
+    restoreTried.current = true;
+    const saved = initialSession.current;
+    if (saved?.token && saved.roomCode && saved.name) void restoreServer(saved);
+  }, [state]);
   const copyCode = async () => {
     if (!createdCode) return;
-    try {
-      await navigator.clipboard.writeText(createdCode);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      setCopied(false);
-    }
+    try { await navigator.clipboard.writeText(createdCode); setCopied(true); setTimeout(() => setCopied(false), 1500); }
+    catch { setCopied(false); setEnterNote('Copy failed. Select and copy the server code manually.'); }
   };
   const switchMode = (next: 'solo' | 'create' | 'join') => {
-    setMode(next); setEnterNote(''); setCreatedCode(''); setCopied(false);
-    pendingToken.current = null;
+    if (entryLock.current) return;
+    setMode(next); setEnterNote(''); setCopied(false);
   };
   const toggleMap = () => {
     if (!mapOpen) { resumeAfterMap.current = engine.current?.simulation.active ?? false; if (resumeAfterMap.current) engine.current?.togglePause(); }
@@ -207,26 +260,32 @@ export default function App() {
         <p>A living little district, built from simple things.<br />Walk its streets. Meet its rhythm. Find your place.</p>
         <div className="mode-tabs" role="tablist" aria-label="Play mode">
           {(['solo', 'create', 'join'] as const).map(m => <button key={m} role="tab" aria-selected={mode === m} className={mode === m ? 'on' : ''}
-            onClick={() => switchMode(m)}>{m === 'solo' ? 'SOLO' : m === 'create' ? 'CREATE SERVER' : 'JOIN SERVER'}</button>)}
+            disabled={entering} onClick={() => switchMode(m)}>{m === 'solo' ? 'SOLO' : m === 'create' ? 'CREATE SERVER' : 'JOIN SERVER'}</button>)}
         </div>
         <label className="name-row"><span>YOUR NAME</span><input value={name} maxLength={24} autoComplete="off" spellCheck={false} placeholder="e.g. Ava" aria-label="Your display name"
           disabled={entering || (mode === 'create' && !!createdCode)}
-          onChange={event => setName(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void enterWorld(); }} /></label>
-        {mode === 'join' && <label className="name-row"><span>SERVER CODE</span><input value={roomCode} maxLength={7} autoComplete="off" spellCheck={false} placeholder="K7Q2MD" aria-label="Server code"
+          onChange={event => { setName(event.target.value); if (createdCode) { setCreatedCode(''); pendingToken.current = null; } }} onKeyDown={event => { if (event.key === 'Enter') void enterWorld(); }} /></label>
+        {mode === 'join' && <label className="name-row"><span>SERVER CODE</span><input value={roomCode} maxLength={12} autoComplete="off" spellCheck={false} placeholder="K7Q2MD" aria-label="Server code"
           disabled={entering} style={{ textTransform: 'uppercase' }}
-          onChange={event => setRoomCode(event.target.value.toUpperCase())} onKeyDown={event => { if (event.key === 'Enter') void enterWorld(); }} /></label>}
+          onChange={event => setRoomCode(event.target.value.toUpperCase().replace(/[\s-]+/g, '').slice(0, 6))} onKeyDown={event => { if (event.key === 'Enter') void enterWorld(); }} /></label>}
         {mode === 'create' && createdCode && <div className="room-code-panel" role="status"><span>SHARE THIS CODE</span><b>{createdCode}</b><button className="control" onClick={() => void copyCode()}>{copied ? 'COPIED ✓' : 'COPY'}</button></div>}
+        {mode !== 'solo' && <p className="name-note">Use a different player name for each person joining.</p>}
         {enterNote && <p className="name-note" role="status">{enterNote}</p>}
         <button className="primary-button" disabled={!state || entering || !name.trim() || (mode === 'join' && roomCode.trim().length < 6)} onClick={() => void enterWorld()}>
-          {mode === 'solo' ? 'EXPLORE DISTRICT' : mode === 'create' ? (createdCode ? 'ENTER WORLD' : 'CREATE SERVER') : 'JOIN WORLD'} <span>↗</span></button>
+          {entering ? 'PLEASE WAIT...' : mode === 'solo' ? 'EXPLORE DISTRICT' : mode === 'create' ? (createdCode ? 'ENTER WORLD' : 'CREATE SERVER') : 'JOIN WORLD'} <span>↗</span></button>
         <div className="intro-tags"><span>7 LOCATIONS</span><span>2 PERSPECTIVES</span><span>NO RUSH</span></div>
       </div>}
       {!ready && <>
-        {state?.driving && <div className="hud-top" role="status" aria-label="Map and speed">
-          <button className="hud-map" onClick={toggleMap} aria-label="Open district map"><DistrictMap state={state} theme={theme} /></button>
-          <div className="hud-speed" aria-label="Speed"><b>{state?.speed ?? 0}<small>KM/H</small></b><span>{VEHICLES[state.vehicleKind].name} · {state.acceleration.toFixed(1)} m/s^2{(state?.damage ?? 0) > 0 ? ` · DMG ${state?.damage}%` : ''}</span><button className="hud-cycle" disabled={!active || Math.abs(state?.car.speed ?? 0) > 0.2} onClick={() => { engine.current?.cycleVehicle(); focus(); }} aria-label="Next vehicle">⇄</button></div>
+        {engine.current?.connectionNotice && <div className="connection-notice" role="alert">
+          <span>{engine.current.connectionNotice}</span>
+          <button className="control" disabled={entering} onClick={() => { const saved = loadSession(); if (saved) void restoreServer(saved); }}>REJOIN</button>
+          <button className="control" disabled={entering} onClick={() => void leaveServer()}>LEAVE SERVER</button>
         </div>}
-        {state?.room && <div className="room-chip" role="status" aria-label="Private server">SERVER {state.room.code} · {state.room.members}<button onClick={() => void leaveServer()} aria-label="Leave server">✕</button></div>}
+        <div className="hud-top" role="status" aria-label="Map and speed">
+          <button className="hud-map" onClick={toggleMap} aria-label="Open district map"><DistrictMap state={state} theme={theme} raceActive={engine.current?.raceGuidanceActive ?? false} /></button>
+          {state?.driving && <div className="hud-speed" aria-label="Speed"><b>{state?.speed ?? 0}<small>KM/H</small></b><span>{VEHICLES[state.vehicleKind].name} · {state.acceleration.toFixed(1)} m/s^2{(state?.damage ?? 0) > 0 ? ` · DMG ${state?.damage}%` : ''}</span><button className="hud-cycle" disabled={!active || Math.abs(state?.car.speed ?? 0) > 0.2} onClick={() => { engine.current?.cycleVehicle(); focus(); }} aria-label="Next vehicle">⇄</button></div>}
+        </div>
+        {state?.room && <div className="room-chip" role="status" aria-label="Private server">SERVER {state.room.code} · {state.room.members}<button disabled={entering} onClick={() => void leaveServer()} aria-label="Leave server">✕</button></div>}
         {state?.view === 'first' && <div className="crosshair" aria-hidden="true">+</div>}
         {state?.impact && <div className="crash-flash" role="status">CRASH · {state.impact.speed} KM/H vs {state.impact.with.toUpperCase()}</div>}
         {state?.mode === 'table' && state.table && <div className="tt-score" role="status" aria-label={`Table tennis score you ${state.table.you} AI ${state.table.aiScore}`}>
@@ -246,6 +305,15 @@ export default function App() {
         {state?.mode === 'basket' && <button className="tt-exit" onClick={() => { engine.current?.exitBasket(); focus(); }} aria-label="Exit hoops">✕ EXIT <kbd>X</kbd></button>}
         {state?.mode === 'roam' && state?.nearHoop && !state?.driving && <button className="interact-button bb-play" onClick={() => { engine.current?.enterBasket(); focus(); }}>SHOOT HOOPS <kbd>E</kbd></button>}
         {state?.mode !== 'table' && state?.mode !== 'basket' && (state?.nearbyCar || state?.driving || (state?.nearTable && !state?.driving)) && <button className="interact-button" onClick={() => { if (state?.nearTable && !state?.driving) engine.current?.enterTable(); else engine.current?.interact(); focus(); }}>{state.driving ? 'EXIT VEHICLE' : state?.nearTable && !state?.nearbyCar ? 'PLAY TABLE TENNIS' : (state?.enterHint ?? 'DRIVE')} <kbd>E</kbd></button>}
+        {state?.mode === 'roam' && state?.nearArena && engine.current?.race.phase === 'idle' && !raceOpen && <button className="interact-button race-paddock" onClick={() => { setRaceOpen(true); engine.current?.requestRaceDir(); }}>RACE PADDOCK</button>}
+        {raceOpen && <RaceDirectory engine={engine.current} inServer={!!state?.room} raceCar={raceCar} onCar={setRaceCar} laps={raceLaps} onLaps={setRaceLaps} onClose={() => setRaceOpen(false)} onJoined={() => { setRaceOpen(false); focus(); }} />}
+        {engine.current?.raceNotice && <div className="race-lobby" role="status">{engine.current.raceNotice}<button className="control" onClick={() => { if (engine.current) engine.current.raceNotice = ''; }}>DISMISS</button></div>}
+        <RaceLobby engine={engine.current} inServer={!!state?.room} onNeedServer={() => setRaceOpen(false)} />
+        <RaceCountdown engine={engine.current} />
+        <RaceLeaderboard engine={engine.current} />
+        <RaceFinishToast engine={engine.current} />
+        <RaceResults engine={engine.current} onRematch={() => { const e = engine.current; if (!e || !e.race.isHost) return; e.rematchRace(); focus(); }} onExit={() => { engine.current?.leaveRace(); setRaceOpen(false); focus(); }} />
+        {state?.driving && state?.blinkerManual && (state?.blinker ?? 0) !== 0 && <div className="blinker-hud" role="status" aria-label="Turn signal">{state.blinker === 1 ? '◀ LEFT' : state.blinker === 2 ? 'RIGHT ▶' : '◀ HAZARD ▶'}</div>}
         {state?.mode === 'table'
           ? <TableTennisControls disabled={!active} onSwing={shot => engine.current?.tableSwing(shot)} />
           : state?.mode === 'basket'
@@ -255,7 +323,7 @@ export default function App() {
       {state?.paused && !mapOpen && !physicsOpen && !lookOpen && <div className="pause-cover"><div><p className="eyebrow">THE CITY CAN WAIT</p><h2>A moment to yourself.</h2><button className="primary-button" onClick={() => { engine.current?.togglePause(); focus(); }}>KEEP EXPLORING <span>→</span></button></div></div>}
       {mapOpen && <div className="map-cover"><div className="map-sheet" role="dialog" aria-labelledby="map-title">
         <div className="map-heading"><div><p className="eyebrow">224 × 224 METERS / ONE CONNECTED NEIGHBORHOOD</p><h2 id="map-title">Make your own way.</h2></div><button className="control" onClick={toggleMap} aria-label="Close map">✕</button></div>
-        <div className="map-content"><DistrictMap state={state} large theme={theme} /><div className="place-list">{PLACES.map((place, index) => <button key={place.id} onClick={() => { engine.current?.waypoint(place.id); toggleMap(); focus(); }}>
+        <div className="map-content"><DistrictMap state={state} large theme={theme} raceActive={engine.current?.raceGuidanceActive ?? false} /><div className="place-list">{PLACES.map((place, index) => <button key={place.id} onClick={() => { engine.current?.waypoint(place.id); toggleMap(); focus(); }}>
           <span>{String(index + 1).padStart(2, '0')}</span><div><small>{place.category}</small><b>{place.name}</b><p>{place.description}</p></div><i>{state?.discovered.includes(place.id) ? '✓' : '↗'}</i>
         </button>)}</div></div>
         <p className="map-caption">Select a place to set a waypoint. Walk or drive there to discover it.</p>

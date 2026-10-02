@@ -29,16 +29,51 @@ export interface RosterEntry {
   role: 'host' | 'member';
 }
 
+export interface RaceSnapshotMsg {
+  sentAt: number;
+  phase: 'idle' | 'lobby' | 'countdown' | 'racing' | 'finished';
+  laps: number;
+  countdownEndsAt: number;
+  startedAt: number;
+  racers: { id: string; name: string; ready: boolean; vehicleKind: string; lap: number; checkpoint: number; dist: number; finished: boolean; finishMs: number; bestLapMs: number }[];
+}
+
+export interface RacePosPayload {
+  hostId: string;
+  leaving?: boolean;
+  lap: number;
+  cp: number;
+  dist: number;
+  finished: boolean;
+  finishMs: number;
+  bestLapMs: number;
+  vehicleKind: string;
+  ready: boolean;
+  blinker: number;
+}
+
+export interface RaceDirEntry {
+  hostId: string;
+  hostName: string;
+  laps: number;
+  count: number;
+  phase: RaceSnapshotMsg['phase'];
+}
+
 export interface RealtimeEvents {
   onWelcome: (room: string, you: string, roster: RosterEntry[]) => void;
   onRoster: (roster: RosterEntry[]) => void;
   onPos: (id: string, name: string, pos: RemotePos) => void;
+  onRacePos: (id: string, name: string, r: RacePosPayload) => void;
+  onRaceState: (id: string, name: string, s: RaceSnapshotMsg) => void;
+  onRaceDir: (races: RaceDirEntry[]) => void;
   onDots: (players: RemoteDot[]) => void;
   onError: (code: string, message: string) => void;
   onClose: () => void;
+  onReconnecting?: () => void;
 }
 
-const HELLO_TIMEOUT_MS = 6000;
+const HELLO_TIMEOUT_MS = 15000;
 const MAX_RECONNECTS = 5;
 
 /** Presence connection for one room. Caller sends positions; ghosts arrive via events. */
@@ -48,6 +83,8 @@ export class RealtimeClient {
   private helloTimer: number | null = null;
   private disposed = false;
   private welcomed = false;
+  private everWelcomed = false;
+  private retryTimer: number | null = null;
 
   constructor(
     private readonly token: string,
@@ -56,7 +93,10 @@ export class RealtimeClient {
   ) {}
 
   connect(): void {
+    this.dispose();
     this.disposed = false;
+    this.reconnects = 0;
+    this.everWelcomed = false;
     this.open();
   }
 
@@ -68,8 +108,23 @@ export class RealtimeClient {
     if (this.connected) this.ws!.send(JSON.stringify({ t: 'pos', p: pos }));
   }
 
+  sendRacePos(r: RacePosPayload): void {
+    if (this.connected) this.ws!.send(JSON.stringify({ t: 'race_pos', r }));
+  }
+
+  sendRaceState(s: RaceSnapshotMsg): void {
+    if (this.connected) this.ws!.send(JSON.stringify({ t: 'race_state', s }));
+  }
+
+  requestRaceDir(): void {
+    if (this.connected) this.ws!.send(JSON.stringify({ t: 'race_list' }));
+  }
+
   dispose(): void {
     this.disposed = true;
+    this.welcomed = false;
+    if (this.retryTimer !== null) window.clearTimeout(this.retryTimer);
+    this.retryTimer = null;
     if (this.helloTimer !== null) window.clearTimeout(this.helloTimer);
     try {
       this.ws?.close();
@@ -80,13 +135,16 @@ export class RealtimeClient {
   }
 
   private open(): void {
-    const ws = new WebSocket(realtimeUrl(this.token));
+    if (this.disposed) return;
+    let ws: WebSocket;
+    try { ws = new WebSocket(realtimeUrl(this.token)); }
+    catch { this.fail('connection_failed', 'Cannot open a connection to the server. Check the server address and try again.'); return; }
     this.ws = ws;
     this.welcomed = false;
     if (this.helloTimer !== null) window.clearTimeout(this.helloTimer);
     this.helloTimer = window.setTimeout(() => {
       if (!this.welcomed) {
-        this.events.onError('hello_timeout', 'Server did not answer. Staying solo.');
+        if (!this.everWelcomed) { this.fail('hello_timeout', 'The server did not confirm your join. Please try again.'); return; }
         try {
           ws.close();
         } catch {
@@ -94,17 +152,22 @@ export class RealtimeClient {
         }
       }
     }, HELLO_TIMEOUT_MS);
-    ws.onopen = () => ws.send(JSON.stringify({ t: 'hello', v: 1, roomCode: this.roomCode }));
+    ws.onopen = () => { if (!this.disposed && this.ws === ws) ws.send(JSON.stringify({ t: 'hello', v: 1, roomCode: this.roomCode })); };
     ws.onmessage = (event) => {
+      if (this.disposed || this.ws !== ws) return;
       let message: { t: string; [key: string]: unknown };
       try {
         message = JSON.parse(String(event.data)) as { t: string; [key: string]: unknown };
       } catch {
         return;
       }
+      if (!message || typeof message !== 'object') return;
       switch (message.t) {
         case 'welcome':
+          if (message.room !== this.roomCode || !Array.isArray(message.roster)) { this.fail('invalid_room', 'The server confirmed a different room. Please try joining again.'); return; }
+          if (this.helloTimer !== null) window.clearTimeout(this.helloTimer);
           this.welcomed = true;
+          this.everWelcomed = true;
           this.reconnects = 0;
           this.events.onWelcome(
             message.room as string,
@@ -118,11 +181,21 @@ export class RealtimeClient {
         case 'pos':
           this.events.onPos(message.id as string, message.name as string, message.p as RemotePos);
           break;
+        case 'race_pos':
+          this.events.onRacePos?.(message.id as string, message.name as string, message.r as RacePosPayload);
+          break;
+        case 'race_state':
+          this.events.onRaceState?.(message.id as string, message.name as string, message.s as RaceSnapshotMsg);
+          break;
+        case 'race_dir':
+          this.events.onRaceDir?.(message.races as RaceDirEntry[]);
+          break;
         case 'dots':
           this.events.onDots(message.players as RemoteDot[]);
           break;
         case 'error':
-          this.events.onError(String(message.code ?? 'error'), String(message.message ?? 'Server error.'));
+          if (!this.welcomed) this.fail(String(message.code ?? 'error'), String(message.message ?? 'Could not join the server.'));
+          else this.events.onError(String(message.code ?? 'error'), String(message.message ?? 'Server error.'));
           break;
         case 'pong':
           break;
@@ -130,19 +203,27 @@ export class RealtimeClient {
           break;
       }
     };
-    ws.onclose = () => {
+    ws.onclose = (event) => {
+      if (this.disposed || this.ws !== ws) return;
+      this.welcomed = false;
       if (this.helloTimer !== null) window.clearTimeout(this.helloTimer);
-      if (this.disposed) return;
-      // Brief backoff reconnects for mobile network blips; then surface as closed.
+      if (event.code === 4409) { this.fail('session_replaced', 'This player name is connected in another tab or device. Use a different name for each player.'); return; }
+      if (event.code === 4401) { this.fail('unauthorized', 'Your session expired. Rejoin the server to sign in again.'); return; }
+      if (event.code === 4413) { this.fail('rate_limited', 'Too many join attempts. Wait a minute before trying again.'); return; }
+      if (!this.everWelcomed) { this.fail('connection_failed', 'Could not connect to the server. Check your connection and try again.'); return; }
+      this.events.onReconnecting?.();
       if (this.reconnects < MAX_RECONNECTS) {
-        const delay = Math.min(4000, 1000 * 2 ** this.reconnects);
-        this.reconnects += 1;
-        window.setTimeout(() => {
-          if (!this.disposed) this.open();
-        }, delay);
+        const delay = Math.min(4000, 1000 * 2 ** this.reconnects++);
+        this.retryTimer = window.setTimeout(() => this.open(), delay);
         return;
       }
-      this.events.onClose();
+      this.fail('connection_lost', 'Connection lost. Rejoin the server to reconnect.');
     };
+  }
+
+  private fail(code: string, message: string): void {
+    this.dispose();
+    this.events.onError(code, message);
+    this.events.onClose();
   }
 }

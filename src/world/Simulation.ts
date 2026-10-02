@@ -1,10 +1,10 @@
 import { bodyContact, boundaryContact, circleContact, vehicleBody, type Body, type Contact } from './Collision';
 import { VEHICLES, VEHICLE_KINDS, type VehicleKind } from './Vehicles';
-import { GAME_CENTER, HOOP, intersects, LIMIT, SOLIDS, PARKED_CARS, PLACES, PROPS, TRAFFIC_ROUTE, circleHit, seeded, type Point } from './Map';
+import { GAME_CENTER, HOOP, intersects, LIMIT, SOLIDS, PARKED_CARS, PLACES, PROPS, RACE_SHOW_CARS, TRAFFIC_ROUTE, circleHit, seeded, type Point } from './Map';
 import { TableTennisSim, type TTShot, type TTSnapshot } from './TableTennis';
 import { BasketballSim, type BBSnapshot } from './Basketball';
 
-export type WorldAction = 'forward' | 'back' | 'left' | 'right' | 'sprint' | 'jump' | 'turnLeft' | 'turnRight' | 'handbrake';
+export type WorldAction = 'forward' | 'back' | 'left' | 'right' | 'sprint' | 'jump' | 'turnLeft' | 'turnRight' | 'handbrake' | 'signalLeft' | 'signalRight';
 export type View = 'third' | 'first';
 export interface Impact { speed: number; with: string; at: number }
 export interface TrafficCar { kind: VehicleKind; x: number; z: number; yaw: number; speed: number; offset: number; base: number; steer: number; wheelSpin: number; braking: boolean; prevYaw: number }
@@ -34,6 +34,7 @@ export interface WorldSnapshot {
   tableFlags: { topspin: boolean; smash: boolean; netCord: boolean; edge: boolean };
   basket: BBSnapshot | null;
   basketFlags: { played: boolean; swish: boolean; streak3: boolean };
+  blinker: number; blinkerManual: boolean; nearArena: boolean;
 }
 const clamp = (n: number, low: number, high: number) => Math.max(low, Math.min(high, n));
 
@@ -66,20 +67,22 @@ export class Simulation {
   transition = 0;
   private lookUntil = 0;
   car = { x: 9, z: 29, yaw: 0, speed: 0, steer: 0, wheelSpin: 0, braking: false };
-  /** Every parked car in the world is stealable. Includes your previously driven cars. */
+  /** Every parked car in the world is stealable. Includes your previously driven cars.
+   *  Slots mirror Map PARKED_CARS + RACE_SHOW_CARS (all clear of driving lines). */
   parked: ParkedVehicle[] = [
-    { kind: 'van', x: -11, z: -38, yaw: 0 },
-    { kind: 'car', x: 11, z: -54, yaw: 0 },
-    { kind: 'car', x: 55, z: 12, yaw: 0 },
-    { kind: 'taxi', x: 24, z: -4, yaw: Math.PI / 2 },
+    { kind: 'van', x: -14, z: -38, yaw: 0 },
+    { kind: 'car', x: 14, z: -54, yaw: 0 },
+    { kind: 'car', x: 55, z: 16, yaw: 0 },
+    { kind: 'taxi', x: 24, z: -16, yaw: Math.PI / 2 },
     { kind: 'muscle', x: -32, z: 14, yaw: 0.3 },
     { kind: 'police', x: 38, z: 34, yaw: -Math.PI / 2 },
-    { kind: 'pickup', x: -50, z: -8, yaw: Math.PI / 2 },
+    { kind: 'pickup', x: -50, z: -18, yaw: Math.PI / 2 },
     { kind: 'ambulance', x: 48, z: -28, yaw: 0 },
     { kind: 'super', x: 18, z: 48, yaw: -0.4 },
     { kind: 'bus', x: 30, z: 62, yaw: Math.PI / 2 },
     { kind: 'hatch', x: -14, z: 52, yaw: 1.2 },
     { kind: 'fire', x: -58, z: 60, yaw: 0 },
+    ...RACE_SHOW_CARS.map((s): ParkedVehicle => ({ kind: s.kind, x: s.x, z: s.z, yaw: s.yaw })),
   ];
   waypoint: string | null = 'plaza';
   readonly discovered = new Set<string>();
@@ -90,6 +93,10 @@ export class Simulation {
   frontBlocked = false;
   crashUntil = 0;
   skidding = false;
+  /** Turn signals: 0 off, 1 left, 2 right, 3 hazard. Auto from steering + manual Z/X. */
+  blinker = 0;
+  /** True only while a signal is deliberately held (Z/X keys, touch pads). Auto-steer leaves this false. */
+  blinkerManual = false;
   traffic: TrafficCar[] = [];
   peds: Ped[] = [];
   // --- character locomotion: smoothed velocity, stride phase, landing dip ---
@@ -193,6 +200,18 @@ export class Simulation {
     const p = routePoint(TRAFFIC_ROUTE, best);
     this.traffic.push({ kind, x: p.x, z: p.z, yaw: p.yaw, speed: 0, offset: best, base: 6 + (best % 3), steer: 0, wheelSpin: 0, braking: false, prevYaw: p.yaw });
   }
+  /** Teleport to a race grid slot (keeps physics settled). */
+  placeAt(x: number, z: number, yaw: number): void {
+    this.car.x = x; this.car.z = z; this.car.yaw = yaw;
+    this.car.speed = 0; this.car.steer = 0; this.car.braking = false;
+    this.x = x; this.z = z; this.yaw = yaw; this.facing = yaw;
+    this.lateralSpeed = 0; this.acceleration = 0;
+    this.previous = { x, z, y: this.y };
+    this.clearInput();
+  }
+  get nearArena(): boolean {
+    return Math.hypot(this.x - (-45), this.z - 82) < 20;
+  }
   get snapshot(): WorldSnapshot {
     let location = 'Civic Avenue', best = 23;
     for (const place of PLACES) {
@@ -224,9 +243,12 @@ export class Simulation {
       table: this.mode === 'table' ? this.table.snapshot : null,
       tableFlags: { ...this.table.flags },
       basket: this.mode === 'basket' ? this.basket.snapshot : null,
-      basketFlags: { played: this.basket.attempts > 0, swish: this.basket.swishes > 0, streak3: this.basket.best >= 3 } };
+      basketFlags: { played: this.basket.attempts > 0, swish: this.basket.swishes > 0, streak3: this.basket.best >= 3 },
+      blinker: this.blinker, blinkerManual: this.blinkerManual, nearArena: this.nearArena };
   }
   begin(): void { this.phase = 'playing'; this.clearInput(); }
+  /** Back to the entry screen (keeps world position; clears transient input). */
+  exitToIntro(): void { this.phase = 'ready'; this.paused = false; this.clearInput(); }
   clearInput(): void { this.keys.clear(); this.stick = { x: 0, y: 0 }; this.jumpPressed = false; this.pvx = 0; this.pvz = 0; }
   setInput(action: WorldAction, down: boolean, source: string): void {
     if (!down) { this.keys.delete(source); return; }
@@ -539,10 +561,22 @@ export class Simulation {
       this.acceleration = (this.car.speed - oldSpeed) / dt;
       this.skidding = Math.abs(this.lateralSpeed) > 1.2;
       this.facing = this.car.yaw;
+      // Turn signals: manual Z/X override, else auto from steering while moving.
+      // Only a deliberately held signal counts as manual (drives the HUD pill).
+      const sigL = this.held('signalLeft');
+      const sigR = this.held('signalRight');
+      this.blinkerManual = sigL || sigR;
+      if (sigL && sigR) this.blinker = 3;
+      else if (sigL) this.blinker = 1;
+      else if (sigR) this.blinker = 2;
+      else if (Math.abs(this.car.speed) > 3 && this.car.steer < -0.28) this.blinker = 1;
+      else if (Math.abs(this.car.speed) > 3 && this.car.steer > 0.28) this.blinker = 2;
+      else this.blinker = 0;
       if (this.view === 'first') this.yaw += this.car.yaw - oldYaw;
       else if (this.time > this.lookUntil) this.yaw += Math.atan2(Math.sin(this.car.yaw - this.yaw), Math.cos(this.car.yaw - this.yaw)) * dt * 2;
     } else {
       this.frontDistance = 999; this.frontBlocked = false; this.skidding = false;
+      this.blinker = 0; this.blinkerManual = false;
       // Velocity-based locomotion: accelerate into the wish direction, ease out on release.
       const grounded = this.y === 0;
       const length = Math.max(1, Math.hypot(forward, side));

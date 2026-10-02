@@ -36,15 +36,55 @@ export interface RosterEntry {
   role: 'host' | 'member';
 }
 
+/** Host-authoritative race snapshot (lobby/countdown/racing/finished). Relayed verbatim. */
+export interface RaceSnapshotMsg {
+  sentAt: number;
+  phase: 'idle' | 'lobby' | 'countdown' | 'racing' | 'finished';
+  laps: number;
+  countdownEndsAt: number;
+  startedAt: number;
+  racers: { id: string; name: string; ready: boolean; vehicleKind: string; lap: number; checkpoint: number; dist: number; finished: boolean; finishMs: number; bestLapMs: number }[];
+}
+
+/** Per-racer progress @10Hz during a race. Broadcast to ALL room members (no distance cull). */
+export interface RacePosPayload {
+  hostId: string;
+  leaving?: boolean;
+  lap: number;
+  cp: number;
+  dist: number;
+  finished: boolean;
+  finishMs: number;
+  bestLapMs: number;
+  vehicleKind: string;
+  ready: boolean;
+  blinker: number;
+}
+
+/** One advertised race lobby per host inside a room (for the arena directory). */
+export interface RaceDirEntry {
+  hostId: string;
+  hostName: string;
+  laps: number;
+  count: number;
+  phase: RaceSnapshotMsg['phase'];
+}
+
 export type ClientMessage =
   | { t: 'hello'; v: number; roomCode: string }
   | { t: 'pos'; p: PosPayload }
+  | { t: 'race_state'; s: RaceSnapshotMsg }
+  | { t: 'race_pos'; r: RacePosPayload }
+  | { t: 'race_list' }
   | { t: 'ping' };
 
 export type ServerMessage =
   | { t: 'welcome'; room: string; you: string; roster: RosterEntry[] }
   | { t: 'roster'; roster: RosterEntry[] }
   | { t: 'pos'; id: string; name: string; p: PosPayload }
+  | { t: 'race_state'; id: string; name: string; s: RaceSnapshotMsg }
+  | { t: 'race_pos'; id: string; name: string; r: RacePosPayload }
+  | { t: 'race_dir'; races: RaceDirEntry[] }
   | { t: 'dots'; players: DotPayload[] }
   | { t: 'pong' }
   | { t: 'error'; code: string; message: string };

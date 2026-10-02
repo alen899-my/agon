@@ -1,10 +1,10 @@
 import { VEHICLES, type VehicleKind } from './Vehicles';
 import * as THREE from 'three';
-import { BUILDINGS, FREE_THROW_DIST, GAME_CENTER, HOOP, RIM, ROADS, TABLE, seeded } from './Map';
+import { BENCHES, BUILDINGS, FREE_THROW_DIST, GAME_CENTER, HOOP, LAMPS, RACE_ARENA, RACE_SHOW_CARS, RACE_SLAB, RIM, ROADS, TABLE, TREES, seeded } from './Map';
 
 type Shape = 'box' | 'sphere' | 'cylinder';
 type MaterialName = 'road' | 'pavement' | 'white' | 'ink' | 'glass' | 'metal' | 'wall0' | 'wall1' | 'wall2' | 'leaf';
-export interface GaitState { phase: number; intensity: number; airborne: boolean; dip: number; idle: number }
+export interface GaitState { phase: number; intensity: number; airborne: boolean; dip: number; idle: number; cheer?: number }
 export interface Stickman {
   group: THREE.Group; hips: THREE.Group; torso: THREE.Group; head: THREE.Group;
   arms: THREE.Group[]; elbows: THREE.Group[]; legs: THREE.Group[]; knees: THREE.Group[]; feet: THREE.Mesh[];
@@ -15,8 +15,9 @@ export interface Vehicle {
   spins: THREE.Object3D[]; frontSteer: THREE.Group[];
   doors: THREE.Group[];
   brakeMat: THREE.MeshStandardMaterial; headMat: THREE.MeshStandardMaterial;
+  blinkerMat: THREE.MeshStandardMaterial;
   spin: number;
-  update: (speed: number, steer: number, dt: number, braking: boolean, bodyTilt?: { pitch: number; roll: number }) => void;
+  update: (speed: number, steer: number, dt: number, braking: boolean, bodyTilt?: { pitch: number; roll: number }, blinker?: number, time?: number) => void;
 }
 
 /** One asset kit. All copies share geometry/materials; static copies are GPU-instanced. */
@@ -111,6 +112,28 @@ export class AssetKit {
         arms[0].rotation.set(0.15, 0, -0.6); arms[1].rotation.set(0.15, 0, 0.6);
         elbows[0].rotation.x = -0.45; elbows[1].rotation.x = -0.45;
         torso.rotation.set(0.12, 0, 0); head.rotation.set(-0.1, 0, 0);
+        return;
+      }
+      if (s.cheer && s.cheer > 0) {
+        const C = Math.min(1.2, s.cheer);
+        // Cheering crowd: excited vertical bounce / jump, raised arms waving overhead, head looking up!
+        const hop = Math.abs(Math.sin(s.phase * 2.4));
+        hips.position.y = 0.95 + hop * 0.14 * C;
+        legs[0].rotation.set(-0.18 * hop * C, 0, 0);
+        legs[1].rotation.set(-0.18 * hop * C, 0, 0);
+        knees[0].rotation.set(0.38 * hop * C, 0, 0);
+        knees[1].rotation.set(0.38 * hop * C, 0, 0);
+        feet[0].rotation.set(-0.18 * hop * C, 0, 0);
+        feet[1].rotation.set(-0.18 * hop * C, 0, 0);
+        const w0 = Math.sin(s.phase * 3.4);
+        const w1 = Math.cos(s.phase * 3.4 + 0.5);
+        arms[0].rotation.set(-2.45 - w0 * 0.32 * C, 0, -0.42 - w1 * 0.22 * C);
+        arms[1].rotation.set(-2.45 + w1 * 0.32 * C, 0, 0.42 + w0 * 0.22 * C);
+        elbows[0].rotation.set(0.55 + w0 * 0.25 * C, 0, 0);
+        elbows[1].rotation.set(0.55 - w1 * 0.25 * C, 0, 0);
+        torso.rotation.set(-0.12 + w0 * 0.06 * C, w1 * 0.08 * C, 0);
+        head.rotation.set(-0.3 + w0 * 0.08 * C, w1 * 0.1 * C, 0);
+        torso.scale.y = 1; hips.rotation.y = 0;
         return;
       }
       const sw0 = Math.sin(s.phase), sw1 = Math.sin(s.phase + Math.PI);
@@ -236,7 +259,8 @@ export class AssetKit {
     // Dedicated lamp materials per vehicle so brake glow doesn't leak across cars.
     const brakeMat = new THREE.MeshStandardMaterial({ color: 0x7a1010, roughness: 0.4, emissive: 0xff1a1a, emissiveIntensity: 0.25 });
     const headMat = new THREE.MeshStandardMaterial({ color: 0xf5f2df, roughness: 0.3, emissive: 0xfff6c9, emissiveIntensity: 0.35 });
-    this.extra.push(brakeMat, headMat);
+    const blinkerMat = new THREE.MeshStandardMaterial({ color: 0x7a4a00, roughness: 0.4, emissive: 0xffa500, emissiveIntensity: 0.2 });
+    this.extra.push(brakeMat, headMat, blinkerMat);
     const spins: THREE.Object3D[] = []; const frontSteer: THREE.Group[] = [];
     const WHEEL_R = kind === 'bus' || kind === 'fire' || kind === 'boxTruck' ? 0.48 : 0.4;
     const trackX = width / 2 - 0.05;
@@ -257,15 +281,23 @@ export class AssetKit {
       head.position.set(side * (width / 2 - 0.35), 0.86, -length / 2 - 0.02); head.scale.set(0.35, 0.2, 0.06); body.add(head);
       const tail = new THREE.Mesh(this.geometry.box, brakeMat);
       tail.position.set(side * (width / 2 - 0.35), 0.86, length / 2 + 0.02); tail.scale.set(0.32, 0.14, 0.06); body.add(tail);
+      // Turn-signal indicators: front fenders + rear quarters share one blinking material.
+      const blinkF = new THREE.Mesh(this.geometry.box, blinkerMat);
+      blinkF.position.set(side * (width / 2 - 0.02), 0.82, -length / 2 + 0.35); blinkF.scale.set(0.06, 0.12, 0.22); body.add(blinkF);
+      const blinkR = new THREE.Mesh(this.geometry.box, blinkerMat);
+      blinkR.position.set(side * (width / 2 - 0.02), 0.82, length / 2 - 0.35); blinkR.scale.set(0.06, 0.12, 0.22); body.add(blinkR);
       paint(body, side * (width / 2 - 0.04), 1.6, 0.1, 0.08, cabinH, 0.15);
     }
-    const vehicle: Vehicle = { group, body, glazing, steeringWheel, eye, spins, frontSteer, doors, brakeMat, headMat, spin: 0,
-      update: (speed, steer, dt, braking, bodyTilt) => {
+    const vehicle: Vehicle = { group, body, glazing, steeringWheel, eye, spins, frontSteer, doors, brakeMat, headMat, blinkerMat, spin: 0,
+      update: (speed, steer, dt, braking, bodyTilt, blinker = 0, time = 0) => {
         vehicle.spin += (speed * dt) / WHEEL_R;
         for (const s of spins) s.rotation.x = vehicle.spin;
         for (const f of frontSteer) f.rotation.y = -steer * 0.55 / (1 + Math.abs(speed) / 24);
         steeringWheel.rotation.z = -steer * 2.4;
         brakeMat.emissiveIntensity = braking ? 2.2 : 0.25;
+        // blinker: 0 off, 1 left, 2 right, 3 hazard. Blink at ~1.6Hz.
+        const on = blinker !== 0 && (time % 0.62) < 0.31;
+        blinkerMat.emissiveIntensity = on ? 2.4 : 0.15;
         if (bodyTilt) { body.rotation.x = bodyTilt.pitch; body.rotation.z = bodyTilt.roll; body.position.y = 0; }
       } };
     return vehicle;
@@ -326,15 +358,17 @@ export function buildMap(scene: THREE.Scene, kit: AssetKit): void {
   kit.stamp('cylinder', 'white', 43, 0.4, -48, 3.5, 0.8, 3.5);
   kit.stamp('cylinder', 'glass', 43, 0.81, -48, 2.8, 0.03, 2.8);
   const rng = seeded(42);
-  for (const [x, z] of [[27, -39], [28, -60], [51, -62], [53, -38], [36, -63], [-42, 16], [-43, 31], [-15, 16], [20, 62], [56, 24]]) {
+  // Trees, benches, lamps render from Map data so visuals match colliders.
+  for (const [x, z] of TREES) {
     kit.stamp('cylinder', 'ink', x, 1.6, z, 0.22, 3.2, 0.22);
     kit.stamp('sphere', 'leaf', x, 4 + rng(), z, 2, 2.5, 2);
   }
-  for (const [x, z] of [[-36, 32], [-20, 32], [31, -56], [49, -56], [26, 26]]) {
+  for (const [x, z] of BENCHES) {
     box('ink', x, 0.55, z, 3, 0.18, 0.8); box('metal', x, 1.05, z + 0.35, 3, 0.85, 0.12);
     for (const offset of [-1, 1]) box('metal', x + offset, 0.25, z, 0.12, 0.5, 0.6);
   }
-  for (const x of [-12, 12]) for (let z = -67; z < 80; z += 24) {
+  for (const lamp of LAMPS) {
+    const x = lamp.x, z = lamp.z;
     kit.stamp('cylinder', 'ink', x, 3.1, z, 0.1, 6.2, 0.1);
     box('ink', x + (x < 0 ? 0.7 : -0.7), 6.2, z, 1.6, 0.15, 0.15);
     box('white', x + (x < 0 ? 1.4 : -1.4), 6.1, z, 0.6, 0.12, 0.4);
@@ -351,7 +385,150 @@ export function buildMap(scene: THREE.Scene, kit: AssetKit): void {
   for (const z of [-118, 118]) box('metal', 0, 0.55, z, 236, 1.1, 0.3);
   buildGameCenter(scene, kit, box);
   buildBasketballCourt(scene, kit, box);
+  buildRaceArena(scene, kit, box);
   kit.flush(scene);
+}
+
+/** Movie Street Racing Arena: Tokyo-drift underground meetup.
+ *  Heavy overhead steel truss gantry with LED countdown tree and neon signs,
+ *  8-car painted staging grid with tire burnout skid marks, concrete Jersey barriers
+ *  with hazard chevrons, spectator tubular safety rails, tire walls, mobile stadium
+ *  floodlights, and tuned underglow for showcase cars. (Tables completely removed). */
+export function buildRaceArena(scene: THREE.Scene, kit: AssetKit, box?: (m: MaterialName, x: number, y: number, z: number, w: number, h: number, d: number) => void): void {
+  const ax = RACE_ARENA.x;
+  const az = RACE_ARENA.z;
+  const put = box ?? ((m, x, y, z, w, h, d) => kit.stamp('box', m, x, y, z, w, h, d));
+
+  // 1. Foundation & Fresh Asphalt Pad (matches RACE_SLAB in Map)
+  put('wall2', ax, 0.03, az, RACE_SLAB.w, 0.08, RACE_SLAB.d);
+  put('road', ax, 0.065, az, RACE_SLAB.w - 1.6, 0.065, RACE_SLAB.d - 1.6);
+
+  // 2. Checkered Start / Finish Line spanning the south entrance (az - 9.8)
+  for (let i = -6; i <= 6; i += 1.0) {
+    const isWhite = Math.abs(Math.round(i)) % 2 === 0;
+    put(isWhite ? 'white' : 'ink', ax + i, 0.09, az - 9.8, 0.96, 0.008, 0.96);
+  }
+
+  // 3. Staging Grid Boxes for 8 cars (2 columns of 4 slots) with white/yellow borders
+  for (let row = 0; row < 4; row++) {
+    const rz = az - 6.2 + row * 4.2;
+    for (const col of [-1, 1]) {
+      const rx = ax + col * 5.4;
+      // Longitudinal boundary lines
+      put('white', rx - 1.45, 0.085, rz, 0.1, 0.008, 3.4);
+      put('white', rx + 1.45, 0.085, rz, 0.1, 0.008, 3.4);
+      // Lateral boundary lines
+      put('white', rx, 0.085, rz - 1.7, 3.0, 0.008, 0.1);
+      put('white', rx, 0.085, rz + 1.7, 3.0, 0.008, 0.1);
+      // Staging stop bar
+      put('white', rx, 0.09, rz - 1.3, 1.8, 0.01, 0.22);
+    }
+  }
+
+  // 4. Burnout rubber skid marks & drift arcs stamped into the asphalt
+  for (const col of [-1, 1]) {
+    // Hard acceleration dual skid marks launching from the grid
+    put('ink', ax + col * 4.8, 0.08, az + 1, 0.28, 0.005, 14);
+    put('ink', ax + col * 6.0, 0.08, az + 1, 0.28, 0.005, 14);
+  }
+  // Drift arc skid marks on the turn entry
+  kit.stamp('box', 'ink', ax - 8, 0.08, az + 4, 0.45, 0.005, 7.5, 0.45);
+  kit.stamp('box', 'ink', ax + 8, 0.08, az + 4, 0.45, 0.005, 7.5, -0.45);
+  // Donut burnout circle in the drift zone
+  for (let a = 0; a < 8; a++) {
+    const ang = (a * Math.PI) / 4;
+    kit.stamp('box', 'ink', ax + Math.cos(ang) * 4.2, 0.08, az + Math.sin(ang) * 4.2, 0.35, 0.005, 3.2, ang + Math.PI / 2);
+  }
+
+  // 5. Entrance Gantry (West entrance across road at x = ax - 16, spanning across z = 80 road)
+  const ex = ax - 16;
+  // South & North sidewalk support pillars (positioned off-road on sidewalks z=69.8 and z=90.2)
+  for (const pz of [69.8, 90.2]) {
+    put('ink', ex, 3.4, pz, 0.6, 6.8, 0.6);
+    put('metal', ex, 1.8, pz, 0.8, 3.6, 0.8);
+  }
+  // Overhead steel truss chords spanning ACROSS the road (6.7m clear height)
+  put('ink', ex, 6.7, 80, 0.45, 0.4, 20.8);
+  put('ink', ex, 5.6, 80, 0.35, 0.3, 20.4);
+  for (let tz = -8; tz <= 8; tz += 2) put('metal', ex, 6.15, 80 + tz, 0.12, 0.95, 0.12);
+
+  // Suspended LED Countdown Light Tree over the road centerline (z = 80)
+  put('ink', ex, 4.85, 80, 0.4, 1.4, 0.55);
+  for (const fx of [ex - 0.22, ex + 0.22]) {
+    put('wall1', fx, 5.3, 80, 0.05, 0.22, 0.22); // Stage 1 Red
+    put('wall1', fx, 5.0, 80, 0.05, 0.22, 0.22); // Stage 2 Red
+    put('wall0', fx, 4.7, 80, 0.05, 0.22, 0.22); // Stage 3 Amber
+    put('white', fx, 4.4, 80, 0.05, 0.26, 0.26); // Launch Green
+  }
+
+  // Overhead Entrance Neon Signs spanning across the road
+  // Facing eastbound traffic entering the speed arena
+  kit.sign(scene, '★ TOKYO SPEED ARENA · UNDERGROUND ★', ex - 0.26, 6.35, 80, 14, -Math.PI / 2);
+  // Facing westbound traffic looking back
+  kit.sign(scene, '★ TOKYO SPEED ARENA · ENTRANCE ★', ex + 0.26, 6.35, 80, 14, Math.PI / 2);
+
+  // Checkered Start Line stamped across the road underneath the entrance gantry
+  for (let z = 73.0; z <= 87.0; z += 1.0) {
+    const isWhite = Math.abs(Math.round(z)) % 2 === 0;
+    put(isWhite ? 'white' : 'ink', ex + 1.2, 0.085, z, 0.96, 0.008, 0.96);
+  }
+
+  // 6. Exit Gantry (East exit across road at x = ax + 16, spanning across z = 80 road)
+  const ox = ax + 16;
+  // South & North sidewalk support pillars (positioned off-road on sidewalks z=69.8 and z=90.2)
+  for (const pz of [69.8, 90.2]) {
+    put('ink', ox, 3.4, pz, 0.6, 6.8, 0.6);
+    put('metal', ox, 1.8, pz, 0.8, 3.6, 0.8);
+  }
+  // Overhead steel truss chords spanning ACROSS the road (6.7m clear height)
+  put('ink', ox, 6.7, 80, 0.45, 0.4, 20.8);
+  put('ink', ox, 5.6, 80, 0.35, 0.3, 20.4);
+  for (let tz = -8; tz <= 8; tz += 2) put('metal', ox, 6.15, 80 + tz, 0.12, 0.95, 0.12);
+
+  // Overhead Exit Neon Signs spanning across the road
+  // Facing eastbound traffic approaching the exit
+  kit.sign(scene, '★ STREET KINGS MEET · SPEED ARENA ★', ox - 0.26, 6.35, 80, 14, -Math.PI / 2);
+  // Facing westbound traffic entering from east
+  kit.sign(scene, '★ STREET KINGS MEET · ENTRANCE ★', ox + 0.26, 6.35, 80, 14, Math.PI / 2);
+
+  // Checkered Finish Line stamped across the road underneath the exit gantry
+  for (let z = 73.0; z <= 87.0; z += 1.0) {
+    const isWhite = Math.abs(Math.round(z)) % 2 === 0;
+    put(isWhite ? 'white' : 'ink', ox - 1.2, 0.085, z, 0.96, 0.008, 0.96);
+  }
+
+  // 7. Mobile Stadium Floodlight Towers (Set back at northern corners, fully clear of roads)
+  for (const [fx, fz] of [[-20.5, 9.2], [20.5, 9.2]] as const) {
+    put('metal', ax + fx, 0.4, az + fz, 1.6, 0.8, 1.2);
+    put('metal', ax + fx, 4.2, az + fz, 0.2, 7.4, 0.2);
+    put('ink', ax + fx, 7.8, az + fz, 1.8, 0.8, 0.35);
+    put('white', ax + fx, 7.8, az + fz - 0.15, 1.6, 0.6, 0.08);
+  }
+
+  // 8. Multi-Tiered Corner Tire Stacks tucked safely at the northern back corners
+  const rng = seeded(999);
+  for (const [cx, cz] of [[-19.5, 8.8], [19.5, 8.8]] as const) {
+    const tx = ax + cx + rng() * 0.3, tz = az + cz + rng() * 0.3;
+    for (let s = 0; s < 3; s++) kit.stamp('cylinder', 'ink', tx, 0.22 + s * 0.44, tz, 0.55, 0.42, 0.55);
+    for (let s = 0; s < 3; s++) kit.stamp('cylinder', 'ink', tx + 0.85, 0.22 + s * 0.44, tz, 0.55, 0.42, 0.55);
+  }
+
+  // 9. Tuned Neon Underglow Lighting Mats beneath Showcase Cars
+  const underglowColors = [0x00f5d4, 0xff007f, 0x70e000, 0xffbe0b, 0x3a86ff, 0xff5400];
+  RACE_SHOW_CARS.forEach((car, i) => {
+    const glowGeo = new THREE.PlaneGeometry(2.3, 4.4);
+    const glowMat = new THREE.MeshBasicMaterial({
+      color: underglowColors[i % underglowColors.length],
+      transparent: true,
+      opacity: 0.65,
+      depthWrite: false,
+    });
+    const glowMesh = new THREE.Mesh(glowGeo, glowMat);
+    glowMesh.rotation.x = -Math.PI / 2;
+    glowMesh.position.set(car.x, 0.082, car.z);
+    glowMesh.rotation.z = car.yaw;
+    scene.add(glowMesh);
+  });
 }
 
 /** Basketball side court north of the table hall. Rim at HOOP, shooter ~4.2m south. */

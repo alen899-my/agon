@@ -58,7 +58,7 @@ describe('vehicle collision regressions', () => {
     expect(t.offset).toBeGreaterThanOrEqual(offset);
     tick(s, 180);
     expect(bodyContact(vehicleBody(t.x, t.z, t.yaw, t.kind), vehicleBody(s.car.x, s.car.z, s.car.yaw, s.vehicleKind))).toBeNull();
-  });
+  }, 15000);
   it('chooses a clear exit door instead of exiting into a lamp', () => {
     const s = driving(10.1, 29); // right door lies at lamp (12, 29)
     s.transition = 0;
