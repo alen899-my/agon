@@ -54,6 +54,59 @@ export const WEATHER_GRIP: Record<Weather, number> = {
   normal: 1, rain: 0.85, snow: 0.7,
 };
 
+export type Season = 'spring' | 'summer' | 'autumn' | 'winter';
+export type DriftKind = 'none' | 'petal' | 'leaf';
+
+export interface SeasonPreset {
+  /** Foliage tint (-1 = keep theme color). */
+  leafTint: number;
+  /** Ground tint (-1 = keep theme color). */
+  pavementTint: number;
+  /** Sunlight tint (-1 = keep theme color). */
+  sunTint: number;
+  sunIntensity: number;
+  exposure: number;
+  /** Fog tint (-1 = keep theme/weather color). */
+  fogTint: number;
+  fogNear: number; fogFar: number; // -1 = keep
+  drift: DriftKind;
+  driftColor: number;
+  /** Snow blanket on verges/foliage/roofs (roads stay clear unless condition = snow). */
+  snowBlanket: boolean;
+  nightDarken: number;
+}
+
+export const SEASON_PRESETS: Record<Season, SeasonPreset> = {
+  spring: {
+    leafTint: 0x5cb85c, pavementTint: -1,
+    sunTint: 0xfff4e0, sunIntensity: 1.02, exposure: 1.02,
+    fogTint: 0xdcefe0, fogNear: -1, fogFar: -1,
+    drift: 'petal', driftColor: 0xf6c9d8,
+    snowBlanket: false, nightDarken: 0,
+  },
+  summer: {
+    leafTint: 0x3f9142, pavementTint: -1,
+    sunTint: 0xffe9c0, sunIntensity: 1.12, exposure: 1.05,
+    fogTint: 0xf2e6cf, fogNear: 80, fogFar: 240,
+    drift: 'none', driftColor: 0xffffff,
+    snowBlanket: false, nightDarken: 0,
+  },
+  autumn: {
+    leafTint: 0xc47b2d, pavementTint: -1,
+    sunTint: 0xffd9a8, sunIntensity: 0.92, exposure: 0.98,
+    fogTint: 0xe6d3b3, fogNear: 70, fogFar: 230,
+    drift: 'leaf', driftColor: 0xd98a3d,
+    snowBlanket: false, nightDarken: 0.04,
+  },
+  winter: {
+    leafTint: 0xc9d4d6, pavementTint: 0xe6ebf0,
+    sunTint: 0xe8f0ff, sunIntensity: 0.82, exposure: 1.0,
+    fogTint: 0xdfe8f2, fogNear: 60, fogFar: 225,
+    drift: 'none', driftColor: 0xffffff,
+    snowBlanket: true, nightDarken: 0.06,
+  },
+};
+
 export function wrapCoord(v: number, min: number, size: number): number {
   let r = (v - min) % size;
   if (r < 0) r += size;
@@ -67,13 +120,15 @@ const PARTICLE_COUNTS: Record<string, number> = {
 export type QualityLevelLike = 'low' | 'balanced' | 'high' | 'ultra';
 
 /**
- * Camera-following precipitation box. Zero-alloc per frame: preallocated
- * Float32Arrays, positions wrapped arithmetically around the camera.
- * Rain = streak LineSegments falling fast; snow = Points drifting slowly.
+ * Camera-following precipitation + seasonal drift box. Zero-alloc per frame:
+ * preallocated Float32Arrays, positions wrapped arithmetically around the camera.
+ * Rain = streak LineSegments falling fast; snow = Points drifting slowly;
+ * petal/leaf = colored Points swaying down (spring/autumn ambience).
  */
 export class WeatherParticles {
   readonly group = new THREE.Group();
   private weather: Weather = 'normal';
+  private season: Season = 'spring';
   private count = 0;
   private boxW = 44; private boxH = 30; private boxD = 44;
   private rainPos: Float32Array = new Float32Array(0);
@@ -85,7 +140,15 @@ export class WeatherParticles {
   private snowPhase: Float32Array = new Float32Array(0);
   private snowGeo = new THREE.BufferGeometry();
   private snowPoints: THREE.Points | null = null;
+  private driftPos: Float32Array = new Float32Array(0);
+  private driftVel: Float32Array = new Float32Array(0);
+  private driftPhase: Float32Array = new Float32Array(0);
+  private driftGeo = new THREE.BufferGeometry();
+  private driftPoints: THREE.Points | null = null;
   private time = 0;
+
+  private get driftKind(): DriftKind { return SEASON_PRESETS[this.season].drift; }
+  get currentSeason(): Season { return this.season; }
 
   constructor(private scene: THREE.Scene) {
     this.scene.add(this.group);
@@ -93,7 +156,7 @@ export class WeatherParticles {
     this.group.frustumCulled = false;
   }
 
-  get active(): boolean { return this.weather !== 'normal'; }
+  get active(): boolean { return this.weather !== 'normal' || this.driftKind !== 'none'; }
   get current(): Weather { return this.weather; }
   get particleCount(): number { return this.count; }
 
@@ -106,6 +169,7 @@ export class WeatherParticles {
     this.count = n;
     this.allocRain(n);
     this.allocSnow(n);
+    this.allocDrift(n);
     this.applyVisibility();
   }
 
@@ -145,16 +209,45 @@ export class WeatherParticles {
     this.group.add(this.snowPoints);
   }
 
+  private allocDrift(n: number): void {
+    if (this.driftPoints) { this.group.remove(this.driftPoints); this.driftGeo.dispose(); (this.driftPoints.material as THREE.Material).dispose(); this.driftGeo = new THREE.BufferGeometry(); this.driftPoints = null; }
+    this.driftPos = new Float32Array(n * 3);
+    this.driftVel = new Float32Array(n);
+    this.driftPhase = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      this.driftPos[i * 3] = Math.random() * this.boxW;
+      this.driftPos[i * 3 + 1] = Math.random() * this.boxH;
+      this.driftPos[i * 3 + 2] = Math.random() * this.boxD;
+      this.driftVel[i] = 0.5 + Math.random() * 0.9;
+      this.driftPhase[i] = Math.random() * Math.PI * 2;
+    }
+    this.driftGeo.setAttribute('position', new THREE.BufferAttribute(this.driftPos, 3));
+    const mat = new THREE.PointsMaterial({ color: SEASON_PRESETS[this.season].driftColor, size: 0.11, transparent: true, opacity: 0.85, sizeAttenuation: true, depthWrite: false });
+    this.driftPoints = new THREE.Points(this.driftGeo, mat);
+    this.driftPoints.frustumCulled = false;
+    this.group.add(this.driftPoints);
+  }
+
   setWeather(w: Weather): void {
     this.weather = w;
     if (this.count === 0) this.setQuality('balanced');
     this.applyVisibility();
   }
 
+  setSeason(s: Season): void {
+    if (this.season === s && this.driftPoints) { this.applyVisibility(); return; }
+    this.season = s;
+    if (this.count === 0) this.setQuality('balanced');
+    if (this.driftPoints) (this.driftPoints.material as THREE.PointsMaterial).color.setHex(SEASON_PRESETS[s].driftColor);
+    this.applyVisibility();
+  }
+
   private applyVisibility(): void {
-    this.group.visible = this.weather !== 'normal';
+    const drift = this.driftKind !== 'none';
+    this.group.visible = this.weather !== 'normal' || drift;
     if (this.rainLines) this.rainLines.visible = this.weather === 'rain';
     if (this.snowPoints) this.snowPoints.visible = this.weather === 'snow';
+    if (this.driftPoints) this.driftPoints.visible = drift;
   }
 
   /** Seed the box around the camera so the first frame already has cover. */
@@ -164,7 +257,7 @@ export class WeatherParticles {
   }
 
   update(dt: number, cx: number, cz: number): void {
-    if (this.weather === 'normal') return;
+    if (this.weather === 'normal' && this.driftKind === 'none') return;
     const clamped = Math.max(0, Math.min(0.05, dt));
     if (clamped === 0) return;
     this.time += clamped;
@@ -192,12 +285,28 @@ export class WeatherParticles {
       }
       this.snowGeo.attributes.position.needsUpdate = true;
     }
+    if (this.driftKind !== 'none' && this.driftPoints) {
+      // Petals/leaves: slow fall, wide sway, full-box wrap.
+      const p = this.driftPos, n = this.count;
+      const sway = this.driftKind === 'petal' ? 1.4 : 1.0;
+      for (let i = 0; i < n; i++) {
+        let y = p[i * 3 + 1] - this.driftVel[i] * clamped;
+        if (y < 0) y += this.boxH;
+        p[i * 3 + 1] = y;
+        p[i * 3] += Math.sin(this.time * 0.9 + this.driftPhase[i]) * clamped * sway;
+        p[i * 3 + 2] += Math.cos(this.time * 0.7 + this.driftPhase[i]) * clamped * sway * 0.6;
+        if (p[i * 3] < 0) p[i * 3] += this.boxW; else if (p[i * 3] >= this.boxW) p[i * 3] -= this.boxW;
+        if (p[i * 3 + 2] < 0) p[i * 3 + 2] += this.boxD; else if (p[i * 3 + 2] >= this.boxD) p[i * 3 + 2] -= this.boxD;
+      }
+      this.driftGeo.attributes.position.needsUpdate = true;
+    }
   }
 
   dispose(): void {
     this.scene.remove(this.group);
-    this.rainGeo.dispose(); this.snowGeo.dispose();
+    this.rainGeo.dispose(); this.snowGeo.dispose(); this.driftGeo.dispose();
     if (this.rainLines) (this.rainLines.material as THREE.Material).dispose();
     if (this.snowPoints) (this.snowPoints.material as THREE.Material).dispose();
+    if (this.driftPoints) (this.driftPoints.material as THREE.Material).dispose();
   }
 }

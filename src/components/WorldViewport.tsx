@@ -2,13 +2,13 @@ import { CameraInput, type LookSettings, type LookStatus } from '../game/CameraI
 import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 import { WorldEngine, type QualityLevel } from '../world/WorldEngine';
 import type { Theme } from '../game/State';
-import type { Weather } from '../world/Weather';
+import type { Season, Weather } from '../world/Weather';
 import type { WorldAction, WorldSnapshot } from '../world/Simulation';
 
 const KEYS: Record<string, WorldAction> = { KeyW: 'forward', KeyS: 'back', KeyA: 'left', KeyD: 'right', ArrowUp: 'forward', ArrowDown: 'back', ArrowLeft: 'left', ArrowRight: 'right', KeyQ: 'turnLeft', KeyC: 'turnRight', ShiftLeft: 'sprint', ShiftRight: 'sprint', Space: 'jump', KeyZ: 'signalLeft', KeyX: 'signalRight', KeyH: 'horn' };
-interface Props { engineRef: MutableRefObject<WorldEngine | null>; onSnapshot: (s: WorldSnapshot) => void; onMap: () => void; theme: Theme; weather: Weather; quality: QualityLevel; portrait: boolean; blocked: boolean; onDismissOverlay: () => void; lookSettings: LookSettings; lookEnabled: boolean }
+interface Props { engineRef: MutableRefObject<WorldEngine | null>; onSnapshot: (s: WorldSnapshot) => void; onMap: () => void; theme: Theme; weather: Weather; season: Season; quality: QualityLevel; portrait: boolean; blocked: boolean; onDismissOverlay: () => void; lookSettings: LookSettings; lookEnabled: boolean }
 
-export function WorldViewport({ engineRef, onSnapshot, onMap, theme, weather, quality, portrait, blocked, onDismissOverlay, lookSettings, lookEnabled }: Props) {
+export function WorldViewport({ engineRef, onSnapshot, onMap, theme, weather, season, quality, portrait, blocked, onDismissOverlay, lookSettings, lookEnabled }: Props) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const props = useRef({ onSnapshot, onMap, theme, quality, portrait, blocked, onDismissOverlay, lookSettings }); props.current = { onSnapshot, onMap, theme, quality, portrait, blocked, onDismissOverlay, lookSettings };
   const cameraInput = useRef<CameraInput | null>(null);
@@ -72,6 +72,7 @@ export function WorldViewport({ engineRef, onSnapshot, onMap, theme, weather, qu
   }, [engineRef]);
   useEffect(() => engineRef.current?.setTheme(theme), [theme, engineRef]);
   useEffect(() => engineRef.current?.setWeather(weather), [weather, engineRef]);
+  useEffect(() => engineRef.current?.setSeason(season), [season, engineRef]);
   useEffect(() => engineRef.current?.applyQuality(quality), [quality, engineRef]);
   useEffect(() => { engineRef.current?.setSuspended(document.hidden || portrait || blocked); cameraInput.current?.refresh(); }, [portrait, blocked, engineRef]);
   return <><canvas ref={canvas} tabIndex={0} className="world-canvas" data-look-state={lookStatus} aria-label="3D neighborhood. WASD or arrows to move, click once to capture mouse or trackpad look, Escape to release, touch swipe to look, Q/C to turn camera, Space to jump or handbrake, V for cockpit, E to enter or steal any stopped car, N to cycle 16 stopped vehicles. Type your name on the intro screen to start." />

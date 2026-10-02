@@ -4,7 +4,7 @@ import { RealtimeClient, type RaceDirEntry, type RemoteDot, type RemotePos } fro
 import { GameLoop } from '../game/GameLoop';
 import type { Theme } from '../game/State';
 import { barrelSound, bbSound, countdownBeep, crashThud, crowdCheerSound, horn, startRainLoop, stopRainLoop, ttSound, unlockAudio } from '../game/Sound';
-import { WEATHER_PRESETS, WeatherParticles, type Weather } from './Weather';
+import { SEASON_PRESETS, WEATHER_PRESETS, WeatherParticles, type Season, type Weather } from './Weather';
 import { LAMPS } from './Map';
 import { AssetKit, buildMap, type Stickman, type Vehicle } from './Assets';
 import { BUILDINGS, GAME_CENTER, HOOP, PLACES, RACE_ARENA, RACE_CROWD, RIM, TABLE, seeded } from './Map';
@@ -114,6 +114,7 @@ export class WorldEngine {
   }
   get nightFactor(): number { return this._nightFactor; }
   get currentWeather(): Weather { return this.weather; }
+  get currentSeason(): Season { return this.season; }
   get glowCount(): number { return this.glowSprites.length; }
   /** Arena directory: joinable races in this server (refreshed by server push + request). */
   raceDir: RaceDirEntry[] = [];
@@ -143,6 +144,7 @@ export class WorldEngine {
   private readonly vehicleAudio = new VehicleAudio();
   private theme: Theme = 'light';
   private weather: Weather = 'normal';
+  private season: Season = 'spring';
   private _nightFactor = 0;
   private precip: WeatherParticles | null = null;
   private readonly glowSprites: THREE.Sprite[] = [];
@@ -813,6 +815,7 @@ export class WorldEngine {
     if (!this.precip) {
       this.precip = new WeatherParticles(this.scene);
       this.precip.setQuality(this.quality);
+      this.precip.setSeason(this.season);
     }
     this.precip.setWeather(w);
     this.precip.snapTo(this.simulation.x, this.simulation.z);
@@ -821,9 +824,24 @@ export class WorldEngine {
     this.applyLook();
     this.emit();
   }
+  /** Season: foliage/ambience restyle + petal/leaf drift. Grip stays with the condition. */
+  setSeason(s: Season): void {
+    if (this.season === s && this.precip) return;
+    this.season = s;
+    this.simulation.season = s;
+    if (!this.precip) {
+      this.precip = new WeatherParticles(this.scene);
+      this.precip.setQuality(this.quality);
+      this.precip.setWeather(this.weather);
+    }
+    this.precip.setSeason(s);
+    this.precip.snapTo(this.simulation.x, this.simulation.z);
+    this.applyLook();
+    this.emit();
+  }
   /**
-   * Composes the final look: theme base + weather overlay + night factor.
-   * Called on theme/weather change and while nightFactor is lerping.
+   * Composes the final look: theme base + season overlay + weather overlay + night.
+   * Called on theme/season/weather change and while nightFactor is lerping.
    */
   applyLook(): void {
     const mats = this.kit.materials;
@@ -847,21 +865,30 @@ export class WorldEngine {
       let sunI = 3, ambI = 1.6, exposure = 1.1;
       this.sun.color.setHex(0xfff0d6);
       this.ambient.color.setHex(0xcfe5ff); this.ambient.groundColor.setHex(0x8a9a7b);
+      // Season overlay: foliage, sun warmth, haze (condition wins on conflicts).
+      const season = SEASON_PRESETS[this.season];
+      if (season.leafTint >= 0) mats.leaf.color.setHex(season.leafTint);
+      if (season.pavementTint >= 0) mats.pavement.color.setHex(season.pavementTint);
+      if (season.sunTint >= 0) this.sun.color.setHex(season.sunTint);
+      sunI *= season.sunIntensity; exposure *= season.exposure;
+      if (season.fogTint >= 0) sky.setHex(season.fogTint);
+      if (season.fogNear > 0) { fogNear = season.fogNear; fogFar = season.fogFar; }
       if (this.weather !== 'normal') {
         sky.setHex(preset.sky);
         if (preset.fogNear > 0) { fogNear = preset.fogNear; fogFar = preset.fogFar; }
-        this.sun.color.setHex(preset.sunColor); sunI = 3 * preset.sunIntensity;
-        ambI = 1.6 * preset.ambientIntensity; exposure = 1.1 * preset.exposure;
+        this.sun.color.setHex(preset.sunColor); sunI *= preset.sunIntensity;
+        ambI *= preset.ambientIntensity; exposure *= preset.exposure;
         mats.road.color.setHex(preset.roadTint);
         mats.road.roughness = preset.roadRoughness;
         mats.road.metalness = preset.wetGloss * 0.4;
       } else { mats.road.roughness = 1; mats.road.metalness = 0; }
-      if (preset.snowBlanket) {
+      // Winter blankets the verges even when clear; snow condition buries the roads too.
+      if (season.snowBlanket || preset.snowBlanket) {
         mats.pavement.color.setHex(0xe9eef5); mats.leaf.color.setHex(0xd7e4e4);
         mats.white.color.setHex(0xffffff);
       }
       // Night composes on top (rainy night = darkest via preset.nightDarken).
-      const darken = night * (0.82 + preset.nightDarken);
+      const darken = night * (0.82 + preset.nightDarken + season.nightDarken);
       sky.multiplyScalar(Math.max(0.06, 1 - darken));
       // True night sky fades toward deep blue, not pure black.
       if (night > 0) sky.lerp(new THREE.Color(0x0b1026), night * 0.75);
@@ -886,22 +913,25 @@ export class WorldEngine {
       mats.leaf.color.setHex(0x626262);
       let color = new THREE.Color(light ? 0xdadada : 0x242424);
       let fogNear = 90, fogFar = 255;
-      let sunI = light ? 3 : 1.5, ambI = light ? 2.2 : 1.1, exposure = 1.05;
+      // Mono stays gray: seasons only shift light energy + haze range + winter blanket.
+      const seasonM = SEASON_PRESETS[this.season];
+      let sunI = (light ? 3 : 1.5) * seasonM.sunIntensity, ambI = light ? 2.2 : 1.1, exposure = 1.05 * seasonM.exposure;
+      if (seasonM.fogNear > 0) { fogNear = seasonM.fogNear; fogFar = seasonM.fogFar; }
       if (this.weather !== 'normal') {
         color.setHex(preset.fog);
         if (preset.fogNear > 0) { fogNear = preset.fogNear; fogFar = preset.fogFar; }
-        this.sun.color.setHex(preset.sunColor); sunI = (light ? 3 : 1.5) * preset.sunIntensity;
-        ambI = (light ? 2.2 : 1.1) * preset.ambientIntensity; exposure = 1.05 * preset.exposure;
+        this.sun.color.setHex(preset.sunColor); sunI *= preset.sunIntensity;
+        ambI *= preset.ambientIntensity; exposure *= preset.exposure;
         mats.road.color.setHex(preset.roadTint);
         mats.road.roughness = preset.roadRoughness;
         mats.road.metalness = preset.wetGloss * 0.4;
       } else { mats.road.roughness = 1; mats.road.metalness = 0; this.sun.color.setHex(0xffffff); }
-      if (preset.snowBlanket) {
+      if (seasonM.snowBlanket || preset.snowBlanket) {
         mats.pavement.color.setHex(0xe6e6e6); mats.leaf.color.setHex(0xc9c9c9);
         mats.wall0.color.setHex(0xefefef); mats.wall1.color.setHex(0xe2e2e2);
       }
       this.ambient.color.setHex(0xffffff); this.ambient.groundColor.setHex(0x555555);
-      const darken = night * (0.8 + preset.nightDarken);
+      const darken = night * (0.8 + preset.nightDarken + seasonM.nightDarken);
       color.multiplyScalar(Math.max(0.05, 1 - darken));
       if (night > 0) color.lerp(new THREE.Color(0x0b1026), night * 0.7);
       this.scene.background = color.clone(); this.scene.fog = new THREE.Fog(color.getHex(), fogNear, fogFar);

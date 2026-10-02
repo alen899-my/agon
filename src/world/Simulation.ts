@@ -1,6 +1,6 @@
 import { bodyContact, boundaryContact, circleContact, vehicleBody, type Body, type Contact } from './Collision';
 import { VEHICLES, VEHICLE_KINDS, type VehicleKind } from './Vehicles';
-import { WEATHER_GRIP, type Weather } from './Weather';
+import { WEATHER_GRIP, type Season, type Weather } from './Weather';
 import { GAME_CENTER, HOOP, intersects, LIMIT, SOLIDS, PARKED_CARS, PLACES, PROPS, RACE_SHOW_CARS, TRAFFIC_ROUTE, circleHit, seeded, type Point } from './Map';
 import { TableTennisSim, type TTShot, type TTSnapshot } from './TableTennis';
 import { BasketballSim, type BBSnapshot } from './Basketball';
@@ -20,9 +20,9 @@ export interface Ped {
 }
 export interface SnapshotCar { x: number; z: number; yaw: number; speed: number; steer: number; wheelSpin: number; braking: boolean }
 export type PlayMode = 'roam' | 'table' | 'basket';
-export type { Weather };
+export type { Season, Weather };
 export interface WorldSnapshot {
-  phase: 'ready' | 'playing'; paused: boolean; view: View; driving: boolean; weather: Weather;
+  phase: 'ready' | 'playing'; paused: boolean; view: View; driving: boolean; weather: Weather; season: Season;
   x: number; z: number; yaw: number; speed: number; distance: number;
   location: string; discovered: string[]; waypoint: string | null; nearbyCar: boolean;
   nearbyVehicleKind: VehicleKind | null; nearbyVehicleLabel: string | null; enterHint: string | null;
@@ -120,6 +120,8 @@ export class Simulation {
   /** Weather mode (grip multiplier). Set by WorldEngine.setWeather. */
   weather: Weather = 'normal';
   get weatherGrip(): number { return WEATHER_GRIP[this.weather] ?? 1; }
+  /** Season (visuals + ambience only; grip stays with the condition). Set by WorldEngine.setSeason. */
+  season: Season = 'spring';
   // --- game center: table tennis + basketball modes ---
   mode: PlayMode = 'roam';
   table = new TableTennisSim();
@@ -243,7 +245,7 @@ export class Simulation {
       : !near ? null
       : !near.enterable ? `${VEHICLES[near.kind].name} ${near.reason ?? ''}`.trim()
       : `E — drive ${VEHICLES[near.kind].name}`;
-    return { phase: this.phase, paused: this.paused, view: this.view, driving: this.driving, weather: this.weather,
+    return { phase: this.phase, paused: this.paused, view: this.view, driving: this.driving, weather: this.weather, season: this.season,
       x: this.x, z: this.z, yaw: this.yaw, speed: Math.round(Math.abs(this.driving ? this.car.speed : this.pace) * 3.6),
       distance: Math.floor(this.distance), location, discovered: [...this.discovered], waypoint: this.waypoint, nearbyCar: this.nearbyCar,
       nearbyVehicleKind: near?.enterable ? near.kind : null,
