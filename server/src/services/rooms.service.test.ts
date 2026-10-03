@@ -2,8 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   ROOM_CODE_ALPHABET,
   ROOM_CODE_LENGTH,
+  ROOM_NAME_MAX,
+  ROOM_NAME_MIN,
   generateRoomCode,
   normalizeRoomCode,
+  normalizeRoomName,
+  normalizeRoomVisibility,
 } from './rooms.service.js';
 import { ApiError } from '../utils/http.js';
 
@@ -32,6 +36,34 @@ describe('room codes', () => {
         expect(error).toBeInstanceOf(ApiError);
         expect((error as ApiError).status).toBe(400);
       }
+    }
+  });
+  it('normalizes server names and falls back to the host name', () => {
+    expect(normalizeRoomName('  Sunset   Courts ', 'Ava')).toBe('Sunset Courts');
+    expect(normalizeRoomName('', 'Ava')).toBe("Ava's District");
+    expect(normalizeRoomName(undefined, 'Ava')).toBe("Ava's District");
+    for (const bad of ['ab', 'x'.repeat(ROOM_NAME_MAX + 1)]) {
+      try {
+        normalizeRoomName(bad, 'Ava');
+        expect.unreachable(`accepted ${JSON.stringify(bad)}`);
+      } catch (error) {
+        expect(error).toBeInstanceOf(ApiError);
+        expect((error as ApiError).status).toBe(400);
+      }
+    }
+    expect(ROOM_NAME_MIN).toBe(3);
+  });
+  it('defaults visibility to private and rejects unknown values', () => {
+    expect(normalizeRoomVisibility(undefined)).toBe('private');
+    expect(normalizeRoomVisibility('')).toBe('private');
+    expect(normalizeRoomVisibility('public')).toBe('public');
+    expect(normalizeRoomVisibility('private')).toBe('private');
+    try {
+      normalizeRoomVisibility('secret');
+      expect.unreachable('accepted secret');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ApiError);
+      expect((error as ApiError).status).toBe(400);
     }
   });
 });

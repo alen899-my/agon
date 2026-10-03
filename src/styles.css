@@ -30,49 +30,62 @@ kbd { font: inherit; border: 1px solid var(--line); padding: 2px 4px; border-rad
 .compass span { color: var(--muted); } .compass b { font-weight: 600; } .compass i { position: absolute; top: 32px; left: calc(50% - 1px); height: 7px; width: 2px; background: var(--ink); }
 .exploration-count { position: absolute; top: 23px; right: 24px; background: var(--surface); border: 1px solid var(--line); padding: 15px 18px; text-align: right; }
 .exploration-count b { font-size: 25px; font-weight: 500; } .exploration-count b span { font-size: 17px; color: var(--muted); } .exploration-count small { display: block; font-size: 7px; letter-spacing: 1px; margin-top: 4px; }
-/* ── Intro panel: centered game start screen ───────────────────────────── */
+/* ── Intro panel: theme-aware card on a dark scrim ─────────────────────── */
 .world-intro {
   position: absolute;
   inset: 0;
   z-index: 8;
-  /* CSS grid: card is constrained to 400px, centered both axes */
+  /* Grid with margin:auto on the card: centers short content, top-aligns + scrolls tall content. */
   display: grid;
-  grid-template-columns: minmax(0, 400px);
-  align-content: center;
+  grid-template-columns: minmax(0, 440px);
+  align-content: start;
   justify-content: center;
-  place-items: start stretch;
-  gap: 0;
   padding: 16px;
+  padding-top: max(16px, env(safe-area-inset-top));
+  padding-bottom: max(16px, env(safe-area-inset-bottom));
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   /* dark scrim — world peeks through behind the card */
-  background: rgba(0, 0, 0, 0.4);
+  background: rgba(0, 0, 0, 0.45);
   backdrop-filter: blur(3px);
   -webkit-backdrop-filter: blur(3px);
 }
 
-/* All direct children sit inside a card feel */
-.world-intro > .eyebrow { margin-bottom: 0; }
-.world-intro > h1 {
-  font-size: clamp(38px, 9vw, 72px);
+/* Solid theme-aware card: readable in light, dark and color themes. */
+.intro-card {
+  margin: auto;
+  width: 100%;
+  max-height: 100%;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 22px 22px 18px;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.35);
+}
+
+.intro-card > .eyebrow { margin: 0 0 2px; }
+.intro-card > h1 {
+  font-size: clamp(38px, 9vw, 64px);
   font-weight: 800;
   line-height: .92;
-  letter-spacing: clamp(-2px, -0.5vw, -4px);
-  margin: 14px 0 16px;
-  color: #fff;
-  text-shadow: 0 2px 20px rgba(0,0,0,0.4);
+  letter-spacing: clamp(-2px, -0.5vw, -3.5px);
+  margin: 12px 0 12px;
+  color: var(--ink);
 }
-.world-intro > .eyebrow {
+.intro-card > .eyebrow {
   font-size: 8px;
   letter-spacing: 2px;
-  color: rgba(255,255,255,0.55);
+  color: var(--muted);
   font-weight: 600;
 }
-.world-intro > p:not(.eyebrow) {
-  color: rgba(255,255,255,0.65);
+.intro-sub {
+  color: var(--muted);
   font-size: clamp(11px, 2.5vw, 13px);
   line-height: 1.75;
-  margin: 0 0 22px;
+  margin: 0 0 20px;
 }
 /* Mode tabs */
 .mode-tabs {
@@ -86,14 +99,14 @@ kbd { font: inherit; border: 1px solid var(--line); padding: 2px 4px; border-rad
   font-size: 8px;
   font-weight: 700;
   letter-spacing: 1px;
-  color: rgba(255,255,255,0.55);
-  background: rgba(255,255,255,0.07);
-  border: 1px solid rgba(255,255,255,0.18);
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
   border-radius: 4px;
   padding: 0 6px;
   transition: background .15s, color .15s, border-color .15s;
 }
-.mode-tabs button:hover { background: rgba(255,255,255,0.13); color: #fff; }
+.mode-tabs button:hover { background: var(--pad); color: var(--ink); }
 .mode-tabs button.on {
   color: var(--accent-ink);
   background: var(--accent);
@@ -109,7 +122,7 @@ kbd { font: inherit; border: 1px solid var(--line); padding: 2px 4px; border-rad
   font-size: 9px;
   letter-spacing: 1.5px;
   font-weight: 700;
-  color: rgba(255,255,255,0.7);
+  color: var(--muted);
 }
 .name-row input {
   width: 100%;
@@ -118,20 +131,77 @@ kbd { font: inherit; border: 1px solid var(--line); padding: 2px 4px; border-rad
   font-size: 16px;
   letter-spacing: .3px;
   color: var(--ink);
-  background: #fff;
-  border: 1px solid rgba(255,255,255,0.3);
+  background: var(--surface);
+  border: 1px solid var(--line);
   border-radius: 4px;
   outline: none;
 }
+.name-row input::placeholder { color: var(--muted); opacity: .7; }
 .name-row input:focus {
   border-color: var(--ink);
-  box-shadow: 0 0 0 3px rgba(255,255,255,0.25);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink) 18%, transparent);
 }
-.name-note {
-  font-size: 10px !important;
-  color: rgba(255,255,255,0.55) !important;
-  margin-bottom: 12px !important;
+.name-note,
+.form-note {
+  font-size: 10px;
+  line-height: 1.6;
+  color: var(--muted);
+  margin: 0 0 12px;
 }
+/* Visibility toggle on the host form */
+.visibility-toggle { margin-bottom: 14px; }
+.visibility-toggle button { flex: 1; min-height: 44px; font-size: 9px; }
+
+/* Server browser */
+.browser-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 18px 0 10px;
+}
+.browser-head .eyebrow { margin: 0; }
+.server-list {
+  list-style: none;
+  margin: 0 0 4px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 30vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.server-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.server-row-main { flex: 1; min-width: 0; }
+.server-row-main b { display: block; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.server-row-main small { display: block; font-size: 9px; color: var(--muted); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.server-row-meter { display: none; }
+.server-preview {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  background: var(--pad);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.server-preview div { flex: 1; min-width: 0; }
+.server-preview b { display: block; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.server-preview small { display: block; font-size: 9px; color: var(--muted); margin-top: 3px; }
+.server-preview i { font-style: normal; font-size: 8px; font-weight: 700; letter-spacing: 1px; white-space: nowrap; }
+.button-row { display: flex; gap: 8px; margin-bottom: 14px; }
+.button-row .control { flex: 1; min-height: 52px; }
+.button-row .primary-button.inline { flex: 2; margin: 0; }
 /* Room code panel */
 .room-code-panel {
   display: flex;
@@ -140,13 +210,16 @@ kbd { font: inherit; border: 1px solid var(--line); padding: 2px 4px; border-rad
   gap: 10px;
   margin-bottom: 16px;
   padding: 14px 16px;
-  background: rgba(255,255,255,0.08);
-  border: 1px dashed rgba(255,255,255,0.35);
+  background: var(--pad);
+  border: 1px dashed var(--line);
   border-radius: 4px;
 }
-.room-code-panel span { font-size: 8px; letter-spacing: 1.5px; color: rgba(255,255,255,0.5); font-weight: 600; }
-.room-code-panel b { font-size: clamp(22px, 6vw, 30px); letter-spacing: clamp(4px, 1.5vw, 8px); font-weight: 800; color: #fff; }
-.room-code-panel .control { margin-left: auto; background: rgba(255,255,255,0.12); border-color: rgba(255,255,255,0.25); color: #fff; }
+.room-code-panel span { font-size: 8px; letter-spacing: 1.5px; color: var(--muted); font-weight: 600; }
+.room-code-panel b { font-size: clamp(22px, 6vw, 30px); letter-spacing: clamp(4px, 1.5vw, 8px); font-weight: 800; color: var(--ink); }
+.room-code-panel .button-row { width: 100%; margin-bottom: 0; }
+.room-code-panel .button-row .control { min-height: 44px; }
+.code-sub { flex-basis: 100%; font-size: 10px; color: var(--muted); }
+.code-sub.break { overflow-wrap: anywhere; word-break: break-all; }
 /* Primary CTA button */
 .primary-button {
   display: flex;
@@ -176,15 +249,16 @@ kbd { font: inherit; border: 1px solid var(--line); padding: 2px 4px; border-rad
   margin-top: 20px;
   font-size: 7px;
   letter-spacing: 1px;
-  color: rgba(255,255,255,0.4);
+  color: var(--muted);
 }
 /* ── Larger screens: wider card ────────────────────────────────────────── */
 @media (min-width: 600px) {
   .world-intro {
-    grid-template-columns: minmax(0, 460px);
+    grid-template-columns: minmax(0, 500px);
     padding: 24px;
   }
-  .world-intro > h1 { font-size: clamp(48px, 5.5vw, 72px); letter-spacing: -3.5px; margin: 18px 0 18px; }
+  .intro-card { padding: 26px 26px 20px; }
+  .intro-card > h1 { font-size: clamp(48px, 5.5vw, 64px); letter-spacing: -3px; margin: 14px 0 14px; }
   .mode-tabs button { font-size: 9px; min-height: 42px; }
   .name-row input { min-height: 48px; font-size: 15px; }
   .primary-button { min-height: 54px; font-size: 11px; }
@@ -277,9 +351,11 @@ kbd { font: inherit; border: 1px solid var(--line); padding: 2px 4px; border-rad
 @media (orientation: landscape) and (max-height: 600px) {
   .control { min-height: 34px; padding: 0 10px; font-size: 8px; } kbd { display: none; }
   .location-card { top: 12px; left: 12px; min-width: 180px; padding: 9px 12px; } .location-card h2 { font-size: 16px; margin: 5px 0 0; } .location-card p { display: none; } .eyebrow { font-size: 6px; } .compass { top: 12px; width: 95px; padding: 8px 12px; } .compass i { top: 30px; }
-  .world-intro { inset: 0; grid-template-columns: minmax(0, 360px); padding: 10px; }
-  .world-intro h1 { font-size: 30px; letter-spacing: -1.5px; margin: 8px 0; }
-  .world-intro > p:not(.eyebrow) { font-size: 9px; margin-bottom: 10px; line-height: 1.5; }
+  .world-intro { inset: 0; grid-template-columns: minmax(0, min(420px, 100%)); padding: 10px; }
+  .intro-card { padding: 16px 16px 12px; }
+  .intro-card > h1 { font-size: 30px; letter-spacing: -1.5px; margin: 8px 0; }
+  .intro-sub { font-size: 9px; margin-bottom: 10px; line-height: 1.5; }
+  .server-list { max-height: 24vh; }
   .intro-tags { display: none; }
   .primary-button { width: 100%; min-height: 40px; font-size: 8px; display: flex; gap: 24px; }
   .name-row { flex-direction: column; align-items: stretch; gap: 6px; margin-bottom: 10px; }

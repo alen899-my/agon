@@ -19,6 +19,8 @@ CREATE TABLE IF NOT EXISTS rooms (
   code TEXT PRIMARY KEY,
   host_player_id UUID NOT NULL REFERENCES players (id) ON DELETE CASCADE,
   max_members SMALLINT NOT NULL DEFAULT 100 CHECK (max_members >= 1 AND max_members <= 100),
+  name TEXT NOT NULL DEFAULT 'District Server',
+  visibility TEXT NOT NULL DEFAULT 'private' CHECK (visibility IN ('public', 'private')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_active_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -33,7 +35,28 @@ CREATE TABLE IF NOT EXISTS room_members (
 
 CREATE INDEX IF NOT EXISTS room_members_player_idx ON room_members (player_id);
 CREATE INDEX IF NOT EXISTS rooms_active_idx ON rooms (last_active_at);
+-- NOTE: rooms_public_active_idx is created below AFTER ensuring the v2 columns.
+-- v2: named + public/private servers (idempotent for existing databases).
+ALTER TABLE rooms ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT 'District Server';
+ALTER TABLE rooms ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'private';
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'rooms_visibility_check') THEN
+    ALTER TABLE rooms ADD CONSTRAINT rooms_visibility_check CHECK (visibility IN ('public', 'private'));
+  END IF;
+END $$;
 `;
+
+/** v2: named + public/private servers. Runs on every boot so existing databases heal. */
+const ENSURE_V2_STATEMENTS = [
+  "ALTER TABLE rooms ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT 'District Server'",
+  "ALTER TABLE rooms ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'private'",
+  'CREATE INDEX IF NOT EXISTS rooms_public_active_idx ON rooms (visibility, last_active_at DESC)',
+  `DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'rooms_visibility_check') THEN
+      ALTER TABLE rooms ADD CONSTRAINT rooms_visibility_check CHECK (visibility IN ('public', 'private'));
+    END IF;
+  END $$`,
+];
 
 /** Applies schema.sql. Safe to run on every boot (IF NOT EXISTS). */
 export async function migrate(): Promise<void> {
@@ -62,6 +85,9 @@ export async function migrate(): Promise<void> {
   }
 
   await pool.query(sql);
+  for (const statement of ENSURE_V2_STATEMENTS) {
+    await pool.query(statement);
+  }
 }
 
 // Allow `npm run migrate` as a one-off.

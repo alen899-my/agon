@@ -35,6 +35,35 @@ describe('rooms API', () => {
     expect(roomCode).toMatch(/^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{6}$/);
     expect(res.body.room.member_count).toBe(1);
     expect(res.body.room.max_members).toBe(100);
+    expect(res.body.room.visibility).toBe('private');
+  });
+
+  it('creates named public rooms and lists them in the browser', async () => {
+    const created = await request(app).post('/api/rooms')
+      .set('Authorization', `Bearer ${tokens[0]}`)
+      .send({ name: `${tag} Arena`, visibility: 'public' });
+    expect(created.status).toBe(201);
+    expect(created.body.room.name).toBe(`${tag} Arena`);
+    expect(created.body.room.visibility).toBe('public');
+    const publicCode = created.body.room.code as string;
+
+    const listed = await request(app).get('/api/rooms').set('Authorization', `Bearer ${tokens[1]}`);
+    expect(listed.status).toBe(200);
+    const entry = (listed.body.rooms as { code: string; name: string }[]).find((r) => r.code === publicCode);
+    expect(entry?.name).toBe(`${tag} Arena`);
+    // Private rooms never leak into the browser.
+    expect((listed.body.rooms as { code: string }[]).some((r) => r.code === roomCode)).toBe(false);
+    expect(listed.body).not.toHaveProperty('roster');
+
+    const badName = await request(app).post('/api/rooms')
+      .set('Authorization', `Bearer ${tokens[0]}`)
+      .send({ name: 'ab', visibility: 'public' });
+    expect(badName.status).toBe(400);
+    const badVisibility = await request(app).post('/api/rooms')
+      .set('Authorization', `Bearer ${tokens[0]}`)
+      .send({ visibility: 'secret' });
+    expect(badVisibility.status).toBe(400);
+    await request(app).post('/api/rooms/leave').set('Authorization', `Bearer ${tokens[0]}`).send({ code: publicCode });
   });
 
   it('live-checks a code without leaking the roster', async () => {

@@ -12,6 +12,8 @@ export interface Room {
   code: string;
   host_player_id: string;
   max_members: number;
+  name: string;
+  visibility: RoomVisibility;
   created_at: string;
   last_active_at: string;
 }
@@ -21,6 +23,30 @@ export interface RoomRosterEntry {
   name: string;
   role: 'host' | 'member';
   joined_at: string;
+}
+
+/** Room visibility: public rooms appear in the server browser, private rooms need a code. */
+export type RoomVisibility = 'public' | 'private';
+
+export const ROOM_NAME_MIN = 3;
+export const ROOM_NAME_MAX = 32;
+export const PUBLIC_ROOM_LIST_LIMIT = 50;
+
+/** Normalizes a server display name. Throws 400 when malformed. */
+export function normalizeRoomName(raw: unknown, hostFallback: string): string {
+  const name = typeof raw === 'string' ? raw.trim().replace(/\s+/g, ' ') : '';
+  const candidate = name || `${hostFallback}'s District`;
+  if (candidate.length < ROOM_NAME_MIN || candidate.length > ROOM_NAME_MAX) {
+    throw new ApiError(400, 'invalid_name', `Server names are ${ROOM_NAME_MIN}–${ROOM_NAME_MAX} characters.`);
+  }
+  return candidate;
+}
+
+/** Normalizes the visibility flag. Defaults to private. Throws 400 when malformed. */
+export function normalizeRoomVisibility(raw: unknown): RoomVisibility {
+  if (raw === undefined || raw === null || raw === '') return 'private';
+  if (raw === 'public' || raw === 'private') return raw;
+  throw new ApiError(400, 'invalid_visibility', "Visibility must be 'public' or 'private'.");
 }
 
 /** Random 6-char room code. Pure — unit-testable without a database. */
@@ -43,14 +69,23 @@ function isExpired(room: Room): boolean {
   return Date.now() - new Date(room.last_active_at).getTime() > ROOM_TTL_HOURS * 3_600_000;
 }
 
-export async function createRoom(hostPlayerId: string): Promise<Room> {
+export async function createRoom(
+  hostPlayerId: string,
+  opts: { name?: unknown; visibility?: unknown } = {},
+): Promise<Room> {
+  const visibility = normalizeRoomVisibility(opts.visibility);
   const client = await pool.connect();
   try {
+    const host = await client.query<{ name: string }>('SELECT name FROM players WHERE id = $1', [hostPlayerId]);
+    const hostName = host.rows[0]?.name ?? 'Host';
+    const name = normalizeRoomName(opts.name, hostName);
     await client.query('BEGIN');
     for (let attempt = 0; attempt < 5; attempt++) {
       const code = generateRoomCode();
       const { rows } = await client.query<Room>(
-        'INSERT INTO rooms (code, host_player_id) VALUES ($1, $2) ON CONFLICT (code) DO NOTHING RETURNING *', [code, hostPlayerId]);
+        'INSERT INTO rooms (code, host_player_id, name, visibility) VALUES ($1, $2, $3, $4) ON CONFLICT (code) DO NOTHING RETURNING *',
+        [code, hostPlayerId, name, visibility],
+      );
       if (!rows[0]) continue;
       await client.query("INSERT INTO room_members (room_code, player_id, role) VALUES ($1, $2, 'host')", [code, hostPlayerId]);
       await client.query('COMMIT');
@@ -68,6 +103,41 @@ export async function getRoom(code: string): Promise<Room | null> {
   return rows[0] ?? null;
 }
 
+export interface PublicRoomEntry {
+  code: string;
+  name: string;
+  visibility: RoomVisibility;
+  host_name: string;
+  max_members: number;
+  member_count: number;
+  last_active_at: string;
+}
+
+/** Public server browser: live public rooms with host names + member counts. Never includes private rooms. */
+export async function listPublicRooms(limit = PUBLIC_ROOM_LIST_LIMIT): Promise<PublicRoomEntry[]> {
+  const capped = Math.min(Math.max(limit, 1), PUBLIC_ROOM_LIST_LIMIT);
+  const { rows } = await pool.query<PublicRoomEntry>(
+    `SELECT r.code, r.name, r.visibility, p.name AS host_name, r.max_members,
+            (SELECT COUNT(*) FROM room_members m WHERE m.room_code = r.code)::int AS member_count,
+            r.last_active_at
+     FROM rooms r JOIN players p ON p.id = r.host_player_id
+     WHERE r.visibility = 'public'
+       AND r.last_active_at > now() - make_interval(hours => $2)
+     ORDER BY member_count DESC, r.last_active_at DESC
+     LIMIT $1`,
+    [capped, ROOM_TTL_HOURS],
+  );
+  return rows;
+}
+
+/** Host display name for a room (used by the pre-join preview). */
+export async function roomHostName(code: string): Promise<string | null> {
+  const { rows } = await pool.query<{ name: string }>(
+    `SELECT p.name FROM rooms r JOIN players p ON p.id = r.host_player_id WHERE r.code = $1`,
+    [code],
+  );
+  return rows[0]?.name ?? null;
+}
 export async function memberCount(code: string): Promise<number> {
   const { rows } = await pool.query<{ count: string }>(
     'SELECT COUNT(*) AS count FROM room_members WHERE room_code = $1',

@@ -65,6 +65,8 @@ interface Props {
   onTogglePause: () => void;
   roomCode: string | null;
   roomMembers: number;
+  roomName: string | null;
+  roomVisibility: 'public' | 'private' | null;
   copied: boolean;
   onCopyCode: () => void;
   onLeaveServer: () => void;
@@ -185,9 +187,10 @@ export function GameMenu(props: Props) {
             <div className="menu-section">SERVER</div>
             {props.roomCode ? <>
               <div className="menu-row">
-                <span className="menu-label">Code · {props.roomMembers} player{props.roomMembers === 1 ? '' : 's'}</span>
+                <span className="menu-label">{props.roomVisibility === 'public' ? '🌐 Public' : '🔒 Private'} · {props.roomMembers} player{props.roomMembers === 1 ? '' : 's'}</span>
                 <b className="menu-code">{props.roomCode}</b>
               </div>
+              {props.roomName && <p className="menu-hint">{props.roomName}</p>}
               <div className="menu-actions">
                 <button className="control" onClick={props.onCopyCode}>{props.copied ? 'COPIED ✓' : 'COPY CODE'}</button>
                 <button className="control" onClick={props.onLeaveServer}>LEAVE SERVER</button>

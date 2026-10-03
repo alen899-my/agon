@@ -1,6 +1,7 @@
 import { readLookSettings } from './game/CameraInput';
 import { VEHICLES } from './world/Vehicles';
-import { ApiRequestError, createRoom as apiCreateRoom, joinRoom as apiJoinRoom, leaveRoom as apiLeaveRoom, login as apiLogin, me as apiMe } from './api/client';
+import { ApiRequestError, createRoom as apiCreateRoom, joinRoom as apiJoinRoom, inviteCodeFromUrl, inviteLink, leaveRoom as apiLeaveRoom, login as apiLogin, me as apiMe, type RoomVisibility } from './api/client';
+import { EntryScreen, type CreatedServer, type EntryTab } from './components/EntryScreen';
 import { loadSession, saveSession, type Session } from './api/session';
 ﻿import { useEffect, useRef, useState } from 'react';
 import { GameMenu } from './components/GameMenu';
@@ -63,10 +64,12 @@ export default function App() {
   const [name, setName] = useState(() => loadSession()?.name ?? '');
   const [entering, setEntering] = useState(false);
   const [enterNote, setEnterNote] = useState('');
-  const [mode, setMode] = useState<'solo' | 'create' | 'join'>('solo');
+  const [mode, setMode] = useState<EntryTab>('solo');
   const [roomCode, setRoomCode] = useState('');
-  const [createdCode, setCreatedCode] = useState('');
+  const [created, setCreated] = useState<CreatedServer | null>(null);
+  const [joinedRoom, setJoinedRoom] = useState<{ name: string; visibility: RoomVisibility } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
   const [raceOpen, setRaceOpen] = useState(false);
   const [raceLaps, setRaceLaps] = useState(3);
   const [raceCar, setRaceCar] = useState<VehicleKind>('super');
@@ -135,64 +138,108 @@ export default function App() {
     setEnterNote('');
     focus();
   };
-  const enterWorld = async () => {
+  const entryDisplayName = () => name.trim().replace(/\s+/g, ' ');
+  const enterSolo = async () => {
     if (!state || !engine.current || entryLock.current) return;
     restoreTried.current = true;
-    const display = name.trim().replace(/\s+/g, ' ');
+    const display = entryDisplayName();
     if (!display) { setEnterNote('Enter your name before continuing.'); return; }
-    const code = roomCode.trim().toUpperCase().replace(/[\s-]+/g, '');
-    if (mode === 'join' && !/^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{6}$/.test(code)) {
-      setEnterNote('Enter a valid 6-character server code. Codes do not contain I, O, 0 or 1.'); return;
-    }
     entryLock.current = true;
     setEntering(true); setEnterNote('Signing in...');
     try {
-      if (mode === 'create' && createdCode && pendingToken.current) {
-        const session = await refreshSession(pendingToken.current);
-        await apiJoinRoom(session.token, createdCode);
-        rememberRoom({ ...session, roomCode: createdCode });
-        await connectAndEnter({ ...session, roomCode: createdCode });
-        return;
-      }
       const { token, player } = await apiLogin(display);
       const session: Session = { token, name: player.name, id: player.id };
-      if (mode === 'solo') {
-        const previous = loadSession();
-        engine.current.leaveRoomSession();
-        saveSession(session);
-        pendingToken.current = null; setCreatedCode('');
-        if (previous?.roomCode && previous.token) void apiLeaveRoom(previous.token, previous.roomCode).catch(() => undefined);
-        engine.current.setPlayerName(player.name); engine.current.begin(); focus(); setEnterNote('');
-        return;
-      }
-      if (mode === 'create') {
-        setEnterNote('Creating your server...');
-        const { room } = await apiCreateRoom(token);
-        rememberRoom({ ...session, roomCode: room.code });
-        setCreatedCode(room.code); setCopied(false); setEnterNote('');
-        return;
-      }
-      setEnterNote('Joining server ' + code + '...');
-      const { room } = await apiJoinRoom(token, code);
-      rememberRoom({ ...session, roomCode: room.code });
-      await connectAndEnter({ ...session, roomCode: room.code });
+      const previous = loadSession();
+      engine.current.leaveRoomSession();
+      saveSession(session);
+      pendingToken.current = null; setCreated(null); setJoinedRoom(null);
+      if (previous?.roomCode && previous.token) void apiLeaveRoom(previous.token, previous.roomCode).catch(() => undefined);
+      engine.current.setPlayerName(player.name); engine.current.begin(); focus(); setEnterNote('');
     } catch (error) {
-      // Only an explicit solo choice may fall back to offline gameplay.
-      if (mode === 'solo' && error instanceof ApiRequestError && error.status === 0) {
+      // Solo may fall back to offline gameplay when the API is unreachable.
+      if (error instanceof ApiRequestError && error.status === 0) {
         engine.current?.leaveRoomSession();
         saveSession({ token: '', name: display, id: 'offline' });
-        pendingToken.current = null; setCreatedCode('');
+        pendingToken.current = null; setCreated(null); setJoinedRoom(null);
         engine.current?.setPlayerName(display); engine.current?.begin(); focus();
         setNotice('Playing solo offline. ' + error.message);
       } else {
         engine.current?.leaveRoomSession();
         setEnterNote(error instanceof Error ? error.message : 'Could not join the server. Please try again.');
-        if (error instanceof ApiRequestError && ['room_not_found', 'room_expired'].includes(error.code)) {
-          const saved = loadSession();
-          if (saved?.roomCode === (createdCode || code)) saveSession({ token: saved.token, name: saved.name, id: saved.id });
-          setCreatedCode(''); pendingToken.current = null;
-        }
       }
+    } finally { entryLock.current = false; setEntering(false); }
+  };
+  const createServer = async (serverName: string, visibility: RoomVisibility) => {
+    if (!state || !engine.current || entryLock.current) return;
+    restoreTried.current = true;
+    const display = entryDisplayName();
+    if (!display) { setEnterNote('Enter your name before continuing.'); return; }
+    if (serverName && (serverName.length < 3 || serverName.length > 32)) {
+      setEnterNote('Server names are 3–32 characters.'); return;
+    }
+    entryLock.current = true;
+    setEntering(true); setEnterNote('Creating your server...');
+    try {
+      const { token, player } = await apiLogin(display);
+      const session: Session = { token, name: player.name, id: player.id };
+      const { room } = await apiCreateRoom(token, { name: serverName || undefined, visibility });
+      const staleBackend = !room.visibility || !room.name;
+      rememberRoom({ ...session, roomCode: room.code });
+      setCreated({ code: room.code, name: room.name ?? room.code, visibility: room.visibility ?? 'private' });
+      setJoinedRoom({ name: room.name ?? room.code, visibility: room.visibility ?? 'private' });
+      setCopied(false); setLinkCopied(false);
+      // An old backend creates a nameless private room and ignores the new fields — say so.
+      setEnterNote(staleBackend
+        ? 'Server created, but the API is running old code — restart it (`npm run dev` in server/) so names, visibility and the browser work.'
+        : '');
+    } catch (error) {
+      engine.current?.leaveRoomSession();
+      setEnterNote(error instanceof Error ? error.message : 'Could not create the server. Please try again.');
+    } finally { entryLock.current = false; setEntering(false); }
+  };
+  const enterCreated = async () => {
+    if (!state || !engine.current || entryLock.current || !created || !pendingToken.current) return;
+    restoreTried.current = true;
+    const target = created.code;
+    entryLock.current = true;
+    setEntering(true); setEnterNote('Signing in...');
+    try {
+      const session = await refreshSession(pendingToken.current);
+      const { room } = await apiJoinRoom(session.token, target);
+      rememberRoom({ ...session, roomCode: room.code });
+      setJoinedRoom({ name: room.name ?? room.code, visibility: room.visibility ?? 'private' });
+      await connectAndEnter({ ...session, roomCode: room.code });
+    } catch (error) {
+      engine.current?.leaveRoomSession();
+      setEnterNote(error instanceof Error ? error.message : 'Could not join the server. Please try again.');
+      if (error instanceof ApiRequestError && ['room_not_found', 'room_expired'].includes(error.code)) {
+        const saved = loadSession();
+        if (saved?.roomCode === target) saveSession({ token: saved.token, name: saved.name, id: saved.id });
+        setCreated(null); setJoinedRoom(null); pendingToken.current = null;
+      }
+    } finally { entryLock.current = false; setEntering(false); }
+  };
+  const joinServer = async (rawCode: string) => {
+    if (!state || !engine.current || entryLock.current) return;
+    restoreTried.current = true;
+    const display = entryDisplayName();
+    if (!display) { setEnterNote('Enter your name before continuing.'); return; }
+    const code = rawCode.trim().toUpperCase().replace(/[\s-]+/g, '');
+    if (!/^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{6}$/.test(code)) {
+      setEnterNote('Enter a valid 6-character server code. Codes do not contain I, O, 0 or 1.'); return;
+    }
+    entryLock.current = true;
+    setEntering(true); setEnterNote('Joining server ' + code + '...');
+    try {
+      const { token, player } = await apiLogin(display);
+      const session: Session = { token, name: player.name, id: player.id };
+      const { room } = await apiJoinRoom(token, code);
+      rememberRoom({ ...session, roomCode: room.code });
+      setJoinedRoom({ name: room.name ?? room.code, visibility: room.visibility ?? 'private' });
+      await connectAndEnter({ ...session, roomCode: room.code });
+    } catch (error) {
+      engine.current?.leaveRoomSession();
+      setEnterNote(error instanceof Error ? error.message : 'Could not join the server. Please try again.');
     } finally { entryLock.current = false; setEntering(false); }
   };
   const leaveServer = async () => {
@@ -202,7 +249,7 @@ export default function App() {
     // Stop reconnection and remove the reload target before awaiting the API.
     engine.current?.leaveRoomSession(); engine.current?.exitToIntro();
     if (session) saveSession({ token: session.token, name: session.name, id: session.id });
-    setRaceOpen(false); setCreatedCode(''); setCopied(false); setRoomCode(''); setMode('solo');
+    setRaceOpen(false); setCreated(null); setJoinedRoom(null); setCopied(false); setLinkCopied(false); setRoomCode(''); setMode('solo');
     pendingToken.current = null; setEnterNote('');
     try {
       if (session?.roomCode && session.token) await apiLeaveRoom(session.token, session.roomCode);
@@ -219,6 +266,7 @@ export default function App() {
       const session = await refreshSession(saved);
       const { room } = await apiJoinRoom(session.token, saved.roomCode);
       rememberRoom({ ...session, roomCode: room.code });
+      setJoinedRoom({ name: room.name ?? room.code, visibility: room.visibility ?? 'private' });
       await connectAndEnter({ ...session, roomCode: room.code });
     } catch (error) {
       engine.current?.leaveRoomSession(); engine.current?.exitToIntro();
@@ -237,16 +285,34 @@ export default function App() {
     // Mark even a fresh visit as checked; creating a room must not trigger restore.
     restoreTried.current = true;
     const saved = initialSession.current;
+    const invited = inviteCodeFromUrl();
+    if (invited && saved?.roomCode !== invited) {
+      setMode('join'); setRoomCode(invited);
+      if (saved?.name) setName(saved.name);
+      setEnterNote('You were invited to server ' + invited + '. Enter your name and press JOIN WORLD.');
+      try { history.replaceState(null, '', location.pathname); } catch { /* The invite still works without cleanup. */ }
+      return;
+    }
     if (saved?.token && saved.roomCode && saved.name) void restoreServer(saved);
   }, [state]);
   const copyCode = async () => {
-    if (!createdCode) return;
-    try { await navigator.clipboard.writeText(createdCode); setCopied(true); setTimeout(() => setCopied(false), 1500); }
+    if (!created) return;
+    try { await navigator.clipboard.writeText(created.code); setCopied(true); setTimeout(() => setCopied(false), 1500); }
     catch { setCopied(false); setEnterNote('Copy failed. Select and copy the server code manually.'); }
   };
-  const switchMode = (next: 'solo' | 'create' | 'join') => {
+  const copyLink = async () => {
+    if (!created) return;
+    try { await navigator.clipboard.writeText(inviteLink(created.code)); setLinkCopied(true); setTimeout(() => setLinkCopied(false), 1500); }
+    catch { setLinkCopied(false); setEnterNote('Copy failed. Copy the invite link shown above manually.'); }
+  };
+  const switchMode = (next: EntryTab) => {
     if (entryLock.current) return;
-    setMode(next); setEnterNote(''); setCopied(false);
+    setMode(next); setEnterNote(''); setCopied(false); setLinkCopied(false);
+  };
+  const handleName = (value: string) => {
+    setName(value);
+    // Tokens are bound to the login name; a rename invalidates a staged server.
+    if (created) { setCreated(null); setJoinedRoom(null); pendingToken.current = null; }
   };
   const toggleMap = () => {
     if (!mapOpen) { resumeAfterMap.current = engine.current?.simulation.active ?? false; if (resumeAfterMap.current) engine.current?.togglePause(); }
@@ -331,31 +397,23 @@ export default function App() {
         paused={state?.paused ?? false} pauseDisabled={ready || mapOpen}
         onTogglePause={() => { toggleMenu(false); engine.current?.togglePause(); focus(); }}
         roomCode={state?.room?.code ?? null} roomMembers={state?.room?.members ?? 0}
+        roomName={joinedRoom?.name ?? created?.name ?? null} roomVisibility={joinedRoom?.visibility ?? created?.visibility ?? null}
         copied={copied} onCopyCode={() => void copyServerCode()} onLeaveServer={() => { toggleMenu(false); void leaveServer(); }}
         snapshot={state}
         onClose={() => { toggleMenu(false); focus(); }}
       />}
-      {ready && <div className="world-intro">
-        <p className="eyebrow">THE FIRST BLOCK OF SOMETHING BIGGER</p>
-        <h1>OUTSIDE.<br />IS YOURS.</h1>
-        <p>A living little district, built from simple things.<br />Walk its streets. Meet its rhythm. Find your place.</p>
-        <div className="mode-tabs" role="tablist" aria-label="Play mode">
-          {(['solo', 'create', 'join'] as const).map(m => <button key={m} role="tab" aria-selected={mode === m} className={mode === m ? 'on' : ''}
-            disabled={entering} onClick={() => switchMode(m)}>{m === 'solo' ? 'SOLO' : m === 'create' ? 'CREATE SERVER' : 'JOIN SERVER'}</button>)}
-        </div>
-        <label className="name-row"><span>YOUR NAME</span><input value={name} maxLength={24} autoComplete="off" spellCheck={false} placeholder="e.g. Ava" aria-label="Your display name"
-          disabled={entering || (mode === 'create' && !!createdCode)}
-          onChange={event => { setName(event.target.value); if (createdCode) { setCreatedCode(''); pendingToken.current = null; } }} onKeyDown={event => { if (event.key === 'Enter') void enterWorld(); }} /></label>
-        {mode === 'join' && <label className="name-row"><span>SERVER CODE</span><input value={roomCode} maxLength={12} autoComplete="off" spellCheck={false} placeholder="K7Q2MD" aria-label="Server code"
-          disabled={entering} style={{ textTransform: 'uppercase' }}
-          onChange={event => setRoomCode(event.target.value.toUpperCase().replace(/[\s-]+/g, '').slice(0, 6))} onKeyDown={event => { if (event.key === 'Enter') void enterWorld(); }} /></label>}
-        {mode === 'create' && createdCode && <div className="room-code-panel" role="status"><span>SHARE THIS CODE</span><b>{createdCode}</b><button className="control" onClick={() => void copyCode()}>{copied ? 'COPIED ✓' : 'COPY'}</button></div>}
-        {mode !== 'solo' && <p className="name-note">Use a different player name for each person joining.</p>}
-        {enterNote && <p className="name-note" role="status">{enterNote}</p>}
-        <button className="primary-button" disabled={!state || entering || !name.trim() || (mode === 'join' && roomCode.trim().length < 6)} onClick={() => void enterWorld()}>
-          {entering ? 'PLEASE WAIT...' : mode === 'solo' ? 'EXPLORE DISTRICT' : mode === 'create' ? (createdCode ? 'ENTER WORLD' : 'CREATE SERVER') : 'JOIN WORLD'} <span>↗</span></button>
-        <div className="intro-tags"><span>7 LOCATIONS</span><span>2 PERSPECTIVES</span><span>NO RUSH</span></div>
-      </div>}
+      {ready && <EntryScreen
+        name={name} onName={handleName}
+        tab={mode} onTab={switchMode}
+        roomCode={roomCode} onRoomCode={setRoomCode}
+        entering={entering} enterNote={enterNote}
+        created={created} copied={copied} linkCopied={linkCopied}
+        onCopyCode={() => void copyCode()} onCopyLink={() => void copyLink()}
+        onSolo={() => void enterSolo()}
+        onCreate={(serverName, visibility) => void createServer(serverName, visibility)}
+        onEnterCreated={() => void enterCreated()}
+        onJoin={(code) => void joinServer(code)}
+      />}
       {!ready && <>
         {engine.current?.connectionNotice && <div className="connection-notice" role="alert">
           <span>{engine.current.connectionNotice}</span>
@@ -412,7 +470,7 @@ export default function App() {
         <p className="map-caption">Select a place to set a waypoint. Walk or drive there to discover it.</p>
       </div></div>}
       {physicsOpen && !ready && <div className="physics-cover"><div className="physics-sheet" role="dialog" aria-label="Physics checklist"><div className="map-heading"><div><p className="eyebrow">REALISTIC PHYSICS · ONE BY ONE</p><h2>Systems online.</h2></div><button className="control" onClick={() => setPhysicsOpen(false)} aria-label="Close physics">✕</button></div><PhysicsChecklist state={state} /><p className="map-caption">Drive into walls, traffic and crowds to tick crash events. Repair at South Station.</p></div></div>}
-      {portrait && <div className="rotate-cover"><span className="rotate-symbol">↻</span><p className="eyebrow">MORE ROOM TO EXPLORE</p><h2>Turn your world.</h2><p>Rotate your phone to landscape.<br />Your neighborhood will be waiting.</p><button className="primary-button" onClick={enterFullscreen}>GO FULLSCREEN <span>⛶</span></button></div>}
+      {portrait && !ready && <div className="rotate-cover"><span className="rotate-symbol">↻</span><p className="eyebrow">MORE ROOM TO EXPLORE</p><h2>Turn your world.</h2><p>Rotate your phone to landscape.<br />Your neighborhood will be waiting.</p><button className="primary-button" onClick={enterFullscreen}>GO FULLSCREEN <span>⛶</span></button></div>}
     </section>
     {notice && <div className="notice" role="status">{notice}<button className="control" onClick={() => setNotice('')}>Dismiss</button></div>}
   </main>;

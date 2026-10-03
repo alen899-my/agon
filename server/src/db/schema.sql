@@ -1,4 +1,4 @@
--- Agon schema v1: name-only players.
+-- Agon schema v2: name-only players, named public/private servers.
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE TABLE IF NOT EXISTS players (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -9,11 +9,13 @@ CREATE TABLE IF NOT EXISTS players (
 
 CREATE INDEX IF NOT EXISTS players_last_seen_idx ON players (last_seen_at DESC);
 
--- Private servers (invite-code rooms, up to 100 members).
+-- Invite-code rooms, up to 100 members. Public rooms appear in the server browser.
 CREATE TABLE IF NOT EXISTS rooms (
   code TEXT PRIMARY KEY,
   host_player_id UUID NOT NULL REFERENCES players (id) ON DELETE CASCADE,
   max_members SMALLINT NOT NULL DEFAULT 100 CHECK (max_members >= 1 AND max_members <= 100),
+  name TEXT NOT NULL DEFAULT 'District Server',
+  visibility TEXT NOT NULL DEFAULT 'private' CHECK (visibility IN ('public', 'private')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_active_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -28,3 +30,5 @@ CREATE TABLE IF NOT EXISTS room_members (
 
 CREATE INDEX IF NOT EXISTS room_members_player_idx ON room_members (player_id);
 CREATE INDEX IF NOT EXISTS rooms_active_idx ON rooms (last_active_at);
+-- NOTE: rooms_public_active_idx is created by migrate() AFTER ensuring the
+-- v2 columns, so booting against a v1 database cannot fail here.

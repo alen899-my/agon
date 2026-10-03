@@ -70,11 +70,26 @@ export function me(token: string): Promise<{ player: PlayerProfile | null }> {
   return request('/api/auth/me', { headers: { Authorization: `Bearer ${token}` } });
 }
 
+export type RoomVisibility = 'public' | 'private';
+
 export interface RoomInfo {
   code: string;
   host_player_id: string;
   max_members: number;
   member_count: number;
+  name: string;
+  visibility: RoomVisibility;
+  host_name?: string | null;
+}
+
+export interface PublicRoomEntry {
+  code: string;
+  name: string;
+  visibility: RoomVisibility;
+  host_name: string;
+  max_members: number;
+  member_count: number;
+  last_active_at: string;
 }
 
 export interface RosterEntry {
@@ -87,9 +102,29 @@ function authHeader(token: string): Record<string, string> {
   return { Authorization: `Bearer ${token}` };
 }
 
-/** Creates a private server; caller becomes host and receives the invite code. */
-export function createRoom(token: string): Promise<{ room: RoomInfo }> {
-  return request('/api/rooms', { method: 'POST', headers: authHeader(token) });
+/** Creates a server ({ name?, visibility? }); caller becomes host and receives the invite code. */
+export function createRoom(token: string, opts: { name?: string; visibility?: RoomVisibility } = {}): Promise<{ room: RoomInfo }> {
+  return request('/api/rooms', { method: 'POST', headers: authHeader(token), body: JSON.stringify(opts) });
+}
+
+/** Public server browser: live public rooms with names, hosts and member counts. */
+export function listPublicRooms(token: string): Promise<{ rooms: PublicRoomEntry[] }> {
+  return request('/api/rooms', { headers: authHeader(token) });
+}
+
+/** Invite link for a private (or public) server code. */
+export function inviteLink(code: string): string {
+  return `${location.origin}/?code=${encodeURIComponent(code)}`;
+}
+
+/** Server code from a `?code=` invite link, if present and well-formed. */
+export function inviteCodeFromUrl(): string {
+  try {
+    const code = new URLSearchParams(location.search).get('code')?.trim().toUpperCase().replace(/[\s-]+/g, '') ?? '';
+    return /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{6}$/.test(code) ? code : '';
+  } catch {
+    return '';
+  }
 }
 
 /** Live pre-join check: exists + capacity, without leaking the roster. */
