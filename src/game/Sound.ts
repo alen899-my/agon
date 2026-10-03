@@ -93,6 +93,15 @@ export function countdownBeep(kind: 'red' | 'green'): void {
   else blip(880, 0.28, 0.22, 'square');
 }
 
+/** Triumphant arcade arpeggio chime when anyone enters the final lap. */
+export function finalLapSound(): void {
+  const ac = audio(); if (!ac) return;
+  const notes = [587, 740, 880, 1174];
+  notes.forEach((freq, i) => {
+    setTimeout(() => blip(freq, 0.18, 0.18, 'triangle'), i * 85);
+  });
+}
+
 export function crashThud(speedKmh = 0): void {
   const ac = audio(); if (!ac) return;
   const now = ac.currentTime;

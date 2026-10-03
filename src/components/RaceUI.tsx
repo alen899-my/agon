@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { WorldEngine } from '../world/WorldEngine';
-import { formatRaceTime } from '../world/Track';
+import { formatRaceTime, nextTurn } from '../world/Track';
 import { lightStage } from '../world/RaceSim';
 import { VEHICLES, VEHICLE_KINDS, type VehicleKind } from '../world/Vehicles';
 
@@ -49,9 +49,10 @@ export function RaceCountdown({ engine }: { engine: WorldEngine | null }) {
 }
 
 /** Arena directory: host a race or join an advertised lobby in this server. */
-export function RaceDirectory({ engine, inServer, raceCar, onCar, laps, onLaps, onClose, onJoined }: {
+export function RaceDirectory({ engine, inServer, raceCar, onCar, laps, onLaps, onClose, onJoined, onSwitchTab }: {
   engine: WorldEngine | null; inServer: boolean; raceCar: VehicleKind; onCar: (k: VehicleKind) => void;
   laps: number; onLaps: (n: number) => void; onClose: () => void; onJoined: () => void;
+  onSwitchTab?: () => void;
 }) {
   useEffect(() => {
     engine?.requestRaceDir();
@@ -66,6 +67,10 @@ export function RaceDirectory({ engine, inServer, raceCar, onCar, laps, onLaps, 
       <div className="race-setup-head">
         <div><p className="eyebrow">NEON PADDOCK · TOKYO DRIFT MEET</p><h2>Line up 8 cars.</h2></div>
         <button className="control" onClick={onClose} aria-label="Close race directory">✕</button>
+      </div>
+      <div className="race-mode-tabs">
+        {onSwitchTab && <button onClick={onSwitchTab}>SOLO (vs AI)</button>}
+        <button className="on" disabled>MULTIPLAYER</button>
       </div>
       <p>City loop · traffic on · min 2 racers · host sets laps · all ready starts.</p>
       {!inServer && <p className="race-warn">Join a server first — race lobbies live inside your server code.</p>}
@@ -103,6 +108,74 @@ export function RaceDirectory({ engine, inServer, raceCar, onCar, laps, onLaps, 
         }}>HOST RACE <span>→</span></button>
       </div>
       {!canHost && <small className="race-hint">Hosting needs a server — create or join one from the intro.</small>}
+    </div>
+  );
+}
+
+const CPU_COUNT_OPTIONS = [1, 2, 3] as const;
+const DIFFICULTY_OPTIONS = ['easy', 'medium', 'hard'] as const;
+const DIFFICULTY_LABELS: Record<string, string> = { easy: '🟢 EASY', medium: '🟡 MEDIUM', hard: '🔴 HARD' };
+
+/** Solo race setup panel: car pick, CPU opponents, difficulty, laps, then race. No server needed. */
+export function SoloRaceSetup({ engine, raceCar, onCar, laps, onLaps, onStart, onClose, onSwitchTab }: {
+  engine: WorldEngine | null;
+  raceCar: VehicleKind; onCar: (k: VehicleKind) => void;
+  laps: number; onLaps: (n: number) => void;
+  onStart: () => void; onClose: () => void;
+  onSwitchTab?: () => void;
+}) {
+  const [cpuCount, setCpuCount] = useState(1);
+  const [difficulty, setDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium');
+  if (!engine || engine.race.phase !== 'idle') return null;
+  return (
+    <div className="race-setup" role="dialog" aria-label="Solo race setup">
+      <div className="race-setup-head">
+        <div>
+          <p className="eyebrow">NEON PADDOCK · SOLO RACE</p>
+          <h2>You vs. the machine.</h2>
+        </div>
+        <button className="control" onClick={onClose} aria-label="Close solo race setup">✕</button>
+      </div>
+      <div className="race-mode-tabs">
+        <button className="on" disabled>SOLO (vs AI)</button>
+        {onSwitchTab && <button onClick={onSwitchTab}>MULTIPLAYER</button>}
+      </div>
+      <p>City loop · race CPU opponents offline · no server needed.</p>
+      <RaceCarPicker value={raceCar} onChange={onCar} />
+      <div className="race-option-row">
+        <span>OPPONENTS</span>
+        <div className="race-pill-group">
+          {CPU_COUNT_OPTIONS.map((n) => (
+            <button key={n} className={`control${cpuCount === n ? ' on' : ''}`} onClick={() => setCpuCount(n)} aria-pressed={cpuCount === n}>
+              {n} CPU
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="race-option-row">
+        <span>DIFFICULTY</span>
+        <div className="race-pill-group">
+          {DIFFICULTY_OPTIONS.map((d) => (
+            <button key={d} className={`control${difficulty === d ? ' on' : ''}`} onClick={() => setDifficulty(d)} aria-pressed={difficulty === d}>
+              {DIFFICULTY_LABELS[d]}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="race-laps"><span>LAPS</span>
+        <button className="control" disabled={laps <= 1} onClick={() => onLaps(laps - 1)} aria-label="Fewer laps">−</button>
+        <b>{laps}</b>
+        <button className="control" disabled={laps >= 10} onClick={() => onLaps(laps + 1)} aria-label="More laps">+</button>
+      </div>
+      <div className="race-actions">
+        <button className="primary-button" onClick={() => {
+          if (!engine) return;
+          if (engine.startSoloRace(laps, raceCar, cpuCount, difficulty)) onStart();
+        }}>
+          RACE <span>→</span>
+        </button>
+      </div>
+      <small className="race-hint">CPU cars race on the city loop. Hard difficulty = nearly unbeatable in a fast car.</small>
     </div>
   );
 }
@@ -281,3 +354,141 @@ export function RaceCarPicker({ value, onChange }: { value: VehicleKind; onChang
     </div>
   );
 }
+
+/**
+ * High-voltage finishing banner that triggers when ANY racer reaches the final lap.
+ * Shows arcade checkered animation, leader alert or personal final push banner.
+ */
+export function RaceFinalLapBanner({ engine }: { engine: WorldEngine | null }) {
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    if (!engine) return;
+    const unsub = engine.addRaceListener(() => setTick(t => t + 1));
+    return unsub;
+  }, [engine]);
+
+  if (!engine || engine.race.phase !== 'racing' || !engine.isFinalLapActive) return null;
+
+  const me = engine.race.racers.get(engine.raceId);
+  // Hide if local player has finished, as the celebration results screen takes over
+  if (me?.finished) return null;
+
+  const laps = engine.race.laps;
+  const isMeFinal = me && me.lap >= laps && !me.finished;
+  const standings = engine.race.standings();
+  const myPos = standings.findIndex((r) => r.id === engine.raceId) + 1;
+
+  // Find who triggered the final lap or is furthest along
+  const finalLapRacers = Array.from(engine.race.racers.values())
+    .filter((r) => r.lap >= laps && !r.finished)
+    .sort((a, b) => b.lap - a.lap || b.checkpoint - a.checkpoint || b.dist - a.dist);
+
+  const leader = finalLapRacers[0] ?? standings[0];
+
+  return (
+    <div className="final-lap-banner" role="status" aria-label="Final lap banner">
+      <div className="final-lap-card">
+        <div className="final-lap-flag-strip" aria-hidden="true" />
+        <div className="final-lap-content">
+          <div className="final-lap-header">
+            <span className="final-lap-badge">
+              <span className="final-lap-pulse-dot" />
+              LAP {laps} / {laps}
+            </span>
+            <span className="final-lap-tag">
+              {isMeFinal ? (myPos === 1 ? '🥇 LEADER' : `P${myPos}`) : '⚠️ RIVAL ALERT'}
+            </span>
+          </div>
+
+          <div className="final-lap-title">
+            <span className="final-lap-flag-icon left">🏁</span>
+            <span>FINAL LAP</span>
+            <span className="final-lap-flag-icon right">🏁</span>
+          </div>
+
+          <div className="final-lap-sub">
+            {isMeFinal ? (
+              myPos === 1 ? (
+                <><b>YOU'RE IN P1!</b> SPRINT TO THE CHECKERED FLAG!</>
+              ) : (
+                <><b>YOU ARE ON THE FINAL LAP!</b> PUSH TO CATCH P1!</>
+              )
+            ) : (
+              <><b>{leader?.name.toUpperCase() ?? 'LEADER'}</b> REACHED THE FINAL LAP · FULL THROTTLE!</>
+            )}
+          </div>
+        </div>
+        <div className="final-lap-flag-strip" aria-hidden="true" />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Fast & Furious Dynamic Arcade Turn Navigator HUD:
+ * Provides real-time corner anticipation, distance countdown, drift prompts,
+ * and high-voltage directional arrows straight from arcade street racing.
+ */
+export function RaceTurnNavigator({ engine }: { engine: WorldEngine | null }) {
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    if (!engine) return;
+    const unsub = engine.addRaceListener(() => setTick(t => t + 1));
+    return unsub;
+  }, [engine]);
+
+  if (!engine || engine.race.phase !== 'racing' || !engine.simulation.driving) return null;
+
+  const me = engine.race.racers.get(engine.raceId);
+  if (me?.finished) return null;
+
+  const car = engine.simulation.car;
+  const { turn, dist, isApproaching, isApex } = nextTurn(car.x, car.z);
+
+  const roundedDist = Math.max(5, Math.round(dist));
+
+  return (
+    <div
+      className={`race-turn-nav${isApproaching ? ' is-approaching' : ''}${isApex ? ' is-apex' : ''} dir-${turn.dir}`}
+      role="status"
+      aria-label="Upcoming turn navigation"
+    >
+      <div className="race-turn-pill">
+        <div className="race-turn-icon-wrap" aria-hidden="true">
+          {turn.dir === 'right' ? (
+            <span className="race-turn-chevron right">▶▶▶</span>
+          ) : (
+            <span className="race-turn-chevron left">◀◀◀</span>
+          )}
+        </div>
+
+        <div className="race-turn-body">
+          <div className="race-turn-headline">
+            {isApex ? (
+              <b className="apex-alert">🔥 DRIFT NOW! 🔥</b>
+            ) : isApproaching ? (
+              <b>{turn.label} · {roundedDist}M</b>
+            ) : (
+              <b>FULL THROTTLE · {turn.name} IN {roundedDist}M</b>
+            )}
+          </div>
+          <small className="race-turn-sub">
+            {isApex ? `${turn.name} APEX` : turn.sub}
+          </small>
+        </div>
+
+        <div className="race-turn-icon-wrap" aria-hidden="true">
+          {turn.dir === 'right' ? (
+            <span className="race-turn-chevron right">▶▶▶</span>
+          ) : (
+            <span className="race-turn-chevron left">◀◀◀</span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+

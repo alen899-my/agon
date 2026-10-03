@@ -48,6 +48,8 @@ export class RaceSim {
   countdownEndsAt = 0;
   startedAt = 0;
   finishedAt = 0;
+  /** True when this race is a solo CPU vs player session (no network needed). */
+  isSolo = false;
   private selectedHostId = '';
   private nextCheckpoint = 1;
   private lapStartTime = 0;
@@ -64,10 +66,14 @@ export class RaceSim {
     return this.racers.size;
   }
   get allReady(): boolean {
+    // In solo mode, the player is always "all ready" (CPU bots don't click ready).
+    if (this.isSolo) return [...this.racers.values()].filter(r => r.isLocal).every(r => r.ready);
     if (this.racers.size < 2) return false;
     return [...this.racers.values()].every((r) => r.ready);
   }
   get canStart(): boolean {
+    // Solo: host + at least 1 CPU racer (no 2-player online minimum).
+    if (this.isSolo) return this.phase === 'lobby' && this.isHost;
     return this.phase === 'lobby' && this.isHost && this.racers.size >= 2 && this.racers.size <= MAX_RACERS && this.allReady;
   }
 
@@ -84,6 +90,52 @@ export class RaceSim {
       dist: 0, finished: false, finishMs: 0, bestLapMs: 0, isLocal: true,
     });
     this.resetLapTracking();
+  }
+
+  /**
+   * Create a solo race against CPU bots. CPU racer entries (id = "cpu-N") are
+   * inserted here; the caller (WorldEngine) drives their state each tick via tickCpu.
+   */
+  createSolo(
+    localId: string, name: string, vehicleKind: string, laps: number,
+    cpuIds: string[], cpuNames: string[], cpuVehicleKinds: string[],
+  ): void {
+    this.reset();
+    this.isSolo = true;
+    this.selectedHostId = localId;
+    this.localId = localId;
+    this.laps = Math.max(1, Math.min(10, Math.round(laps) || 3));
+    this.phase = 'lobby';
+    this.finishedAt = 0;
+    this.startedAt = 0;
+    this.racers.set(localId, {
+      id: localId, name, ready: true, vehicleKind, lap: 1, checkpoint: 0,
+      dist: 0, finished: false, finishMs: 0, bestLapMs: 0, isLocal: true,
+    });
+    for (let i = 0; i < cpuIds.length; i++) {
+      const id = cpuIds[i];
+      this.racers.set(id, {
+        id, name: cpuNames[i] ?? `CPU ${i + 1}`, ready: true,
+        vehicleKind: cpuVehicleKinds[i] ?? 'sport',
+        lap: 1, checkpoint: 0, dist: 0,
+        finished: false, finishMs: 0, bestLapMs: 0, isLocal: false,
+      });
+    }
+    this.resetLapTracking();
+  }
+
+  /** Update a CPU racer's state from the AI driver's computed position (called each frame by WorldEngine). */
+  syncCpuState(cpuId: string, state: Partial<Pick<RacerState, 'lap' | 'checkpoint' | 'dist' | 'finished' | 'finishMs' | 'bestLapMs'>>): void {
+    const racer = this.racers.get(cpuId);
+    if (!racer || racer.isLocal) return;
+    if (state.lap !== undefined && state.lap > racer.lap) racer.lap = state.lap;
+    if (state.dist !== undefined && state.dist > racer.dist) { racer.dist = state.dist; }
+    if (state.checkpoint !== undefined) racer.checkpoint = state.checkpoint;
+    if (state.bestLapMs !== undefined && state.bestLapMs > 0 && (!racer.bestLapMs || state.bestLapMs < racer.bestLapMs)) racer.bestLapMs = state.bestLapMs;
+    if (state.finished && !racer.finished) {
+      racer.finished = true;
+      racer.finishMs = state.finishMs ?? 0;
+    }
   }
 
   joinAs(localId: string, name: string, vehicleKind: string, hostId: string): void {
@@ -201,6 +253,8 @@ export class RaceSim {
 
   upsertRemote(r: RacerState): void {
     if (r.id === this.localId) return;
+    // Never allow network messages to inject or overwrite CPU-controlled racers.
+    if (r.id.startsWith('cpu-')) return;
     const existing = this.racers.get(r.id);
     if (!existing) {
       if (!this.isHost || this.phase !== 'lobby' || this.racers.size >= MAX_RACERS) return;
@@ -372,6 +426,7 @@ export class RaceSim {
 
   reset(): void {
     this.phase = 'idle';
+    this.isSolo = false;
     this.selectedHostId = '';
     this.localId = '';
     this.racers.clear();

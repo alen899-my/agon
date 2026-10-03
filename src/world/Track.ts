@@ -27,27 +27,27 @@ export const TRACK_LENGTH = (() => {
   return total;
 })();
 
-/** Start/finish sits on the south outer straight (z=-136), heading east. Grid stacks behind it. */
-export const START_OFFSET = 38;
+/** Start/finish sits on the Neon Paddock main straight (x=-60, z=76), heading east under the Tokyo Speed Arena gantry. Grid stacks behind it. */
+export const START_OFFSET = 76;
 export const CHECKPOINT_COUNT = 8;
 export const MAX_RACERS = 8;
 
 export interface GridSlot { x: number; z: number; yaw: number }
 export interface TrackProgress { dist: number; lapDist: number; checkpoint: number; lateral: number; tangentYaw: number }
 
-/** 8 staggered grid slots on the road (2 cols x 4 rows), all on drivable asphalt. */
+/** 8 staggered grid slots on the road (2 cols x 4 rows), all on drivable asphalt behind the gantry. */
 export function gridSlots(): GridSlot[] {
   const slots: GridSlot[] = [];
   for (let i = 0; i < MAX_RACERS; i++) {
     const row = Math.floor(i / 2);
     const col = i % 2; // 0 = left, 1 = right
-    const back = 6 + row * 7;
+    const back = 6 + row * 6;
     const offset = ((START_OFFSET - back) % TRACK_LENGTH + TRACK_LENGTH) % TRACK_LENGTH;
     const p = routePoint(TRACK_POINTS, offset);
-    // Lateral offset: right vector = (cos yaw, sin yaw). Road half-width ~8m, use ±2.6m.
+    // Lateral offset: right vector = (cos yaw, sin yaw). Road half-width ~8.5m, use ±2.2m.
     const rx = Math.cos(p.yaw);
     const rz = Math.sin(p.yaw);
-    const side = col === 0 ? -2.6 : 2.6;
+    const side = col === 0 ? -2.2 : 2.2;
     slots.push({ x: p.x + rx * side, z: p.z + rz * side, yaw: p.yaw });
   }
   return slots;
@@ -133,3 +133,47 @@ export function formatRaceTime(ms: number): string {
   const d = Math.floor((ms % 1000) / 100);
   return `${m}:${String(s).padStart(2, '0')}.${d}`;
 }
+
+export interface RaceTurn {
+  name: string;
+  x: number;
+  z: number;
+  dir: 'right' | 'left';
+  label: string;
+  sub: string;
+}
+
+export const RACE_TURNS: RaceTurn[] = [
+  { name: 'TURN 1', x: 76, z: 76, dir: 'right', label: 'HARD RIGHT', sub: 'EAST AVENUE DRIFT' },
+  { name: 'TURN 2', x: 76, z: -76, dir: 'left', label: 'SHARP LEFT', sub: 'HARBOR DOCKS ENTRY' },
+  { name: 'TURN 3', x: 136, z: -76, dir: 'right', label: 'RIGHT', sub: 'WATERFRONT SPRINT' },
+  { name: 'TURN 4', x: 136, z: -136, dir: 'right', label: 'HARD RIGHT', sub: 'SOUTH HIGHWAY' },
+  { name: 'TURN 5', x: -136, z: -136, dir: 'right', label: 'HARD RIGHT', sub: 'WEST BOULEVARD' },
+  { name: 'TURN 6', x: -136, z: 76, dir: 'right', label: 'FINAL CORNER', sub: 'MAIN STRAIGHT' },
+];
+
+/** Fast & Furious upcoming turn calculation along the Grand Circuit. */
+export function nextTurn(x: number, z: number): { turn: RaceTurn; dist: number; isApproaching: boolean; isApex: boolean } {
+  const p = trackProgress(x, z);
+  let bestTurn = RACE_TURNS[0];
+  let minAhead = Infinity;
+
+  for (const t of RACE_TURNS) {
+    const tp = trackProgress(t.x, t.z);
+    const ahead = ((tp.dist - p.dist) % TRACK_LENGTH + TRACK_LENGTH) % TRACK_LENGTH;
+    if (ahead < minAhead) {
+      minAhead = ahead;
+      bestTurn = t;
+    }
+  }
+
+  const directDist = Math.hypot(bestTurn.x - x, bestTurn.z - z);
+  const dist = Math.min(minAhead, directDist);
+  return {
+    turn: bestTurn,
+    dist,
+    isApproaching: dist <= 110,
+    isApex: dist <= 24,
+  };
+}
+

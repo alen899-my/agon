@@ -166,22 +166,22 @@ export const RACE_CROWD: CrowdSpot[] = (() => {
   return spots;
 })();
 /** Grand Circuit: shared race + traffic loop. One clean flowing direction —
- *  no out-and-back spurs or opposing legs. Every leg rides a road centerline
- *  (4m offset, well inside the 8.5m asphalt): a 168m south straight, chicane
- *  jog onto the x=76 line, S-curves through the middle, a sweeper past the
- *  arena, and a 272m west outer straight home. Checkpoints stay evenly spaced. */
+ *  runs directly under the Tokyo Speed Arena gantry (x=-60, z=76), down the
+ *  Neon Paddock main straight, through the East Avenue, around East Harbor docks,
+ *  full-throttle along the South Highway, and returns up the scenic West Boulevard.
+ *  Every leg rides a real avenue driving lane (4m offset, well inside the 8.5m asphalt). */
 export const TRAFFIC_ROUTE = [
-  { x: -32, z: -136 },
-  { x: 136, z: -136 },
-  { x: 136, z: -84 },
-  { x: 84, z: -84 },
-  { x: 84, z: -8 },
-  { x: 76, z: -4 },
-  { x: 76, z: 76 },
-  { x: -4, z: 76 },
-  { x: -4, z: 136 },
-  { x: -136, z: 136 },
-  { x: -136, z: -136 },
+  { x: -136, z: 76 },   // Turn 6 exit onto Neon Paddock main straight
+  { x: -60,  z: 76 },   // Start/Finish Line under Tokyo Speed Arena gantry!
+  { x: 0,    z: 76 },   // Civic Square / central boulevard crossing
+  { x: 76,   z: 76 },   // Turn 1 entrance (East avenue)
+  { x: 76,   z: 0 },    // Market Street / South Station east straight
+  { x: 76,   z: -76 },  // Turn 2 entrance to East Harbor
+  { x: 136,  z: -76 },  // Turn 3 entrance to Harbor Docks waterfront
+  { x: 136,  z: -136 }, // Turn 4 entrance to South Highway
+  { x: 0,    z: -136 }, // South Highway mid-point
+  { x: -136, z: -136 }, // Turn 5 entrance to West Avenue
+  { x: -136, z: 0 },    // West Avenue mid-point
 ];
 export function circleHit(ax: number, az: number, ar: number, bx: number, bz: number, br: number): boolean {
   const dx = ax - bx, dz = az - bz, r = ar + br;

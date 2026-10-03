@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { RealtimeClient, type RaceDirEntry, type RemoteDot, type RemotePos } from '../api/realtime';
 import { GameLoop } from '../game/GameLoop';
 import type { Theme } from '../game/State';
-import { barrelSound, bbSound, countdownBeep, crashThud, crowdCheerSound, horn, startRainLoop, stopRainLoop, ttSound, unlockAudio } from '../game/Sound';
+import { barrelSound, bbSound, countdownBeep, crashThud, crowdCheerSound, finalLapSound, horn, startRainLoop, stopRainLoop, ttSound, unlockAudio } from '../game/Sound';
 import { INTENSITY_FOG_FAR, INTENSITY_FOG_NEAR, INTENSITY_GLOOM, INTENSITY_RAIN_VOL, INTENSITY_SUN, SEASON_PRESETS, WEATHER_PRESETS, WeatherParticles, clampIntensity, type IntensityLevel, type Season, type Weather } from './Weather';
 import { wiperAngle } from './VehicleFactory';
 import { LAMPS } from './Map';
@@ -11,12 +11,13 @@ import { AssetKit, buildMap, type Stickman, type Vehicle } from './Assets';
 import { BUILDINGS, GAME_CENTER, HOOP, PLACES, RACE_ARENA, RACE_CROWD, RIM, TABLE, seeded } from './Map';
 import { BarrelSim, createBarrelMesh } from './Barrels';
 import { Simulation, type WorldAction, type WorldSnapshot } from './Simulation';
-import { RaceSim, type RacerState } from './RaceSim';
-import { gridSlots } from './Track';
+import { COUNTDOWN_MS, RaceSim, type RacerState } from './RaceSim';
+import { gridSlots, trackProgress } from './Track';
 import { RaceRoute } from './RaceRoute';
 import { SkidMarks } from './SkidMarks';
 import { VehicleAudio } from '../game/VehicleAudio';
 import type { TTShot } from './TableTennis';
+import { CpuRacer, CPU_RACER_ID_PREFIX, type CpuDifficulty } from './CpuRacer';
 
 export type { RacerState };
 
@@ -109,9 +110,31 @@ export class WorldEngine {
   /** Host-authoritative race lobby. Works over the same presence socket. */
   readonly race = new RaceSim();
   private raceRoute: RaceRoute | null = null;
+  private playedFinalLapSound = false;
+  private readonly raceListeners = new Set<() => void>();
+
+  addRaceListener(fn: () => void): () => void {
+    this.raceListeners.add(fn);
+    return () => { this.raceListeners.delete(fn); };
+  }
+
+  notifyRace(): void {
+    this.onRace?.();
+    this.raceListeners.forEach(fn => {
+      try { fn(); } catch { /* Ignore listener errors */ }
+    });
+  }
+
+  get isFinalLapActive(): boolean {
+    if (this.race.phase !== 'racing') return false;
+    const racers = Array.from(this.race.racers.values());
+    if (racers.length === 0) return false;
+    const maxLap = Math.max(...racers.map(r => r.lap));
+    return maxLap >= this.race.laps && !racers.every(r => r.finished);
+  }
+
   get raceGuidanceActive(): boolean {
-    const me = this.race.racers.get(this.localRaceId);
-    return !!me && !me.finished && (this.race.phase === 'countdown' || this.race.phase === 'racing');
+    return this.race.phase === 'countdown' || this.race.phase === 'racing';
   }
   get nightFactor(): number { return this._nightFactor; }
   get currentWeather(): Weather { return this.weather; }
@@ -155,6 +178,12 @@ export class WorldEngine {
   private glowTexture: THREE.CanvasTexture | null = null;
   readonly glowPoints: THREE.Vector3[] = [];
   private readonly headlight = new THREE.SpotLight(0xffe9c4, 0, 42, 0.55, 0.55, 1.1);
+  /** CPU AI racers for solo mode. */
+  private cpuRacers: CpuRacer[] = [];
+  /** Rendered ghost vehicles for each CPU car (keyed by cpu id). */
+  private readonly cpuVehicles = new Map<string, Vehicle>();
+  /** Name tag sprites for CPU cars. */
+  private readonly cpuTags = new Map<string, THREE.Sprite>();
 
   constructor(private canvas: HTMLCanvasElement, private publish: (value: WorldSnapshot) => void) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
@@ -285,6 +314,21 @@ export class WorldEngine {
         this.vehicleAudio.setSkid(live && sliding, Math.min(1, Math.abs(sm.lateralSpeed) / 6 + 0.3));
       }
       this.hudTime += dt;
+      // Tick CPU AI racers in the game loop where dt is valid.
+      if (this.race.phase === 'racing' && this.cpuRacers.length > 0) {
+        const nowMs2 = Date.now();
+        let anyFinished = false;
+        for (const cpu of this.cpuRacers) {
+          const finished = cpu.tick(dt, nowMs2, this.race.startedAt, this.race.laps);
+          this.race.syncCpuState(cpu.id, cpu.state);
+          if (finished && !anyFinished) { anyFinished = true; crowdCheerSound(); }
+        }
+        if (this.isFinalLapActive && !this.playedFinalLapSound) {
+          this.playedFinalLapSound = true;
+          finalLapSound();
+        }
+        if (anyFinished || this.playedFinalLapSound) this.notifyRace();
+      }
       if (this.hudTime >= 0.1) { this.hudTime = 0; this.emit(); }
     }, this.render);
     this.emit();
@@ -332,23 +376,31 @@ export class WorldEngine {
           // throttle) so P1's board pops within ~200ms, not a heartbeat later.
           this.sendRacePosNow();
           if (this.race.isHost) this.raceStateDirty = true;
-          this.onRace?.();
-        } else if (evt.lapped) this.onRace?.();
+          this.notifyRace();
+        } else if (evt.lapped) {
+          if (this.isFinalLapActive && !this.playedFinalLapSound) {
+            this.playedFinalLapSound = true;
+            finalLapSound();
+          }
+          this.notifyRace();
+        }
       }
       if (this.race.isHost) {
         const done = this.race.pollFinish(nowMs);
         if (done) {
           this.raceStateDirty = true;
-          this.onRace?.();
+          this.notifyRace();
         }
       }
     }
     this.publish({
       ...sim.snapshot,
       room: this.realtimeRoom ? { code: this.realtimeRoom, members: this.realtimeMembers } : null,
-      dots: this.realtimeDots,
+      dots: this.cpuRacers.length > 0
+        ? [...this.realtimeDots, ...this.cpuRacers.map(c => ({ id: c.id, x: c.x, z: c.z, driving: true, name: c.name }))]
+        : this.realtimeDots,
     });
-    this.onRace?.();
+    this.notifyRace();
   }
 
   get raceId(): string {
@@ -426,6 +478,7 @@ export class WorldEngine {
     }
   }
   startRaceCountdown(): boolean {
+    this.playedFinalLapSound = false;
     const ok = this.race.startCountdown(Date.now());
     if (ok) {
       this.raceStateDirty = true;
@@ -435,9 +488,33 @@ export class WorldEngine {
     return ok;
   }
   rematchRace(): void {
-    if (this.race.rematch()) { this.raceStateDirty = true; this.emit(); }
+    this.playedFinalLapSound = false;
+    if (this.race.rematch()) {
+      if (this.race.isSolo) {
+        const slots = gridSlots();
+        const racerOrder = [...this.race.racers.keys()];
+        const now = Date.now();
+        for (const cpu of this.cpuRacers) {
+          const cpuIdx = racerOrder.indexOf(cpu.id);
+          const cpuSlot = slots[Math.max(0, cpuIdx) % slots.length];
+          const startProg = trackProgress(cpuSlot.x, cpuSlot.z);
+          cpu.reset(startProg.dist, now + COUNTDOWN_MS);
+          cpu.x = cpuSlot.x; cpu.z = cpuSlot.z; cpu.yaw = cpuSlot.yaw;
+          const v = this.cpuVehicles.get(cpu.id);
+          if (v) {
+            v.group.position.set(cpuSlot.x, 0.08, cpuSlot.z);
+            v.group.rotation.y = -cpuSlot.yaw;
+          }
+        }
+        this.race.startCountdown(now);
+        this.teleportToGrid();
+      }
+      this.raceStateDirty = true;
+      this.emit();
+    }
   }
   leaveRace(): void {
+    this.playedFinalLapSound = false;
     this.raceJoinDeadline = 0;
     const me = this.race.racers.get(this.localRaceId);
     if (this.race.isHost) this.realtime?.sendRaceState({ ...this.race.snapshot(), phase: 'idle', racers: [] });
@@ -445,6 +522,7 @@ export class WorldEngine {
       lap: me.lap, cp: me.checkpoint, dist: me.dist, finished: me.finished,
       finishMs: me.finishMs, bestLapMs: me.bestLapMs, vehicleKind: me.vehicleKind, ready: false, blinker: 0 });
     this.race.reset();
+    this.cleanupCpuRacers();
     this.emit();
   }
   teleportToGrid(): void {
@@ -459,7 +537,112 @@ export class WorldEngine {
     this.simulation.driving = true;
     this.simulation.repair();
     this.simulation.placeAt(slot.x, slot.z, slot.yaw);
+    // Place CPU ghost vehicles at their grid slots.
+    for (const cpu of this.cpuRacers) {
+      const cpuIdx = order.indexOf(cpu.id);
+      if (cpuIdx < 0) continue;
+      const cpuSlot = slots[cpuIdx % slots.length];
+      const v = this.cpuVehicles.get(cpu.id);
+      if (v) {
+        v.group.position.set(cpuSlot.x, 0.08, cpuSlot.z);
+        v.group.rotation.y = -cpuSlot.yaw;
+      }
+    }
     this.emit();
+  }
+
+  /**
+   * Start a solo race against CPU cars — no server or second player needed.
+   * @param laps      Number of laps (1–10).
+   * @param vehicleKind  Player's chosen vehicle.
+   * @param cpuCount  Number of CPU opponents (1–3).
+   * @param difficulty  AI difficulty: 'easy' | 'medium' | 'hard'.
+   */
+  startSoloRace(laps: number, vehicleKind: VehicleKind, cpuCount: number, difficulty: CpuDifficulty): boolean {
+    if (this.race.phase !== 'idle' || this.simulation.mode !== 'roam') return false;
+    this.playedFinalLapSound = false;
+    const id = this.ensureRaceId();
+    const name = this.playerName || 'YOU';
+    this.raceNotice = '';
+
+    // Pick CPU vehicle kinds: rotate through sport/muscle/super/track/rally.
+    const cpuKindPool: VehicleKind[] = ['sport', 'muscle', 'super', 'track', 'rally', 'hyper', 'egt', 'drift'];
+    const count = Math.max(1, Math.min(3, cpuCount));
+    const cpuIds: string[] = [];
+    const cpuNames: string[] = [];
+    const cpuKinds: VehicleKind[] = [];
+    for (let i = 0; i < count; i++) {
+      cpuIds.push(`${CPU_RACER_ID_PREFIX}${i}`);
+      cpuKinds.push(cpuKindPool[i % cpuKindPool.length]);
+      cpuNames.push(['Ghost', 'Neon', 'Vector', 'Apex', 'Blaze', 'Circuit'][i] ?? `CPU ${i + 1}`);
+    }
+
+    this.race.createSolo(id, name, vehicleKind, laps, cpuIds, cpuNames, cpuKinds);
+    this.simulation.vehicleKind = vehicleKind;
+
+    // Build CPU racers and their ghost vehicles.
+    this.cleanupCpuRacers();
+    const slots = gridSlots();
+    const racerOrder = [...this.race.racers.keys()];
+    for (let i = 0; i < count; i++) {
+      const cpuId = cpuIds[i];
+      const kind = cpuKinds[i];
+      const topSpeedKmh = VEHICLES[kind].topSpeed * 3.6;
+      const cpuSlotIdx = racerOrder.indexOf(cpuId);
+      const cpuSlot = slots[Math.max(0, cpuSlotIdx) % slots.length];
+      const startProg = trackProgress(cpuSlot.x, cpuSlot.z);
+      const laneOffset = (cpuSlotIdx % 2 === 0 ? -1.8 : 1.8);
+      const cpu = new CpuRacer(i, kind, topSpeedKmh, laps, difficulty, startProg.dist, laneOffset);
+      cpu.x = cpuSlot.x; cpu.z = cpuSlot.z; cpu.yaw = cpuSlot.yaw;
+      this.cpuRacers.push(cpu);
+
+      // Acquire a ghost vehicle for rendering.
+      const v = this.acquireGhostVehicle(kind);
+      (v as any).__cpuKind = kind;
+      v.group.visible = true;
+      v.group.position.set(cpuSlot.x, 0.08, cpuSlot.z);
+      v.group.rotation.y = -cpuSlot.yaw;
+      this.cpuVehicles.set(cpuId, v);
+      this.applyHeadlightMat(v);
+
+      // Name tag above the CPU car.
+      const tagCanvas = document.createElement('canvas');
+      tagCanvas.width = 256; tagCanvas.height = 72;
+      const tagTexture = new THREE.CanvasTexture(tagCanvas);
+      tagTexture.colorSpace = THREE.SRGBColorSpace;
+      drawNameTag(tagCanvas, tagTexture, `${cpuNames[i]} [AI]`);
+      const tag = new THREE.Sprite(new THREE.SpriteMaterial({ map: tagTexture, transparent: true, depthTest: false, opacity: 0.92 }));
+      tag.scale.set(1.9, 0.53, 1); tag.renderOrder = 9;
+      tag.position.set(cpuSlot.x, 2.6, cpuSlot.z);
+      this.scene.add(tag);
+      this.cpuTags.set(cpuId, tag);
+    }
+
+    // Kick off the countdown immediately (solo doesn't need all-ready gate).
+    this.race.startCountdown(Date.now());
+    this.teleportToGrid();
+    this.emit();
+    return true;
+  }
+
+  /** Remove all CPU ghost vehicles and dispose their tag sprites. */
+  private cleanupCpuRacers(): void {
+    for (const [id, v] of this.cpuVehicles) {
+      v.group.visible = false;
+      const pool = this.ghostVehiclePool.get((v as any).__cpuKind as VehicleKind) ?? [];
+      if (pool.length < 4) {
+        pool.push(v);
+        this.ghostVehiclePool.set((v as any).__cpuKind as VehicleKind ?? 'sport', pool);
+      } else this.scene.remove(v.group);
+      void id;
+    }
+    this.cpuVehicles.clear();
+    for (const [, tag] of this.cpuTags) {
+      this.scene.remove(tag);
+      (tag.material as THREE.Material).dispose();
+    }
+    this.cpuTags.clear();
+    this.cpuRacers = [];
   }
   /**
    * Joins a private server's presence channel. Resolves once the server
@@ -1095,6 +1278,9 @@ export class WorldEngine {
     // Car body feel: pitch under accel/brake, roll in corners, bounce on crash.
     const dt = Math.max(0, Math.min(0.05, sim.time - this.prevSimTime));
     this.prevSimTime = sim.time;
+    if (this.raceRoute && this.raceRoute.group.visible) {
+      this.raceRoute.update(dt, sim.time, this.isFinalLapActive);
+    }
     // Night eases over ~2s (no popping); weather + night compose in applyLook.
     {
       const target = this.theme === 'dark' ? 1 : 0;
@@ -1194,6 +1380,22 @@ export class WorldEngine {
     });
     // Friend ghosts from the private server (nearest MAX_GHOSTS, interpolated).
     this.syncGhosts(dt);
+    // CPU ghost vehicles: move each car to the AI driver's latest position.
+    if (this.cpuRacers.length > 0) {
+      for (const cpu of this.cpuRacers) {
+        const v = this.cpuVehicles.get(cpu.id);
+        if (v) {
+          v.group.position.set(cpu.x, 0.08, cpu.z);
+          v.group.rotation.y = -cpu.yaw;
+          v.update(cpu.speed, 0, dt, false, undefined, 0, sim.time, 0);
+        }
+        const tag = this.cpuTags.get(cpu.id);
+        if (tag) {
+          tag.position.set(cpu.x, 2.6, cpu.z);
+          tag.visible = sim.view === 'third';
+        }
+      }
+    }
     // Table tennis sounds: play only fresh sim events.
     const evts = sim.table.events;
     if (evts.length !== this.lastTTEvents) {

@@ -164,4 +164,28 @@ describe('optional race lifecycle', () => {
     expect(race.pollFinish(race.startedAt + 60999)).toBeNull();
     expect(race.pollFinish(race.startedAt + 61000)?.[1].dnf).toBe(true);
   });
+  it('detects when anyone enters the final lap', () => {
+    const race = start(3);
+    const host = race.racers.get('host')!;
+    const guest = race.racers.get('guest')!;
+    expect(host.lap).toBe(1);
+    expect(guest.lap).toBe(1);
+
+    const isFinalLap = () => {
+      const racers = Array.from(race.racers.values());
+      const maxLap = Math.max(...racers.map(r => r.lap));
+      return maxLap >= race.laps && !racers.every(r => r.finished);
+    };
+
+    expect(isFinalLap()).toBe(false);
+    guest.lap = 2;
+    expect(isFinalLap()).toBe(false);
+    guest.lap = 3;
+    expect(isFinalLap()).toBe(true);
+    guest.finished = true;
+    expect(isFinalLap()).toBe(true);
+    host.lap = 3;
+    host.finished = true;
+    expect(isFinalLap()).toBe(false);
+  });
 });

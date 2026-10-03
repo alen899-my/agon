@@ -12,7 +12,7 @@ import { TableTennisControls } from './components/TableTennisControls';
 import { BasketballControls } from './components/BasketballControls';
 import { DistrictMap } from './components/DistrictMap';
 import { PhysicsChecklist } from './components/PhysicsChecklist';
-import { RaceCountdown, RaceDirectory, RaceFinishToast, RaceLeaderboard, RaceLobby, RaceResults } from './components/RaceUI';
+import { RaceCountdown, RaceDirectory, RaceFinalLapBanner, RaceFinishToast, RaceLeaderboard, RaceLobby, RaceResults, RaceTurnNavigator, SoloRaceSetup } from './components/RaceUI';
 import { PLACES } from './world/Map';
 import type { VehicleKind } from './world/Vehicles';
 import type { Theme } from './game/State';
@@ -71,6 +71,7 @@ export default function App() {
   const [copied, setCopied] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
   const [raceOpen, setRaceOpen] = useState(false);
+  const [raceTab, setRaceTab] = useState<'solo' | 'multi'>('solo');
   const [raceLaps, setRaceLaps] = useState(3);
   const [raceCar, setRaceCar] = useState<VehicleKind>('super');
   const pendingToken = useRef<Session | null>(null);
@@ -445,11 +446,42 @@ export default function App() {
         {state?.mode === 'basket' && <button className="tt-exit" onClick={() => { engine.current?.exitBasket(); focus(); }} aria-label="Exit hoops">✕ EXIT <kbd>X</kbd></button>}
         {state?.mode === 'roam' && state?.nearHoop && !state?.driving && <button className="interact-button bb-play" onClick={() => { engine.current?.enterBasket(); focus(); }}>SHOOT HOOPS <kbd>E</kbd></button>}
         {state?.mode !== 'table' && state?.mode !== 'basket' && (state?.nearbyCar || state?.driving || (state?.nearTable && !state?.driving)) && <button className="interact-button" onClick={() => { if (state?.nearTable && !state?.driving) engine.current?.enterTable(); else engine.current?.interact(); focus(); }}>{state.driving ? 'EXIT VEHICLE' : state?.nearTable && !state?.nearbyCar ? 'PLAY TABLE TENNIS' : (state?.enterHint ?? 'DRIVE')} <kbd>E</kbd></button>}
-        {state?.mode === 'roam' && state?.nearArena && engine.current?.race.phase === 'idle' && !raceOpen && <button className="interact-button race-paddock" onClick={() => { setRaceOpen(true); engine.current?.requestRaceDir(); }}>RACE PADDOCK</button>}
-        {raceOpen && <RaceDirectory engine={engine.current} inServer={!!state?.room} raceCar={raceCar} onCar={setRaceCar} laps={raceLaps} onLaps={setRaceLaps} onClose={() => setRaceOpen(false)} onJoined={() => { setRaceOpen(false); focus(); }} />}
+        {state?.mode === 'roam' && state?.nearArena && engine.current?.race.phase === 'idle' && !raceOpen && (
+          <>
+            <button className="interact-button race-paddock solo" onClick={() => { setRaceTab('solo'); setRaceOpen(true); }}>SOLO RACE</button>
+            <button className="interact-button race-paddock" onClick={() => { setRaceTab('multi'); setRaceOpen(true); engine.current?.requestRaceDir(); }}>RACE PADDOCK</button>
+          </>
+        )}
+        {raceOpen && raceTab === 'solo' && (
+          <SoloRaceSetup
+            engine={engine.current}
+            raceCar={raceCar}
+            onCar={setRaceCar}
+            laps={raceLaps}
+            onLaps={setRaceLaps}
+            onStart={() => { setRaceOpen(false); focus(); }}
+            onClose={() => setRaceOpen(false)}
+            onSwitchTab={() => { setRaceTab('multi'); engine.current?.requestRaceDir(); }}
+          />
+        )}
+        {raceOpen && raceTab === 'multi' && (
+          <RaceDirectory
+            engine={engine.current}
+            inServer={!!state?.room}
+            raceCar={raceCar}
+            onCar={setRaceCar}
+            laps={raceLaps}
+            onLaps={setRaceLaps}
+            onClose={() => setRaceOpen(false)}
+            onJoined={() => { setRaceOpen(false); focus(); }}
+            onSwitchTab={() => setRaceTab('solo')}
+          />
+        )}
         {engine.current?.raceNotice && <div className="race-lobby" role="status">{engine.current.raceNotice}<button className="control" onClick={() => { if (engine.current) engine.current.raceNotice = ''; }}>DISMISS</button></div>}
         <RaceLobby engine={engine.current} inServer={!!state?.room} onNeedServer={() => setRaceOpen(false)} />
         <RaceCountdown engine={engine.current} />
+        <RaceFinalLapBanner engine={engine.current} />
+        <RaceTurnNavigator engine={engine.current} />
         <RaceLeaderboard engine={engine.current} />
         <RaceFinishToast engine={engine.current} />
         <RaceResults engine={engine.current} onRematch={() => { const e = engine.current; if (!e || !e.race.isHost) return; e.rematchRace(); focus(); }} onExit={() => { engine.current?.leaveRace(); setRaceOpen(false); focus(); }} />
