@@ -1,5 +1,31 @@
 import * as THREE from 'three';
 import { TRACK_POINTS } from './Track';
+import { ROAD_HALF, onRoad } from './Map';
+
+/** Y rotation that aims the -Z-forward chevron along the (fx, fz) travel direction.
+ *  Matches vehicle convention (group.rotation.y = -yaw, forward = (sin yaw, -cos yaw)). */
+export function arrowYaw(fx: number, fz: number): number {
+  return -Math.atan2(fx, -fz);
+}
+
+/** Painted-arrow anchors: only on long legs, only where asphalt exists.
+ *  Short jogs/tips (< 32 m) and any off-road sample get no arrow. */
+export function arrowSpots(): { x: number; z: number; yaw: number }[] {
+  const spots: { x: number; z: number; yaw: number }[] = [];
+  for (let i = 0; i < TRACK_POINTS.length; i++) {
+    const start = TRACK_POINTS[i];
+    const corner = TRACK_POINTS[(i + 1) % TRACK_POINTS.length];
+    const length = Math.hypot(corner.x - start.x, corner.z - start.z);
+    const fx = (corner.x - start.x) / length;
+    const fz = (corner.z - start.z) / length;
+    for (let distance = 20; distance < length - 12; distance += 22) {
+      const x = start.x + fx * distance, z = start.z + fz * distance;
+      if (!onRoad(x, z, ROAD_HALF)) continue;
+      spots.push({ x, z, yaw: arrowYaw(fx, fz) });
+    }
+  }
+  return spots;
+}
 
 /** Optional, world-anchored race guidance. No physics or navigation HUD. */
 export class RaceRoute {
@@ -61,14 +87,13 @@ export class RaceRoute {
         board.add(sign);
       }
       this.group.add(board);
-
-      // Broad painted arrows reinforce the permitted direction on long straights.
-      for (let distance = 20; distance < length - 12; distance += 22) {
-        transform.position.set(start.x + fx * distance, 0.16, start.z + fz * distance);
-        transform.rotation.set(0, -Math.atan2(fx, -fz), 0);
-        transform.updateMatrix();
-        stamps.push(transform.matrix.clone());
-      }
+    }
+    // Broad painted arrows reinforce the permitted direction on long straights.
+    for (const spot of arrowSpots()) {
+      transform.position.set(spot.x, 0.16, spot.z);
+      transform.rotation.set(0, spot.yaw, 0);
+      transform.updateMatrix();
+      stamps.push(transform.matrix.clone());
     }
     const road = new THREE.InstancedMesh(roadChevron, pavement, stamps.length);
     stamps.forEach((matrix, index) => road.setMatrixAt(index, matrix));

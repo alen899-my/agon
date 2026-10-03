@@ -27,7 +27,7 @@ export const TRACK_LENGTH = (() => {
   return total;
 })();
 
-/** Start/finish sits mid south straight (z=-76), heading east. Grid stacks behind it. */
+/** Start/finish sits on the south outer straight (z=-136), heading east. Grid stacks behind it. */
 export const START_OFFSET = 38;
 export const CHECKPOINT_COUNT = 8;
 export const MAX_RACERS = 8;

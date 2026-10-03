@@ -2,6 +2,7 @@ import { bodyContact, boundaryContact, circleContact, vehicleBody, type Body, ty
 import { VEHICLES, VEHICLE_KINDS, type VehicleKind } from './Vehicles';
 import { WEATHER_GRIP, type Season, type Weather } from './Weather';
 import { GAME_CENTER, HOOP, intersects, LIMIT, SOLIDS, PARKED_CARS, PLACES, PROPS, RACE_SHOW_CARS, TRAFFIC_ROUTE, circleHit, seeded, type Point } from './Map';
+import { TRACK_LENGTH } from './Track';
 import { TableTennisSim, type TTShot, type TTSnapshot } from './TableTennis';
 import { BasketballSim, type BBSnapshot } from './Basketball';
 
@@ -57,8 +58,12 @@ const PED_ROUTES: Point[][] = [];
   const rng = seeded(8008);
   for (let i = 0; i < 16; i++) {
     const east = i % 2 === 0, north = i % 4 < 2;
-    const x1 = east ? 13 : -73, x2 = east ? 73 : -13;
-    const z1 = north ? -73 : 13, z2 = north ? -13 : 73;
+    // Half the crowd walks the inner blocks, half patrols the outer ring
+    // (same 16 peds = zero extra per-frame cost).
+    const outer = i % 4 >= 2;
+    const spread = outer ? 133 : 73;
+    const x1 = east ? 13 : -spread, x2 = east ? spread : -13;
+    const z1 = north ? -spread : 13, z2 = north ? -13 : spread;
     const route = [{ x: x1, z: z1 }, { x: x2, z: z1 }, { x: x2, z: z2 }, { x: x1, z: z2 }];
     if (i % 3 === 0) route.reverse();
     PED_ROUTES.push(route);
@@ -96,6 +101,14 @@ export class Simulation {
     { kind: 'bus', x: 30, z: 68, yaw: Math.PI / 2 },
     { kind: 'hatch', x: -15, z: 55, yaw: 1.2 },
     { kind: 'fire', x: -63, z: 60, yaw: 0 },
+    { kind: 'car', x: 100, z: -95, yaw: 0.4 },
+    { kind: 'car', x: -48, z: 100, yaw: -0.3 },
+    { kind: 'muscle', x: 97, z: -122, yaw: -0.2 },
+    { kind: 'van', x: 122, z: -45, yaw: Math.PI / 2 },
+    { kind: 'taxi', x: -20, z: 98, yaw: 0.1 },
+    { kind: 'hatch', x: 100, z: 93, yaw: -0.5 },
+    { kind: 'pickup', x: -64, z: -115, yaw: 0.2 },
+    { kind: 'coupe', x: 64, z: -115, yaw: -0.2 },
     ...RACE_SHOW_CARS.map((s): ParkedVehicle => ({ kind: s.kind, x: s.x, z: s.z, yaw: s.yaw })),
   ];
   waypoint: string | null = 'plaza';
@@ -140,9 +153,9 @@ export class Simulation {
   private jumpPressed = false;
   constructor() {
     const rng = seeded(9001);
-    // A living street: 8 looping cars covering the full catalog, not just the first six.
+    // A living street: 8 looping cars spread evenly over the Grand Circuit.
     const streetCast: VehicleKind[] = ['coupe', 'taxi', 'crossover', 'coach', 'track', 'raptor', 'patrol', 'wagon'];
-    for (let i = 0; i < 8; i++) this.traffic.push({ kind: streetCast[i % streetCast.length], ...routePoint(TRAFFIC_ROUTE, i * 76 + 25), speed: 7, offset: i * 76 + 25, base: 7, steer: 0, wheelSpin: 0, braking: false, prevYaw: 0 });
+    for (let i = 0; i < 8; i++) this.traffic.push({ kind: streetCast[i % streetCast.length], ...routePoint(TRAFFIC_ROUTE, i * TRACK_LENGTH / 8 + 25), speed: 7, offset: i * TRACK_LENGTH / 8 + 25, base: 7, steer: 0, wheelSpin: 0, braking: false, prevYaw: 0 });
     for (let i = 0; i < 16; i++) {
       const speed = 0.9 + rng() * 0.6;
       this.peds.push({ x: 0, z: 0, yaw: 0, route: PED_ROUTES[i], dist: rng() * 240, speed, phase: rng() * 6.28, seed: rng(), move: 1, cur: speed, scaredUntil: 0, ragdoll: false, ry: 0, rvx: 0, rvz: 0, rvy: 0, rpitch: 0, rpitchRate: 0, rollYaw: 0 });
@@ -222,7 +235,7 @@ export class Simulation {
     const kind = kinds[Math.floor(((this.time * 13.7) % 1 + 1) % 1 * kinds.length) % kinds.length];
     let best = 0, bestDist = -1;
     for (let k = 0; k < 8; k++) {
-      const offset = ((this.time * 7 + k * 79 + this.traffic.length * 37) % 608 + 608) % 608;
+      const offset = ((this.time * 7 + k * 79 + this.traffic.length * 37) % TRACK_LENGTH + TRACK_LENGTH) % TRACK_LENGTH;
       const p = routePoint(TRAFFIC_ROUTE, offset);
       const d = Math.hypot(p.x - this.x, p.z - this.z);
       if (d > bestDist) { bestDist = d; best = offset; }

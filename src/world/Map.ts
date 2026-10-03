@@ -4,8 +4,8 @@ export interface Point { x: number; z: number }
 export interface Box extends Point { w: number; d: number; h: number }
 export interface Building extends Box { kind: 'apartment' | 'shop' | 'warehouse' | 'station'; shade: number; name?: string }
 export interface Place extends Point { id: string; name: string; category: string; description: string }
-export const LIMIT = 112;
-export const ROADS = [-80, 0, 80];
+export const LIMIT = 160;
+export const ROADS = [-140, -80, 0, 80, 140];
 /** Road half-width (8.5m asphalt) + racing clearance. Nothing drivable may sit inside. */
 export const ROAD_HALF = 8.5;
 export const RACE_CLEARANCE = 11;
@@ -22,6 +22,10 @@ export const PLACES: Place[] = [
   { id: 'works', name: 'The Foundry', category: 'INDUSTRIAL', x: -45, z: 65, description: 'Old workshops at the edge of the neighborhood.' },
   { id: 'game-center', name: 'Game Center', category: 'SPORTS & ARCADE', x: -22, z: 48, description: 'Table tennis hall. Walk in to play a match.' },
   { id: 'race-arena', name: 'Neon Paddock', category: 'RACING ARENA', x: -45, z: 82, description: 'Tokyo-drift paddock. Host a race, line up 8 cars, run the city loop.' },
+  { id: 'harbor', name: 'East Harbor', category: 'DOCKS', x: 108, z: -95, description: 'Warehouses and piers at the edge of the district.' },
+  { id: 'heights', name: 'North Heights', category: 'NEIGHBORHOOD', x: -48, z: 105, description: 'New shops and homes above the old blocks.' },
+  { id: 'falls', name: 'Harbor Falls', category: 'LANDMARK', x: 104, z: -122, description: 'A roaring cascade where the docks meet the rocks.' },
+  { id: 'garden', name: 'Heights Garden', category: 'PARK', x: 30, z: 99, description: 'A quiet statue garden between the new shops.' },
 ];
 
 /** Neon Paddock race arena anchor (north edge, off the racing line). */
@@ -56,6 +60,23 @@ export function buildings(): Building[] {
     add(x, 101, 20, 14, 10 + (i % 3) * 5, 'apartment', (i + 1) % 3);
   }
   for (const x of [-101, 101]) for (const z of [-48, -18, 22, 54]) add(x, z, 14, 18, 12 + Math.abs(z) % 17, 'apartment', Math.abs(z) % 3);
+  // East Harbor docks (outer band x in [91,129], clear of the x=80/140 roads and the x=101 strip).
+  // Wide low warehouses: big floor plates, low height = few window rows = cheap instancing.
+  add(115, -108, 24, 16, 9, 'warehouse', 1, 'PIER 1');
+  add(118, -62, 18, 10, 8, 'warehouse', 2, 'PIER 2');
+  add(114, 108, 26, 18, 10, 'warehouse', 0, 'DEPOT');
+  add(116, 122, 18, 8, 9, 'warehouse', 1);
+  // North Heights suburbs (outer band z in [91,129], clear of z=80/140 roads and the z=101 row).
+  add(-115, 112, 18, 16, 13, 'apartment', 0, '07');
+  add(-60, 118, 14, 14, 11, 'apartment', 1);
+  add(-30, 118, 20, 15, 12, 'shop', 2, 'MART');
+  add(38, 118, 20, 15, 10, 'shop', 0, 'BAZAAR');
+  add(60, 118, 12, 14, 14, 'apartment', 2, '08');
+  // South Gate low shops (mirror band z in [-129,-91], clear of the z=-101 row).
+  add(-40, -120, 20, 14, 8, 'shop', 1, 'GATE');
+  add(40, -120, 20, 14, 9, 'shop', 0, 'YARD');
+  // Harbor cold store: long low box deep in the east band.
+  add(118, -125, 18, 8, 8, 'warehouse', 2, 'COLD STORE');
   return result;
 }
 export const BUILDINGS = buildings();
@@ -74,20 +95,32 @@ export const PARKED_CARS: Collider[] = [
   { x: -14, z: -38, r: 2.4, kind: 'vehicle', label: 'parked-van' },
   { x: 14, z: -54, r: 2.2, kind: 'vehicle', label: 'parked-car' },
   { x: 55, z: 16, r: 2.2, kind: 'vehicle', label: 'parked-car' },
+  { x: 100, z: -95, r: 2.2, kind: 'vehicle', label: 'parked-car' },
+  { x: -48, z: 100, r: 2.2, kind: 'vehicle', label: 'parked-car' },
+  // New-district fleet: one of each flavor so stealing feels different per area.
+  { x: 97, z: -122, r: 2.2, kind: 'vehicle', label: 'parked-muscle' },
+  { x: 122, z: -45, r: 2.4, kind: 'vehicle', label: 'parked-van' },
+  { x: -20, z: 98, r: 2.2, kind: 'vehicle', label: 'parked-taxi' },
+  { x: 100, z: 93, r: 2.2, kind: 'vehicle', label: 'parked-car' },
+  { x: -64, z: -115, r: 2.2, kind: 'vehicle', label: 'parked-pickup' },
+  { x: 64, z: -115, r: 2.2, kind: 'vehicle', label: 'parked-coupe' },
 ];
-/** Lamp posts line the x=0 avenue; any lamp falling inside a cross-road band
- *  is pushed along the sidewalk so no post ever stands on driving asphalt. */
+/** Lamp posts line the x=0 avenue and the inner sidewalks of the ±140 belt;
+ *  any lamp falling inside a cross-road band is pushed along the sidewalk
+ *  so no post ever stands on driving asphalt. */
 export const LAMPS: Collider[] = [];
-for (const x of [-12, 12]) {
-  for (let z = -67; z < 80; z += 24) {
-    let lz = z;
-    if (ROADS.some((line) => Math.abs(lz - line) < RACE_CLEARANCE)) lz += 14;
+for (const x of [-12, 12, -128, 128]) {
+  for (let z = -140; z <= 150; z += 24) {
+    let lz = z, nudges = 0;
+    // Step along the sidewalk until clear (a +14 hop can land in the next
+    // road band when avenues are 60m apart). Capped so it always terminates.
+    while (ROADS.some((line) => Math.abs(lz - line) < RACE_CLEARANCE) && nudges < 6) { lz += 14; nudges++; }
     LAMPS.push({ x, z: lz, r: 0.35, kind: 'prop', label: 'lamp' });
   }
 }
 /** Shared with Assets so visuals and colliders can never drift apart. */
-export const BENCHES: readonly (readonly [number, number])[] = [[-36, 32], [-20, 32], [31, -56], [49, -56], [26, 26]];
-export const TREES: readonly (readonly [number, number])[] = [[27, -39], [28, -60], [51, -62], [53, -38], [36, -63], [-42, 16], [-43, 31], [-15, 16], [20, 62], [56, 24]];
+export const BENCHES: readonly (readonly [number, number])[] = [[-36, 32], [-20, 32], [31, -56], [49, -56], [26, 26], [104, -92], [-48, 122], [48, 122], [100, -98], [30, 104]];
+export const TREES: readonly (readonly [number, number])[] = [[27, -39], [28, -60], [51, -62], [53, -38], [36, -63], [-42, 16], [-43, 31], [-15, 16], [20, 62], [56, 24], [125, -95], [-20, 105], [20, 105], [-64, 122], [64, 104], [95, -115], [95, -128], [100, -64], [-64, 100], [66, 100], [14, 99], [46, 99]];
 export const PROPS: Collider[] = [
   ...LAMPS,
   { x: -27, z: 23, r: 3.2, kind: 'prop', label: 'sculpture' },
@@ -97,7 +130,15 @@ export const PROPS: Collider[] = [
   { x: 30, z: 62, r: 0.5, kind: 'prop', label: 'canopy-pillar' },
   { x: 42, z: 62, r: 0.5, kind: 'prop', label: 'canopy-pillar' },
   { x: 54, z: 62, r: 0.5, kind: 'prop', label: 'canopy-pillar' },
+  // New-district landmarks (visuals in Assets buildHarbor/buildGarden share these anchors).
+  { x: 95, z: -98, r: 1.4, kind: 'prop', label: 'statue' },
+  { x: 104, z: -122, r: 3.4, kind: 'prop', label: 'fountain' },
+  { x: 30, z: 99, r: 1.4, kind: 'prop', label: 'statue' },
 ];
+/** Harbor Falls anchor (basin center) + Heights Garden statue anchor. */
+export const FALLS = { x: 104, z: -122 };
+export const HARBOR_STATUE = { x: 95, z: -98 };
+export const GARDEN_STATUE = { x: 30, z: 99 };
 /** Roomy paddock layout (slab 44x22): wide walk aisles between everything.
  *  The z=76 racing line runs through the slab, so the display sits just north
  *  of it, with generous gaps to traffic, tents, and the spectator rows. */
@@ -124,7 +165,24 @@ export const RACE_CROWD: CrowdSpot[] = (() => {
   }
   return spots;
 })();
-export const TRAFFIC_ROUTE = [{ x: -76, z: -76 }, { x: 76, z: -76 }, { x: 76, z: 76 }, { x: -76, z: 76 }];
+/** Grand Circuit: shared race + traffic loop. One clean flowing direction —
+ *  no out-and-back spurs or opposing legs. Every leg rides a road centerline
+ *  (4m offset, well inside the 8.5m asphalt): a 168m south straight, chicane
+ *  jog onto the x=76 line, S-curves through the middle, a sweeper past the
+ *  arena, and a 272m west outer straight home. Checkpoints stay evenly spaced. */
+export const TRAFFIC_ROUTE = [
+  { x: -32, z: -136 },
+  { x: 136, z: -136 },
+  { x: 136, z: -84 },
+  { x: 84, z: -84 },
+  { x: 84, z: -8 },
+  { x: 76, z: -4 },
+  { x: 76, z: 76 },
+  { x: -4, z: 76 },
+  { x: -4, z: 136 },
+  { x: -136, z: 136 },
+  { x: -136, z: -136 },
+];
 export function circleHit(ax: number, az: number, ar: number, bx: number, bz: number, br: number): boolean {
   const dx = ax - bx, dz = az - bz, r = ar + br;
   return dx * dx + dz * dz < r * r;

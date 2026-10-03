@@ -24,21 +24,21 @@ describe('vehicle collision regressions', () => {
   it('stops at a lamp even at high speed and can reverse away', () => {
     const s = driving(-12, -59); s.car.speed = 40;
     s.update(0.25);
-    const lamp = PROPS.find(p => p.x === -12 && p.z === -67)!;
+    const lamp = PROPS.find(p => p.x === -12 && p.z === -68)!;
     expect(circleContact(vehicleBody(s.car.x, s.car.z, s.car.yaw, s.vehicleKind), lamp.x, lamp.z, lamp.r)).toBeNull();
-    expect(s.car.z).toBeGreaterThan(-64.46); expect(s.impact?.with).toBe('lamp');
+    expect(s.car.z).toBeGreaterThan(-65.46); expect(s.impact?.with).toBe('lamp');
     s.clearInput(); tick(s, 60); const z = s.z;
     s.setInput('back', true, 's'); tick(s, 60); expect(s.z).toBeGreaterThan(z + 1);
   });
   it('rejects rotation into walls and boundaries for a long vehicle', () => {
-    for (const [x, z] of [[14.2, -22], [110.4, 0]]) {
+    for (const [x, z] of [[14.2, -22], [156.4, 0]]) {
       const s = driving(x, z); s.vehicleKind = 'bus'; s.car.speed = 8;
       s.setInput('right', true, 'd'); s.setInput('forward', true, 'w');
       for (let i = 0; i < 90; i++) { s.update(1 / 60); expectClear(s); }
     }
   });
   it('detects lateral drift impacts even without forward speed', () => {
-    const s = driving(109, 0); s.lateralSpeed = 25;
+    const s = driving(157, 0); s.lateralSpeed = 25;
     s.update(0.2); expectClear(s);
     expect(s.impact?.with).toBe('boundary'); expect(s.damage).toBeGreaterThan(0);
   });
@@ -60,14 +60,14 @@ describe('vehicle collision regressions', () => {
     expect(bodyContact(vehicleBody(t.x, t.z, t.yaw, t.kind), vehicleBody(s.car.x, s.car.z, s.car.yaw, s.vehicleKind))).toBeNull();
   }, 15000);
   it('chooses a clear exit door instead of exiting into a lamp', () => {
-    const s = driving(10.1, 29); // right door lies at lamp (12, 29)
+    const s = driving(10.1, 28); // right door lies at lamp (12, 28)
     s.transition = 0;
     expect(s.interact()).toBe(true);
     expect(s.x).toBeLessThan(s.car.x);
     expect(PROPS.some(p => Math.hypot(s.x - p.x, s.z - p.z) < p.r + 0.48)).toBe(false);
   });
   it('rejects a bigger vehicle overlapping a prop or a bus bumper', () => {
-    const s = driving(-12, -63.8); s.vehicleKind = 'pickup';
+    const s = driving(-12, -65.8); s.vehicleKind = 'pickup';
     expect(s.cycleVehicle()).toBe(false); expect(s.vehicleKind).toBe('pickup');
   });
   it('ignores zero and invalid time steps instead of corrupting speed', () => {

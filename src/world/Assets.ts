@@ -1,7 +1,7 @@
 import { type VehicleKind } from './Vehicles';
 import { buildVehicle } from './VehicleFactory';
 import * as THREE from 'three';
-import { BENCHES, BUILDINGS, FREE_THROW_DIST, GAME_CENTER, HOOP, LAMPS, RACE_ARENA, RACE_SHOW_CARS, RACE_SLAB, RIM, ROADS, TABLE, TREES, seeded } from './Map';
+import { BENCHES, BUILDINGS, FALLS, FREE_THROW_DIST, GAME_CENTER, GARDEN_STATUE, HARBOR_STATUE, HOOP, LAMPS, RACE_ARENA, RACE_SHOW_CARS, RACE_SLAB, RIM, ROADS, TABLE, TREES, seeded } from './Map';
 
 type Shape = 'box' | 'sphere' | 'cylinder';
 export type MaterialName = 'road' | 'pavement' | 'white' | 'ink' | 'glass' | 'metal' | 'wall0' | 'wall1' | 'wall2' | 'leaf' | 'lampGlow' | 'windowLit';
@@ -174,10 +174,10 @@ export class AssetKit {
 
 export function buildMap(scene: THREE.Scene, kit: AssetKit): void {
   const box = (material: MaterialName, x: number, y: number, z: number, w: number, h: number, d: number) => kit.stamp('box', material, x, y, z, w, h, d);
-  box('pavement', 0, -0.3, 0, 250, 0.5, 250);
+  box('pavement', 0, -0.3, 0, 350, 0.5, 350);
   for (const road of ROADS) {
-    box('road', road, -0.025, 0, 17, 0.08, 242); box('road', 0, -0.025, road, 242, 0.08, 17);
-    for (let v = -116; v <= 116; v += 7) {
+    box('road', road, -0.025, 0, 17, 0.08, 342); box('road', 0, -0.025, road, 342, 0.08, 17);
+    for (let v = -164; v <= 164; v += 7) {
       if (ROADS.every(r => Math.abs(r - v) > 12)) {
         box('white', road, 0.025, v, 0.12, 0.015, 2.6); box('white', v, 0.025, road, 2.6, 0.015, 0.12);
       }
@@ -187,8 +187,8 @@ export function buildMap(scene: THREE.Scene, kit: AssetKit): void {
       box('white', road + side * 11, 0.035, cross + i * 1.8, 3.4, 0.02, 1);
     }
     for (const side of [-1, 1]) {
-      box('white', road + side * 9, 0.035, 0, 0.25, 0.18, 240);
-      box('white', 0, 0.035, road + side * 9, 240, 0.18, 0.25);
+      box('white', road + side * 9, 0.035, 0, 0.25, 0.18, 340);
+      box('white', 0, 0.035, road + side * 9, 340, 0.18, 0.25);
     }
   }
   for (const b of BUILDINGS) {
@@ -254,11 +254,13 @@ export function buildMap(scene: THREE.Scene, kit: AssetKit): void {
   for (const [x, z] of [[-30, 68], [-44, 68], [-60, 68]]) {
     box('wall1', x, 1.5, z, 10, 3, 4); box('white', x, 3.05, z, 10.1, 0.1, 4.1);
   }
-  for (const x of [-118, 118]) box('metal', x, 0.55, 0, 0.3, 1.1, 236);
-  for (const z of [-118, 118]) box('metal', 0, 0.55, z, 236, 1.1, 0.3);
+  for (const x of [-166, 166]) box('metal', x, 0.55, 0, 0.3, 1.1, 332);
+  for (const z of [-166, 166]) box('metal', 0, 0.55, z, 332, 1.1, 0.3);
   buildGameCenter(scene, kit, box);
   buildBasketballCourt(scene, kit, box);
   buildRaceArena(scene, kit, box);
+  buildHarbor(scene, kit, box);
+  buildGarden(scene, kit, box);
   kit.flush(scene);
 }
 
@@ -446,8 +448,60 @@ export function buildBasketballCourt(scene: THREE.Scene, kit: AssetKit, box?: (m
   kit.sign(scene, 'HOOPS · FREE THROW', hx + 4.2, 2.2, hz + 2.5, 7, -Math.PI / 2);
 }
 
-/** Game Center: open-air hall with ITTF table tennis court. Play axis = Z. */
-export function buildGameCenter(scene: THREE.Scene, kit: AssetKit, box?: (m: MaterialName, x: number, y: number, z: number, w: number, h: number, d: number) => void): void {
+/** East Harbor: cascade waterfall + anchor-plaza statue. All static instanced
+ *  geometry sharing the global palette — zero per-frame cost. */
+export function buildHarbor(scene: THREE.Scene, kit: AssetKit, box?: (m: MaterialName, x: number, y: number, z: number, w: number, h: number, d: number) => void): void {
+  const put = box ?? ((m, x, y, z, w, h, d) => kit.stamp('box', m, x, y, z, w, h, d));
+  const fx = FALLS.x, fz = FALLS.z;
+  // Rock cliff the water pours over (north face of the basin).
+  put('wall2', fx, 1.5, fz - 4.2, 9, 3, 1.6);
+  put('wall2', fx, 3.4, fz - 4.4, 7, 2.4, 1.3);
+  put('wall1', fx, 5.0, fz - 4.5, 5, 1.8, 1.1);
+  for (const [rx, rw] of [[-5.2, 2.2], [5.2, 2.2]] as const) put('wall2', fx + rx, 1.0, fz - 4.0, rw, 2.0, 1.8);
+  // Falling sheet + foam streaks + lip.
+  put('glass', fx, 2.7, fz - 3.35, 4.6, 4.6, 0.22);
+  for (const sx of [-1.5, 0, 1.5]) put('white', fx + sx, 1.6, fz - 3.2, 0.7, 2.6, 0.26);
+  put('white', fx, 0.75, fz - 2.6, 5.2, 0.3, 1.4);
+  // Basin ring + still water.
+  kit.stamp('cylinder', 'white', fx, 0.25, fz, 3.7, 0.5, 3.7);
+  kit.stamp('cylinder', 'glass', fx, 0.52, fz, 3.15, 0.28, 3.15);
+  for (const [ox, oz] of [[-2.4, 1.8], [2.4, 1.8], [-2.4, -1.8], [2.4, -1.8]] as const) {
+    put('white', fx + ox, 0.62, fz + oz, 1.1, 0.12, 1.1);
+  }
+  kit.sign(scene, 'HARBOR FALLS', fx - 6.5, 2.4, fz + 1.5, 8, Math.PI / 2);
+  // Anchor plaza: slab + pedestal + column + orb, west of the piers.
+  const sx = HARBOR_STATUE.x, sz = HARBOR_STATUE.z;
+  put('white', sx, 0.03, sz, 8, 0.08, 8);
+  put('pavement', sx, 0.075, sz, 6.4, 0.05, 6.4);
+  put('white', sx, 0.7, sz, 2.2, 1.2, 2.2);
+  kit.stamp('cylinder', 'ink', sx, 2.7, sz, 0.55, 3.0, 0.55);
+  kit.stamp('sphere', 'metal', sx, 4.9, sz, 1.0, 1.0, 1.0);
+  kit.sign(scene, 'ANCHOR PLAZA', sx, 3.1, sz + 4.3, 7, Math.PI);
+}
+
+/** Heights Garden: statue circle with lawn, saplings, and night lamps. */
+export function buildGarden(scene: THREE.Scene, kit: AssetKit, box?: (m: MaterialName, x: number, y: number, z: number, w: number, h: number, d: number) => void): void {
+  const put = box ?? ((m, x, y, z, w, h, d) => kit.stamp('box', m, x, y, z, w, h, d));
+  const gx = GARDEN_STATUE.x, gz = GARDEN_STATUE.z;
+  put('white', gx, 0.03, gz, 12, 0.08, 12);
+  put('leaf', gx, 0.07, gz, 8.4, 0.05, 8.4);
+  put('pavement', gx, 0.09, gz, 3.2, 0.04, 3.2);
+  put('wall1', gx, 0.7, gz, 2.0, 1.2, 2.0);
+  kit.stamp('cylinder', 'white', gx, 2.6, gz, 0.5, 2.8, 0.5);
+  kit.stamp('sphere', 'ink', gx, 4.7, gz, 0.95, 0.95, 0.95);
+  // Saplings ring the lawn (visual only; colliders live in Map TREES).
+  const rng = seeded(2024);
+  for (const [ox, oz] of [[-3.4, -3.4], [3.4, -3.4], [-3.4, 3.4], [3.4, 3.4]] as const) {
+    kit.stamp('cylinder', 'ink', gx + ox, 0.9, gz + oz, 0.12, 1.8, 0.12);
+    kit.stamp('sphere', 'leaf', gx + ox, 2.2 + rng() * 0.4, gz + oz, 1.1, 1.3, 1.1);
+  }
+  // Twin lamps so the garden glows at night.
+  for (const ox of [-6, 6]) {
+    kit.stamp('cylinder', 'ink', gx + ox, 2.2, gz, 0.09, 4.4, 0.09);
+    put('lampGlow', gx + ox, 4.35, gz, 0.55, 0.16, 0.4);
+  }
+  kit.sign(scene, 'HEIGHTS GARDEN', gx, 3.0, gz + 6.3, 8, Math.PI);
+}export function buildGameCenter(scene: THREE.Scene, kit: AssetKit, box?: (m: MaterialName, x: number, y: number, z: number, w: number, h: number, d: number) => void): void {
   const gx = GAME_CENTER.x, gz = GAME_CENTER.z;
   const put = box ?? ((m, x, y, z, w, h, d) => kit.stamp('box', m, x, y, z, w, h, d));
   // Court apron + surrounding pad.

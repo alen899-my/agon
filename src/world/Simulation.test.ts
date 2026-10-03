@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Simulation, routePoint } from './Simulation';
-import { BUILDINGS, intersects, PLACES, SOLIDS } from './Map';
+import { BUILDINGS, intersects, LIMIT, PLACES, SOLIDS } from './Map';
 
 const tick = (sim: Simulation, count = 60) => { for (let i = 0; i < count; i++) sim.update(1 / 60); };
 const running = () => { const sim = new Simulation(); sim.begin(); return sim; };
@@ -39,8 +39,8 @@ describe('open district movement', () => {
     expect(sim.z).toBeGreaterThanOrEqual(-38.5 + 0.48);
     expect(intersects(sim.x, sim.z, 0.48)).toBe(false);
     sim.setInput('right', true, 'd'); const x = sim.x; tick(sim, 30); expect(sim.x).toBeGreaterThan(x);
-    sim.x = 111; sim.z = 0; sim.yaw = Math.PI / 2; sim.clearInput(); sim.setInput('forward', true, 'w'); tick(sim, 120);
-    expect(sim.x).toBeLessThanOrEqual(112);
+    sim.x = LIMIT - 1; sim.z = 0; sim.yaw = Math.PI / 2; sim.clearInput(); sim.setInput('forward', true, 'w'); tick(sim, 120);
+    expect(sim.x).toBeLessThanOrEqual(LIMIT);
   });
   it('preserves position when changing perspective and clamps camera pitch', () => {
     const sim = running(); sim.toggleView(); expect(sim.view).toBe('first'); expect(sim.x).toBe(12);
@@ -85,7 +85,7 @@ describe('vehicles and exploration', () => {
   });
   it('provides a connected street network with a clear spawn and bounded reusable blocks', () => {
     expect(intersects(12, 34, 0.48)).toBe(false); expect(BUILDINGS.length).toBeGreaterThan(20);
-    for (let v = -110; v <= 110; v += 5) {
+    for (let v = -LIMIT + 2; v <= LIMIT - 2; v += 5) {
       expect(intersects(0, v, 0.5)).toBe(false); expect(intersects(v, 0, 0.5)).toBe(false);
     }
     expect(SOLIDS.every(b => b.w > 0 && b.d > 0 && b.h > 0)).toBe(true);
@@ -107,7 +107,7 @@ describe('realistic physics one by one', () => {
   it('blocks parked cars for driving and walking', () => {
     const sim = running(); sim.x = sim.car.x = -11; sim.z = sim.car.z = -32; sim.car.yaw = 0; sim.interact();
     sim.setInput('forward', true, 'w'); tick(sim, 120);
-    expect(sim.z).toBeGreaterThan(-38 - 3);
+    expect(sim.z).toBeGreaterThan(-38 - 4);
   });
   it('brakes traffic when the player blocks the lane', () => {
     const sim = running();

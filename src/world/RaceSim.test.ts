@@ -71,20 +71,24 @@ describe('optional race lifecycle', () => {
   it('counts full laps with elapsed times, not page uptime', () => {
     const race = start(2);
     tick(race, -6, 0);
-    for (let d = 0; d <= 1220; d += 4) tick(race, d, (d + 4) * 100);
+    // Stride-aligned crossings: each wrap lands on the first 4m tick at or
+    // past the line, computed per lap (rounding does not compound evenly).
+    const cross1 = Math.ceil(TRACK_LENGTH / 4) * 4;
+    const cross2 = Math.ceil((TRACK_LENGTH * 2) / 4) * 4;
+    for (let d = 0; d <= TRACK_LENGTH * 2 + 8; d += 4) tick(race, d, (d + 4) * 100);
     const me = race.racers.get('host')!;
     expect(me.finished).toBe(true);
     expect(me.lap).toBe(2);
     expect(me.dist).toBe(TRACK_LENGTH * 2);
-    expect(me.finishMs).toBe(122000);
-    expect(me.bestLapMs).toBe(60800);
+    expect(me.finishMs).toBe((cross2 + 4) * 100);
+    expect(me.bestLapMs).toBe(Math.min(cross1 + 4, cross2 - cross1) * 100);
   });
   it('does not award laps for reversing, skipping sectors, or an initial grid crossing', () => {
     const race = start();
     tick(race, -6, 0);
     tick(race, 2, 100);
     expect(race.racers.get('host')!.finished).toBe(false);
-    for (let d = 0; d >= -620; d -= 4) tick(race, d, 200 - d * 100);
+    for (let d = 0; d >= -(TRACK_LENGTH + 12); d -= 4) tick(race, d, 200 - d * 100);
     expect(race.racers.get('host')!.finished).toBe(false);
     tick(race, TRACK_LENGTH - 4, 65000);
     tick(race, 2, 65100);
