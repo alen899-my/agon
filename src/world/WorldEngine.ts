@@ -290,6 +290,8 @@ export class WorldEngine {
       }
       this.prevRacePhase = this.race.phase;
 
+      // Nitro boost lives only while racing — free-roam driving never drains it.
+      this.simulation.boostEnabled = this.race.phase === 'racing';
       if (this.race.phase !== 'countdown') this.simulation.update(dt);
       // Drift rubber: lay twin skid marks while sliding, fade out over a minute.
       // Engine voices: player car + nearest traffic, skid screech while sliding.

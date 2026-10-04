@@ -30,7 +30,7 @@ export interface WorldSnapshot {
   location: string; discovered: string[]; waypoint: string | null; nearbyCar: boolean;
   nearbyVehicleKind: VehicleKind | null; nearbyVehicleLabel: string | null; enterHint: string | null;
   damage: number; impact: Impact | null; frontDistance: number; frontBlocked: boolean;
-  vehicleKind: VehicleKind; acceleration: number; crashed: boolean; skidding: boolean; car: SnapshotCar;
+  vehicleKind: VehicleKind; acceleration: number; crashed: boolean; skidding: boolean; boosting: boolean; boost: number; boostEnabled: boolean; car: SnapshotCar;
   transition: number;
   parked: ParkedVehicle[];
   /** Private server presence. Null in solo. Filled by WorldEngine, not the sim. */
@@ -82,6 +82,12 @@ export class Simulation {
   vehicleKind: VehicleKind = 'car';
   acceleration = 0;
   lateralSpeed = 0;
+  /** Nitro boost meter 0-100. Drains while boosting, auto-refills after a short delay. Racing-only. */
+  boost = 100;
+  boosting = false;
+  /** Set by WorldEngine: true only while race phase is 'racing'. */
+  boostEnabled = false;
+  private boostDelay = 0;
   /** Smooth GTA enter/exit: locks drive inputs while the avatar slips through the door. */
   transition = 0;
   private lookUntil = 0;
@@ -249,6 +255,7 @@ export class Simulation {
     this.car.speed = 0; this.car.steer = 0; this.car.braking = false;
     this.x = x; this.z = z; this.yaw = yaw; this.facing = yaw;
     this.lateralSpeed = 0; this.acceleration = 0;
+    this.boost = 100; this.boosting = false; this.boostDelay = 0;
     this.previous = { x, z, y: this.y };
     this.clearInput();
   }
@@ -274,6 +281,7 @@ export class Simulation {
       enterHint,
       damage: Math.round(this.damage), impact: this.impact, frontDistance: Math.round(this.frontDistance),
       vehicleKind: this.vehicleKind, acceleration: this.acceleration, frontBlocked: this.frontBlocked, crashed: this.crashed, skidding: this.skidding,
+      boosting: this.boosting, boost: Math.round(this.boost), boostEnabled: this.boostEnabled,
       car: { x: this.car.x, z: this.car.z, yaw: this.car.yaw, speed: this.car.speed, steer: this.car.steer, wheelSpin: this.car.wheelSpin, braking: this.car.braking },
       transition: this.transition,
       parked: this.parked.map(p => ({ ...p })),
@@ -348,6 +356,7 @@ export class Simulation {
       }
       this.driving = true; this.x = this.car.x; this.z = this.car.z; this.y = this.vy = 0;
       this.yaw = this.car.yaw; this.pitch = 0.12;
+      this.boost = 100; this.boosting = false; this.boostDelay = 0;
       this.transition = 0.35;
     } else {
       // Door candidates follow the vehicle heading and must clear all solid objects.
@@ -626,11 +635,24 @@ export class Simulation {
       const crashed = this.crashed;
       const oldSpeed = this.car.speed, oldYaw = this.car.yaw;
       const handbrake = this.held('handbrake') || this.held('jump');
-      const topSpeed = spec.topSpeed * (1 - this.damage / 160);
+      // ── Nitro boost (RACING ONLY): Shift / BOOST while pushing forward.
+      // Drains 32/s, auto-refills 14/s after a 0.9s delay. Needs >1% to kick in. ──
+      const wantBoost = this.boostEnabled && this.held('sprint') && forward > 0.1 && !crashed && this.boost > 1;
+      this.boosting = wantBoost && this.boost > 0;
+      if (this.boosting) {
+        this.boost = Math.max(0, this.boost - 32 * dt);
+        this.boostDelay = 0.9;
+        if (this.boost <= 0) this.boosting = false;
+      } else {
+        this.boostDelay = Math.max(0, this.boostDelay - dt);
+        if (this.boostDelay <= 0) this.boost = Math.min(100, this.boost + 14 * dt);
+      }
+      const baseTop = spec.topSpeed * (1 - this.damage / 160);
+      const topSpeed = this.boosting ? baseTop * 1.45 : baseTop;
       const opposing = forward !== 0 && forward * oldSpeed < -0.1;
       const gripF = this.weatherGrip;
       const drag = 0.65 + 0.008 * oldSpeed * oldSpeed;
-      let force = forward * spec.acceleration * Math.max(0.15, 1 - Math.abs(oldSpeed) / (forward < 0 ? 7 : topSpeed));
+      let force = forward * spec.acceleration * (this.boosting ? 1.9 : 1) * Math.max(0.15, 1 - Math.abs(oldSpeed) / (forward < 0 ? 7 : topSpeed));
       if (opposing) force = forward * 13 * gripF;
       if (!forward || handbrake || crashed) {
         const decel = crashed ? 14 : handbrake ? 9 * gripF : drag;
@@ -671,6 +693,9 @@ export class Simulation {
     } else {
       this.frontDistance = 999; this.frontBlocked = false; this.skidding = false;
       this.blinker = 0; this.blinkerManual = false;
+      this.boosting = false;
+      this.boostDelay = Math.max(0, this.boostDelay - dt);
+      if (this.boostDelay <= 0) this.boost = Math.min(100, this.boost + 14 * dt);
       // Velocity-based locomotion: accelerate into the wish direction, ease out on release.
       const grounded = this.y === 0;
       const length = Math.max(1, Math.hypot(forward, side));

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { WorldEngine } from '../world/WorldEngine';
-import { formatRaceTime, nextTurn } from '../world/Track';
+import { formatRaceTime } from '../world/Track';
 import { lightStage } from '../world/RaceSim';
 import { VEHICLES, VEHICLE_KINDS, type VehicleKind } from '../world/Vehicles';
 
@@ -356,139 +356,24 @@ export function RaceCarPicker({ value, onChange }: { value: VehicleKind; onChang
 }
 
 /**
- * High-voltage finishing banner that triggers when ANY racer reaches the final lap.
- * Shows arcade checkered animation, leader alert or personal final push banner.
+ * Final-lap top banner — REMOVED per design.
+ * No floating top banner is rendered. Kept as a null stub so old imports
+ * don't break.
  */
 export function RaceFinalLapBanner({ engine }: { engine: WorldEngine | null }) {
-  const [, setTick] = useState(0);
-
-  useEffect(() => {
-    if (!engine) return;
-    const unsub = engine.addRaceListener(() => setTick(t => t + 1));
-    return unsub;
-  }, [engine]);
-
-  if (!engine || engine.race.phase !== 'racing' || !engine.isFinalLapActive) return null;
-
-  const me = engine.race.racers.get(engine.raceId);
-  // Hide if local player has finished, as the celebration results screen takes over
-  if (me?.finished) return null;
-
-  const laps = engine.race.laps;
-  const isMeFinal = me && me.lap >= laps && !me.finished;
-  const standings = engine.race.standings();
-  const myPos = standings.findIndex((r) => r.id === engine.raceId) + 1;
-
-  // Find who triggered the final lap or is furthest along
-  const finalLapRacers = Array.from(engine.race.racers.values())
-    .filter((r) => r.lap >= laps && !r.finished)
-    .sort((a, b) => b.lap - a.lap || b.checkpoint - a.checkpoint || b.dist - a.dist);
-
-  const leader = finalLapRacers[0] ?? standings[0];
-
-  return (
-    <div className="final-lap-banner" role="status" aria-label="Final lap banner">
-      <div className="final-lap-card">
-        <div className="final-lap-flag-strip" aria-hidden="true" />
-        <div className="final-lap-content">
-          <div className="final-lap-header">
-            <span className="final-lap-badge">
-              <span className="final-lap-pulse-dot" />
-              LAP {laps} / {laps}
-            </span>
-            <span className="final-lap-tag">
-              {isMeFinal ? (myPos === 1 ? '🥇 LEADER' : `P${myPos}`) : '⚠️ RIVAL ALERT'}
-            </span>
-          </div>
-
-          <div className="final-lap-title">
-            <span className="final-lap-flag-icon left">🏁</span>
-            <span>FINAL LAP</span>
-            <span className="final-lap-flag-icon right">🏁</span>
-          </div>
-
-          <div className="final-lap-sub">
-            {isMeFinal ? (
-              myPos === 1 ? (
-                <><b>YOU'RE IN P1!</b> SPRINT TO THE CHECKERED FLAG!</>
-              ) : (
-                <><b>YOU ARE ON THE FINAL LAP!</b> PUSH TO CATCH P1!</>
-              )
-            ) : (
-              <><b>{leader?.name.toUpperCase() ?? 'LEADER'}</b> REACHED THE FINAL LAP · FULL THROTTLE!</>
-            )}
-          </div>
-        </div>
-        <div className="final-lap-flag-strip" aria-hidden="true" />
-      </div>
-    </div>
-  );
+  void engine;
+  return null;
 }
 
 /**
- * Fast & Furious Dynamic Arcade Turn Navigator HUD:
- * Provides real-time corner anticipation, distance countdown, drift prompts,
- * and high-voltage directional arrows straight from arcade street racing.
+ * Floating turn navigator HUD — REMOVED per design.
+ * Turn guidance now lives on the road (3D chevrons / barricades / kerbs),
+ * so no floating top pill is rendered. Kept as a null stub so old imports
+ * don't break.
  */
 export function RaceTurnNavigator({ engine }: { engine: WorldEngine | null }) {
-  const [, setTick] = useState(0);
-
-  useEffect(() => {
-    if (!engine) return;
-    const unsub = engine.addRaceListener(() => setTick(t => t + 1));
-    return unsub;
-  }, [engine]);
-
-  if (!engine || engine.race.phase !== 'racing' || !engine.simulation.driving) return null;
-
-  const me = engine.race.racers.get(engine.raceId);
-  if (me?.finished) return null;
-
-  const car = engine.simulation.car;
-  const { turn, dist, isApproaching, isApex } = nextTurn(car.x, car.z);
-
-  const roundedDist = Math.max(5, Math.round(dist));
-
-  return (
-    <div
-      className={`race-turn-nav${isApproaching ? ' is-approaching' : ''}${isApex ? ' is-apex' : ''} dir-${turn.dir}`}
-      role="status"
-      aria-label="Upcoming turn navigation"
-    >
-      <div className="race-turn-pill">
-        <div className="race-turn-icon-wrap" aria-hidden="true">
-          {turn.dir === 'right' ? (
-            <span className="race-turn-chevron right">▶▶▶</span>
-          ) : (
-            <span className="race-turn-chevron left">◀◀◀</span>
-          )}
-        </div>
-
-        <div className="race-turn-body">
-          <div className="race-turn-headline">
-            {isApex ? (
-              <b className="apex-alert">🔥 DRIFT NOW! 🔥</b>
-            ) : isApproaching ? (
-              <b>{turn.label} · {roundedDist}M</b>
-            ) : (
-              <b>FULL THROTTLE · {turn.name} IN {roundedDist}M</b>
-            )}
-          </div>
-          <small className="race-turn-sub">
-            {isApex ? `${turn.name} APEX` : turn.sub}
-          </small>
-        </div>
-
-        <div className="race-turn-icon-wrap" aria-hidden="true">
-          {turn.dir === 'right' ? (
-            <span className="race-turn-chevron right">▶▶▶</span>
-          ) : (
-            <span className="race-turn-chevron left">◀◀◀</span>
-          )}
-        </div>
-      </div>
-    </div>
-  );
+  void engine;
+  return null;
 }
 
 

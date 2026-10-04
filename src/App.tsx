@@ -12,7 +12,7 @@ import { TableTennisControls } from './components/TableTennisControls';
 import { BasketballControls } from './components/BasketballControls';
 import { DistrictMap } from './components/DistrictMap';
 import { PhysicsChecklist } from './components/PhysicsChecklist';
-import { RaceCountdown, RaceDirectory, RaceFinalLapBanner, RaceFinishToast, RaceLeaderboard, RaceLobby, RaceResults, RaceTurnNavigator, SoloRaceSetup } from './components/RaceUI';
+import { RaceCountdown, RaceDirectory, RaceFinishToast, RaceLeaderboard, RaceLobby, RaceResults, SoloRaceSetup } from './components/RaceUI';
 import { PLACES } from './world/Map';
 import type { VehicleKind } from './world/Vehicles';
 import type { Theme } from './game/State';
@@ -448,7 +448,7 @@ export default function App() {
         {state?.mode !== 'table' && state?.mode !== 'basket' && (state?.nearbyCar || state?.driving || (state?.nearTable && !state?.driving)) && <button className="interact-button" onClick={() => { if (state?.nearTable && !state?.driving) engine.current?.enterTable(); else engine.current?.interact(); focus(); }}>{state.driving ? 'EXIT VEHICLE' : state?.nearTable && !state?.nearbyCar ? 'PLAY TABLE TENNIS' : (state?.enterHint ?? 'DRIVE')} <kbd>E</kbd></button>}
         {state?.mode === 'roam' && state?.nearArena && engine.current?.race.phase === 'idle' && !raceOpen && (
           <>
-            <button className="interact-button race-paddock solo" onClick={() => { setRaceTab('solo'); setRaceOpen(true); }}>SOLO RACE</button>
+
             <button className="interact-button race-paddock" onClick={() => { setRaceTab('multi'); setRaceOpen(true); engine.current?.requestRaceDir(); }}>RACE PADDOCK</button>
           </>
         )}
@@ -480,18 +480,23 @@ export default function App() {
         {engine.current?.raceNotice && <div className="race-lobby" role="status">{engine.current.raceNotice}<button className="control" onClick={() => { if (engine.current) engine.current.raceNotice = ''; }}>DISMISS</button></div>}
         <RaceLobby engine={engine.current} inServer={!!state?.room} onNeedServer={() => setRaceOpen(false)} />
         <RaceCountdown engine={engine.current} />
-        <RaceFinalLapBanner engine={engine.current} />
-        <RaceTurnNavigator engine={engine.current} />
         <RaceLeaderboard engine={engine.current} />
         <RaceFinishToast engine={engine.current} />
         <RaceResults engine={engine.current} onRematch={() => { const e = engine.current; if (!e || !e.race.isHost) return; e.rematchRace(); focus(); }} onExit={() => { engine.current?.leaveRace(); setRaceOpen(false); focus(); }} />
         {state?.driving && state?.blinkerManual && (state?.blinker ?? 0) !== 0 && <div className="blinker-hud" role="status" aria-label="Turn signal">{state.blinker === 1 ? '◀ LEFT' : state.blinker === 2 ? 'RIGHT ▶' : '◀ HAZARD ▶'}</div>}
         {state?.driving && state?.wiperMode !== 'auto' && <div className="blinker-hud" role="status" aria-label={`Wipers ${state?.wiperMode}`}>💧 WIPERS {state?.wiperMode?.toUpperCase()}</div>}
+        {state?.driving && state?.boostEnabled && (
+          <div className={`nitro-bottom${state?.boosting ? ' hot' : ''}${(state?.boost ?? 100) >= 99 && !state?.boosting ? ' full' : ''}`} role="progressbar" aria-label={`Nitro ${state?.boost ?? 100} percent`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={state?.boost ?? 100}>
+            <span className="nitro-label" aria-hidden="true">⚡ NITRO</span>
+            <div className="nitro-track" aria-hidden="true"><i style={{ width: `${state?.boost ?? 100}%` }} /></div>
+            <span className="nitro-pct" aria-hidden="true">{state?.boosting ? 'BOOST!' : `${state?.boost ?? 100}%`}</span>
+          </div>
+        )}
         {state?.mode === 'table'
           ? <TableTennisControls disabled={!active} onSwing={shot => engine.current?.tableSwing(shot)} />
           : state?.mode === 'basket'
           ? <BasketballControls disabled={!active} pumping={state?.basket?.pumping ?? false} onTap={() => engine.current?.basketTap()} />
-          : <WorldControls disabled={!active} driving={state?.driving ?? false} speed={state?.car.speed ?? 0} wiperMode={state?.wiperMode ?? 'auto'} onStick={(x, y) => engine.current?.joystick(x, y)} onInput={(action, down, source) => engine.current?.input(action, down, source)} onWipers={() => { engine.current?.cycleWipers(); focus(); }} />}
+          : <WorldControls disabled={!active} driving={state?.driving ?? false} speed={state?.car.speed ?? 0} wiperMode={state?.wiperMode ?? 'auto'} boost={state?.boost ?? 100} boosting={state?.boosting ?? false} racing={state?.boostEnabled ?? false} onStick={(x, y) => engine.current?.joystick(x, y)} onInput={(action, down, source) => engine.current?.input(action, down, source)} onWipers={() => { engine.current?.cycleWipers(); focus(); }} />}
       </>}
       {state?.paused && !mapOpen && !physicsOpen && !menuOpen && <div className="pause-cover"><div><p className="eyebrow">THE CITY CAN WAIT</p><h2>A moment to yourself.</h2><button className="primary-button" onClick={() => { engine.current?.togglePause(); focus(); }}>KEEP EXPLORING <span>→</span></button></div></div>}
       {mapOpen && <div className="map-cover"><div className="map-sheet" role="dialog" aria-labelledby="map-title">

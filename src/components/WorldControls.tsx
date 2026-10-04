@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type PointerEvent } from 'react';
 import type { WiperMode, WorldAction } from '../world/Simulation';
 
-interface Props { disabled: boolean; driving: boolean; speed: number; wiperMode: WiperMode; onStick: (x: number, y: number) => void; onInput: (action: WorldAction, down: boolean, source: string) => void; onWipers: () => void }
-export function WorldControls({ disabled, driving, speed, wiperMode, onStick, onInput, onWipers }: Props) {
+interface Props { disabled: boolean; driving: boolean; speed: number; wiperMode: WiperMode; boost: number; boosting: boolean; racing: boolean; onStick: (x: number, y: number) => void; onInput: (action: WorldAction, down: boolean, source: string) => void; onWipers: () => void }
+export function WorldControls({ disabled, driving, speed, wiperMode, boost, boosting, racing, onStick, onInput, onWipers }: Props) {
   const pointer = useRef<number | null>(null); const [stick, setStick] = useState({ x: 0, y: 0 });
   const callbacks = useRef({ onStick, onInput }); callbacks.current = { onStick, onInput };
   const sources = useRef(new Map<string, WorldAction>());
@@ -65,7 +65,18 @@ export function WorldControls({ disabled, driving, speed, wiperMode, onStick, on
   };
   if (driving) return <div className={`world-controls driving-controls ${disabled ? 'inactive' : ''}`}>
     <div className="drive-steering">{driveButton('left', '◀', 'LEFT', 'Steer left')}{driveButton('right', '▶', 'RIGHT', 'Steer right')}</div>
-    <div className="drive-pedals">{driveButton('back', '▼', 'BRAKE', 'Brake')}{driveButton('forward', '▲', 'GAS', 'Gas')}
+    <div className="drive-pedals">
+      {racing && <div className="boost-wrap">
+        <div className="boost-meter" role="progressbar" aria-label={`Boost ${Math.round(boost)} percent`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(boost)}>
+          <i style={{ width: `${Math.round(boost)}%` }} className={boosting ? 'hot' : ''} />
+        </div>
+        <button className={`drive-pad boost-pad${boosting ? ' on' : ''}`} disabled={disabled || boost <= 1} aria-label="Nitro boost (hold)"
+          onContextMenu={event => event.preventDefault()}
+          onPointerDown={event => pressDrive(event, 'sprint')}
+          onPointerUp={releaseDrive} onPointerCancel={releaseDrive} onLostPointerCapture={releaseDrive}>
+          <span className="drive-arrow" aria-hidden="true">⚡</span><small>{boosting ? 'BOOST!' : `BOOST ${Math.round(boost)}%`}</small></button>
+      </div>}
+      {driveButton('back', '▼', 'BRAKE', 'Brake')}{driveButton('forward', '▲', 'GAS', 'Gas')}
       <button className="drive-pad" disabled={disabled} aria-label="Honk horn"
         onContextMenu={event => event.preventDefault()}
         onPointerDown={event => { if (!disabled) { event.preventDefault(); onInput('horn', true, `pad:${event.pointerId}`); } }}

@@ -45,7 +45,7 @@ describe('grand circuit track', () => {
     // Positioned on main straight heading toward Turn 1 (76, 76)
     const nav1 = nextTurn(0, 76);
     expect(nav1.turn.name).toBe('TURN 1');
-    expect(nav1.turn.dir).toBe('right');
+    expect(nav1.turn.dir).toBe('left');
     expect(nav1.dist).toBeCloseTo(76, 1);
     expect(nav1.isApproaching).toBe(true);
 
@@ -56,7 +56,7 @@ describe('grand circuit track', () => {
     // Entering the South highway toward Turn 5 (-136, -136)
     const nav5 = nextTurn(0, -136);
     expect(nav5.turn.name).toBe('TURN 5');
-    expect(nav5.turn.dir).toBe('right');
+    expect(nav5.turn.dir).toBe('left');
     expect(nav5.dist).toBeCloseTo(136, 1);
   });
 });

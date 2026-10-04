@@ -260,12 +260,12 @@ export class RaceRoute {
 
     // 6 strategic roadblock barricade placements at closed-off intersections
     const barricades: { x: number; z: number; yaw: number; mat: THREE.Material }[] = [
-      { x: 92, z: 76, yaw: -Math.PI / 2, mat: rightMat },    // Turn 1 (East blocked -> drift South)
-      { x: 76, z: -92, yaw: 0, mat: leftMat },              // Turn 2 (South blocked -> drift East)
-      { x: 152, z: -76, yaw: -Math.PI / 2, mat: rightMat },  // Turn 3 (East blocked -> drift South)
-      { x: 136, z: -152, yaw: 0, mat: rightMat },           // Turn 4 (South blocked -> drift West)
-      { x: -152, z: -136, yaw: Math.PI / 2, mat: rightMat }, // Turn 5 (West blocked -> drift North)
-      { x: -136, z: 92, yaw: Math.PI, mat: rightMat },       // Turn 6 (North blocked -> drift East)
+      { x: 92, z: 76, yaw: -Math.PI / 2, mat: leftMat },    // Turn 1 (East blocked -> drift North/left)
+      { x: 76, z: -92, yaw: 0, mat: rightMat },              // Turn 2 (North blocked -> drift East/right)
+      { x: 152, z: -76, yaw: -Math.PI / 2, mat: leftMat },  // Turn 3 (East blocked -> drift North/left)
+      { x: 136, z: -152, yaw: 0, mat: leftMat },           // Turn 4 (North blocked -> drift West/left)
+      { x: -152, z: -136, yaw: Math.PI / 2, mat: leftMat }, // Turn 5 (West blocked -> drift South/left)
+      { x: -136, z: 92, yaw: Math.PI, mat: leftMat },       // Turn 6 (South blocked -> drift East/left)
     ];
 
     const baseGeo = new THREE.BoxGeometry(16.2, 0.4, 0.6);

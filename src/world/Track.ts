@@ -144,12 +144,12 @@ export interface RaceTurn {
 }
 
 export const RACE_TURNS: RaceTurn[] = [
-  { name: 'TURN 1', x: 76, z: 76, dir: 'right', label: 'HARD RIGHT', sub: 'EAST AVENUE DRIFT' },
-  { name: 'TURN 2', x: 76, z: -76, dir: 'left', label: 'SHARP LEFT', sub: 'HARBOR DOCKS ENTRY' },
-  { name: 'TURN 3', x: 136, z: -76, dir: 'right', label: 'RIGHT', sub: 'WATERFRONT SPRINT' },
-  { name: 'TURN 4', x: 136, z: -136, dir: 'right', label: 'HARD RIGHT', sub: 'SOUTH HIGHWAY' },
-  { name: 'TURN 5', x: -136, z: -136, dir: 'right', label: 'HARD RIGHT', sub: 'WEST BOULEVARD' },
-  { name: 'TURN 6', x: -136, z: 76, dir: 'right', label: 'FINAL CORNER', sub: 'MAIN STRAIGHT' },
+  { name: 'TURN 1', x: 76, z: 76, dir: 'left', label: 'HARD LEFT', sub: 'EAST AVENUE DRIFT' },
+  { name: 'TURN 2', x: 76, z: -76, dir: 'right', label: 'SHARP RIGHT', sub: 'HARBOR DOCKS ENTRY' },
+  { name: 'TURN 3', x: 136, z: -76, dir: 'left', label: 'LEFT', sub: 'WATERFRONT SPRINT' },
+  { name: 'TURN 4', x: 136, z: -136, dir: 'left', label: 'HARD LEFT', sub: 'SOUTH HIGHWAY' },
+  { name: 'TURN 5', x: -136, z: -136, dir: 'left', label: 'HARD LEFT', sub: 'WEST BOULEVARD' },
+  { name: 'TURN 6', x: -136, z: 76, dir: 'left', label: 'FINAL CORNER', sub: 'MAIN STRAIGHT' },
 ];
 
 /** Fast & Furious upcoming turn calculation along the Grand Circuit. */

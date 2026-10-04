@@ -380,6 +380,31 @@ kbd { font: inherit; border: 1px solid var(--line); padding: 2px 4px; border-rad
 .drive-pad:active { transform: translateY(2px); background: var(--line); }
 .drive-pad:disabled { opacity: .4; }
 .drive-pad.on { outline: 2px solid var(--ink); outline-offset: -2px; }
+/* ── Nitro boost (racing only, bottom — flat theme HUD, no neon) ── */
+.boost-wrap { display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
+.boost-meter { height: 8px; min-width: 92px; border: 1px solid var(--line); border-radius: 4px; background: var(--pad); overflow: hidden; }
+.boost-meter i { display: block; height: 100%; width: 100%; background: var(--ink); transition: width .12s linear; }
+.drive-pad.boost-pad.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); outline: none; }
+/* Bottom nitro fill: same card language as hud-speed / drive pads. */
+.nitro-bottom { position: absolute; left: 50%; transform: translateX(-50%); bottom: 172px; z-index: 6; display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; pointer-events: none; }
+.nitro-label { font-size: 8px; font-weight: 700; letter-spacing: 1.5px; color: var(--muted); white-space: nowrap; }
+.nitro-track { width: min(200px, 36vw); height: 8px; border-radius: 4px; background: var(--pad); border: 1px solid var(--line); overflow: hidden; }
+.nitro-track i { display: block; height: 100%; background: var(--ink); transition: width .12s linear; }
+.nitro-pct { font-size: 9px; font-weight: 700; letter-spacing: .5px; color: var(--ink); min-width: 44px; text-align: right; }
+.nitro-bottom.hot { border-color: var(--ink); border-width: 2px; }
+.nitro-bottom.full .nitro-label { color: var(--ink); }
+@media (hover: hover) and (pointer: fine) {
+  .nitro-bottom { bottom: 26px; }
+}
+@media (max-width: 640px) {
+  .nitro-bottom { bottom: 148px; padding: 6px 10px; gap: 8px; }
+  .nitro-track { width: 34vw; }
+  .nitro-label, .nitro-pct { font-size: 8px; }
+  .nitro-pct { min-width: 40px; }
+}
+@media (orientation: landscape) and (max-height: 600px) {
+  .nitro-bottom { bottom: 96px; padding: 5px 10px; }
+}
 .driving-readout { position: absolute; top: 72px; left: 22px; display: grid; gap: 5px; padding: 12px; background: var(--surface); border: 1px solid var(--line); font-size: 11px; }
 .driving-readout button { padding: 7px; cursor: pointer; background: var(--surface); color: inherit; border: 1px solid var(--line); }
 .driving-readout small { font-size: 8px; color: var(--muted); }
