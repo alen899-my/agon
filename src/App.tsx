@@ -1,5 +1,7 @@
 import { readLookSettings } from './game/CameraInput';
 import { VEHICLES } from './world/Vehicles';
+import { GUNS } from './world/Guns';
+import { WeaponDock } from './components/WeaponDock';
 import { ApiRequestError, createRoom as apiCreateRoom, joinRoom as apiJoinRoom, inviteCodeFromUrl, inviteLink, leaveRoom as apiLeaveRoom, login as apiLogin, me as apiMe, type RoomVisibility } from './api/client';
 import { EntryScreen, type CreatedServer, type EntryTab } from './components/EntryScreen';
 import { loadSession, saveSession, type Session } from './api/session';
@@ -74,6 +76,27 @@ export default function App() {
   const [raceTab, setRaceTab] = useState<'solo' | 'multi'>('solo');
   const [raceLaps, setRaceLaps] = useState(3);
   const [raceCar, setRaceCar] = useState<VehicleKind>('super');
+  const [gunHint, setGunHint] = useState('');
+  const gunHintTimer = useRef(0);
+  const flashGunHint = (msg: string) => {
+    setGunHint(msg);
+    window.clearTimeout(gunHintTimer.current);
+    gunHintTimer.current = window.setTimeout(() => setGunHint(''), 2200);
+  };
+  const [gunIntroOff, setGunIntroOff] = useState(false);
+  const dismissGunIntro = () => {
+    setGunIntroOff(true);
+    try { localStorage.setItem('agon-gun-hint', '1'); } catch { /* Optional storage. */ }
+  };
+  const showGunIntro = (() => {
+    if (gunIntroOff || state?.mode !== 'roam' || state?.driving || state?.armed) return false;
+    if (state?.phase !== 'playing' || state?.paused) return false;
+    try { if (localStorage.getItem('agon-gun-hint') === '1') return false; } catch { /* Optional storage. */ }
+    return true;
+  })();
+  const gunIntroTouch = (() => {
+    try { return !matchMedia('(hover: hover) and (pointer: fine)').matches; } catch { return false; }
+  })();
   const pendingToken = useRef<Session | null>(null);
   const entryLock = useRef(false);
   const restoreTried = useRef(false);
@@ -85,6 +108,11 @@ export default function App() {
     const full = () => setFullscreen(Boolean(document.fullscreenElement));
     media.addEventListener('change', rotate); document.addEventListener('fullscreenchange', full);
     return () => { media.removeEventListener('change', rotate); document.removeEventListener('fullscreenchange', full); };
+  }, []);
+  useEffect(() => {
+    const onGunHint = (e: Event) => flashGunHint((e as CustomEvent<string>).detail || '');
+    window.addEventListener('agon:gunhint', onGunHint);
+    return () => window.removeEventListener('agon:gunhint', onGunHint);
   }, []);
   useEffect(() => {
     const dark = theme === 'dark';
@@ -381,6 +409,21 @@ export default function App() {
         />
       )}
       <div className="canvas-corner">
+        {!ready && state?.mode === 'roam' && !state?.driving && (
+          <WeaponDock
+            armed={state?.armed ?? false}
+            gunIndex={state?.gunIndex ?? 0}
+            mag={state?.mag ?? 0}
+            reloading={state?.reloading ?? false}
+            reloadT={state?.reloadT ?? 0}
+            reloadDur={state?.reloadDur ?? 1}
+            disabled={!active}
+            onPrev={() => { const i = state?.gunIndex ?? 0; engine.current?.selectGun(state?.armed ? i - 1 : GUNS.length - 1); focus(); }}
+            onNext={() => { const i = state?.gunIndex ?? 0; engine.current?.selectGun(state?.armed ? i + 1 : 0); focus(); }}
+            onArm={() => { engine.current?.cycleGun(); focus(); }}
+            onDisarm={() => { engine.current?.disarm(); focus(); }}
+          />
+        )}
         <button className="control" onClick={enterFullscreen} aria-label={fullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}>⛶</button>
         <button className="control" onClick={() => toggleMenu(true)} aria-label="Open menu" aria-expanded={menuOpen}>☰</button>
       </div>
@@ -426,6 +469,46 @@ export default function App() {
           {state?.driving && <div className="hud-speed" aria-label="Speed"><b>{state?.speed ?? 0}<small>KM/H</small></b><span>{VEHICLES[state.vehicleKind].name} · {state.acceleration.toFixed(1)} m/s^2{(state?.damage ?? 0) > 0 ? ` · DMG ${state?.damage}%` : ''}</span><button className="hud-cycle" disabled={!active || Math.abs(state?.car.speed ?? 0) > 0.2} onClick={() => { engine.current?.cycleVehicle(); focus(); }} aria-label="Next vehicle">⇄</button></div>}
         </div>
         <button className="hud-map-br" onClick={toggleMap} aria-label="Open district map"><DistrictMap state={state} theme={theme} raceActive={engine.current?.raceGuidanceActive ?? false} /></button>
+        {state?.mode === 'roam' && !state?.driving && (
+          <div className={`hud-health${(state?.hp ?? 100) <= 30 ? ' low' : ''}`} role="status" aria-label={`Health ${state?.hp ?? 100} of 100`}>
+            <span aria-hidden="true">♥</span><b>{state?.hp ?? 100}</b>
+          </div>
+        )}
+        {state?.armed && !state?.driving && state?.mode === 'roam' && (
+          <div
+            className="aim-crosshair"
+            aria-hidden="true"
+            style={state.view === 'third' ? {
+              left: `${(state.aimScreenX ?? 0.5) * 100}%`,
+              top: `${(state.aimScreenY ?? 0.5) * 100}%`,
+            } : undefined}
+          >
+            <span className={state != null && state.hitSeq > 0 && state.time - state.hitAt < 0.3 ? (state.hitKill ? 'hit kill' : 'hit') : ''}>＋</span>
+          </div>
+        )}
+
+        {state?.aiming && !state?.driving && state?.mode === 'roam' && (GUNS[state?.gunIndex ?? 0]?.scoped) && (
+          <div className="scope-overlay" aria-hidden="true">
+            <div className="scope-ring" />
+            <div className="scope-cross-h" />
+            <div className="scope-cross-v" />
+            <div className="scope-mils"><i /><i /><i /><i /></div>
+          </div>
+        )}
+        {gunHint && <div className="gun-hint" role="status">{gunHint}</div>}
+        {showGunIntro && (
+          <div className="gun-intro" role="status">
+            <b>🔫 ARM UP</b>
+            <span>{gunIntroTouch ? 'Tap the weapon dock to arm · FIRE to shoot · AIM to steady' : 'Press G to arm · LMB fire · RMB locks scope · R reload · 1-0 pick'}</span>
+            <button className="control" onClick={dismissGunIntro} aria-label="Dismiss weapon hint">GOT IT</button>
+          </div>
+        )}
+        {state?.dead && (
+          <div className="wasted-cover" role="alert" aria-label="Wasted">
+            <h2>WASTED</h2>
+            <p>respawning in {Math.ceil(state?.wastedIn ?? 0)}…</p>
+          </div>
+        )}
         {state?.view === 'first' && <div className="crosshair" aria-hidden="true">+</div>}
         {state != null && state.pedBloodSeq > 0 && state.time - state.pedBloodAt < 1.5 &&
           <div key={state.pedBloodSeq} className="blood-splash" aria-hidden="true"><div className="blood-splash-drip" /></div>}
@@ -496,7 +579,7 @@ export default function App() {
           ? <TableTennisControls disabled={!active} onSwing={shot => engine.current?.tableSwing(shot)} />
           : state?.mode === 'basket'
           ? <BasketballControls disabled={!active} pumping={state?.basket?.pumping ?? false} onTap={() => engine.current?.basketTap()} />
-          : <WorldControls disabled={!active} driving={state?.driving ?? false} speed={state?.car.speed ?? 0} wiperMode={state?.wiperMode ?? 'auto'} boost={state?.boost ?? 100} boosting={state?.boosting ?? false} racing={state?.boostEnabled ?? false} onStick={(x, y) => engine.current?.joystick(x, y)} onInput={(action, down, source) => engine.current?.input(action, down, source)} onWipers={() => { engine.current?.cycleWipers(); focus(); }} />}
+          : <WorldControls disabled={!active} driving={state?.driving ?? false} speed={state?.car.speed ?? 0} wiperMode={state?.wiperMode ?? 'auto'} boost={state?.boost ?? 100} boosting={state?.boosting ?? false} racing={state?.boostEnabled ?? false} armed={state?.armed ?? false} aiming={state?.aiming ?? false} onStick={(x, y) => engine.current?.joystick(x, y)} onInput={(action, down, source) => engine.current?.input(action, down, source)} onWipers={() => { engine.current?.cycleWipers(); focus(); }} onReload={() => { engine.current?.reloadGun(); focus(); }} onArm={() => { engine.current?.cycleGun(); focus(); }} />}
       </>}
       {state?.paused && !mapOpen && !physicsOpen && !menuOpen && <div className="pause-cover"><div><p className="eyebrow">THE CITY CAN WAIT</p><h2>A moment to yourself.</h2><button className="primary-button" onClick={() => { engine.current?.togglePause(); focus(); }}>KEEP EXPLORING <span>→</span></button></div></div>}
       {mapOpen && <div className="map-cover"><div className="map-sheet" role="dialog" aria-labelledby="map-title">

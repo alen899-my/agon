@@ -13,6 +13,14 @@ export function WorldViewport({ engineRef, onSnapshot, onMap, theme, weather, se
   const props = useRef({ onSnapshot, onMap, theme, quality, portrait, blocked, onDismissOverlay, lookSettings }); props.current = { onSnapshot, onMap, theme, quality, portrait, blocked, onDismissOverlay, lookSettings };
   const cameraInput = useRef<CameraInput | null>(null);
   const [lookStatus, setLookStatus] = useState<LookStatus>('free');
+  const lockedRef = useRef(false);
+  const lastHintAt = useRef(0);
+  const hint = (msg: string) => {
+    const now = performance.now();
+    if (now - lastHintAt.current < 3000) return;
+    lastHintAt.current = now;
+    window.dispatchEvent(new CustomEvent<string>('agon:gunhint', { detail: msg }));
+  };
   const [error, setError] = useState('');
   useEffect(() => {
     const element = canvas.current!;
@@ -29,7 +37,11 @@ export function WorldViewport({ engineRef, onSnapshot, onMap, theme, weather, se
     const look = new CameraInput(element, {
       enabled: () => engine.simulation.active && engine.simulation.mode === 'roam' && !props.current.blocked && !props.current.portrait && !document.hidden,
       settings: () => props.current.lookSettings,
-      look: (dx, dy) => engine.look(dx, dy), pause, status: setLookStatus,
+      look: (dx, dy) => engine.look(dx, dy), pause, status: (s) => {
+        lockedRef.current = s === 'locked';
+        setLookStatus(s);
+        if (s !== 'locked') { engine.input('fire', false, 'mouse'); engine.input('aim', false, 'mouse'); engine.input('aim', false, 'mouse-aim'); }
+      },
     });
     cameraInput.current = look;
     const visibility = () => { if (document.hidden) pause(); engine.setSuspended(document.hidden || props.current.portrait || props.current.blocked); look.refresh(); };
@@ -48,6 +60,15 @@ export function WorldViewport({ engineRef, onSnapshot, onMap, theme, weather, se
         if (event.code === 'KeyN') engine.cycleVehicle();
         if (event.code === 'KeyT') engine.cycleWipers();
         if (event.code === 'KeyV') engine.toggleView();
+        if (event.code === 'KeyG') {
+          if (engine.simulation.driving) hint('EXIT VEHICLE TO ARM UP');
+          else engine.cycleGun();
+        }
+        if (event.code === 'KeyR') { if (engine.simulation.mode === 'table') engine.rematch(); else if (engine.simulation.mode === 'basket') engine.resetBasket(); else engine.reloadGun(); }
+        if (event.code.startsWith('Digit')) {
+          const n = Number(event.code.slice(5));
+          if (Number.isInteger(n)) engine.selectGun(n === 0 ? 9 : n - 1);
+        }
         if (event.code === 'KeyE') { if (engine.simulation.mode === 'table') engine.tableSwing('drive'); else if (engine.simulation.mode === 'roam') engine.interact(); }
         if (event.code === 'KeyX') { if (engine.simulation.mode === 'table') engine.exitTable(); else if (engine.simulation.mode === 'basket') engine.exitBasket(); }
         if (event.code === 'KeyR') { if (engine.simulation.mode === 'table') engine.rematch(); else if (engine.simulation.mode === 'basket') engine.resetBasket(); }
@@ -59,6 +80,36 @@ export function WorldViewport({ engineRef, onSnapshot, onMap, theme, weather, se
     };
     const keyup = (event: KeyboardEvent) => { if (KEYS[event.code]) engine.input(KEYS[event.code], false, event.code); };
     window.addEventListener('keydown', keydown); window.addEventListener('keyup', keyup);
+    // Combat mouse: left-click fires (only once pointer-locked, so the first
+    // click still captures the mouse for look), right-hold aims.
+    const canCombat = () => {
+      const sim = engine.simulation;
+      return lockedRef.current && sim.active && sim.mode === 'roam' && !sim.driving && !sim.dead && sim.armed && !props.current.blocked;
+    };
+    // Scope lock (PUBG style): right-click toggles aim and it stays locked
+    // until right-clicked again — same as the touch AIM button.
+    const canAimLock = () => {
+      const sim = engine.simulation;
+      return lockedRef.current && sim.active && sim.mode === 'roam' && !sim.driving && !sim.dead && !props.current.blocked;
+    };
+    const mousedown = (event: MouseEvent) => {
+      if (props.current.blocked || props.current.portrait || document.hidden) return;
+      if ((event.target as HTMLElement).closest('button')) return;
+      if (event.button === 0) {
+        if (canCombat()) engine.input('fire', true, 'mouse');
+        else {
+          const sim = engine.simulation;
+          if (lockedRef.current && sim.active && sim.mode === 'roam' && !sim.driving && !sim.dead && !sim.armed) hint('PRESS G TO ARM UP FIRST');
+        }
+      }
+      if (event.button === 2 && canAimLock()) engine.input('aim', !engine.simulation.aiming, 'mouse-aim');
+    };
+    const mouseup = (event: MouseEvent) => {
+      if (event.button === 0) engine.input('fire', false, 'mouse');
+    };
+    const contextmenu = (event: Event) => { if (lockedRef.current) event.preventDefault(); };
+    element.addEventListener('mousedown', mousedown); window.addEventListener('mouseup', mouseup);
+    element.addEventListener('contextmenu', contextmenu);
     const lost = (event: Event) => { event.preventDefault(); engine.setSuspended(true); setError('The graphics context was lost. Reload the map to continue.'); };
     element.addEventListener('webglcontextlost', lost);
     visibility();
@@ -66,6 +117,8 @@ export function WorldViewport({ engineRef, onSnapshot, onMap, theme, weather, se
       observer.disconnect(); window.removeEventListener('resize', resize);
       document.removeEventListener('visibilitychange', visibility); window.removeEventListener('blur', blur);
       window.removeEventListener('keydown', keydown); window.removeEventListener('keyup', keyup);
+      window.removeEventListener('mouseup', mouseup);
+      element.removeEventListener('mousedown', mousedown); element.removeEventListener('contextmenu', contextmenu);
       look.destroy(); cameraInput.current = null;
       element.removeEventListener('webglcontextlost', lost); engine.destroy(); engineRef.current = null;
       (window as unknown as { __worldEngine?: WorldEngine }).__worldEngine = undefined;
@@ -77,7 +130,7 @@ export function WorldViewport({ engineRef, onSnapshot, onMap, theme, weather, se
   useEffect(() => engineRef.current?.setIntensityLevel(intensity), [intensity, engineRef]);
   useEffect(() => engineRef.current?.applyQuality(quality), [quality, engineRef]);
   useEffect(() => { engineRef.current?.setSuspended(document.hidden || portrait || blocked); cameraInput.current?.refresh(); }, [portrait, blocked, engineRef]);
-  return <><canvas ref={canvas} tabIndex={0} className="world-canvas" data-look-state={lookStatus} aria-label="3D neighborhood. WASD or arrows to move, click once to capture mouse or trackpad look, Escape to release, touch swipe to look, Q/C to turn camera, Space to jump or handbrake, V for cockpit, E to enter or steal any stopped car, N to cycle 16 stopped vehicles. Type your name on the intro screen to start." />
+  return <><canvas ref={canvas} tabIndex={0} className="world-canvas" data-look-state={lookStatus} aria-label="3D neighborhood. WASD or arrows to move, click once to capture mouse or trackpad look, Escape to release, touch swipe to look, Q/C to turn camera, Space to jump or handbrake, V for cockpit, E to enter or steal any stopped car, N to cycle 16 stopped vehicles. G to arm guns, left-click to fire, right-click to aim, R to reload, digits pick guns. Type your name on the intro screen to start." />
     
     
     {error && <div className="world-error" role="alert"><h2>Unable to render the map</h2><p>{error}</p><button className="primary-button" onClick={() => location.reload()}>RELOAD</button></div>}</>;

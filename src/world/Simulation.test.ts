@@ -195,7 +195,7 @@ describe('gta steal-any-vehicle', () => {
   it('rejects moving traffic but steals it once blocked and stopped', () => {
     const sim = running(); sim.peds = []; sim.parked = [];
     sim.car.x = 60; sim.car.z = 60; // your old ride is far — only the traffic counts
-    sim.traffic = [{ kind: 'sport', x: sim.x + 3, z: sim.z, yaw: 0, speed: 10, offset: 0, base: 10, steer: 0, wheelSpin: 0, braking: false, prevYaw: 0 }];
+    sim.traffic = [{ kind: 'sport', x: sim.x + 3, z: sim.z, yaw: 0, speed: 10, offset: 0, base: 10, steer: 0, wheelSpin: 0, braking: false, prevYaw: 0, hp: 100, burning: false, burnT: 0 }];
     expect(sim.interact()).toBe(false); // too fast — chase & stop first
     expect(sim.snapshot.enterHint).toMatch(/moving/i);
     sim.traffic[0].speed = 0;

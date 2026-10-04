@@ -1,16 +1,17 @@
 import { bodyContact, boundaryContact, circleContact, vehicleBody, type Body, type Contact } from './Collision';
 import { VEHICLES, VEHICLE_KINDS, type VehicleKind } from './Vehicles';
 import { WEATHER_GRIP, type Season, type Weather } from './Weather';
-import { GAME_CENTER, HOOP, PROMENADE, groundHeight, inPromenade, inWater, intersects, LIMIT, SOLIDS, PARKED_CARS, PLACES, PROPS, RACE_SHOW_CARS, TRAFFIC_ROUTE, circleHit, seeded, type Point } from './Map';
+import { GAME_CENTER, HOOP, PROMENADE, ROAD_HALF, groundHeight, inPromenade, inWater, intersects, LIMIT, onRoad, SOLIDS, PARKED_CARS, PLACES, PROPS, RACE_SHOW_CARS, TRAFFIC_ROUTE, circleHit, seeded, type Point } from './Map';
 import { TRACK_LENGTH } from './Track';
+import { GUNS } from './Guns';
 import { TableTennisSim, type TTShot, type TTSnapshot } from './TableTennis';
 import { BasketballSim, type BBSnapshot } from './Basketball';
 
-export type WorldAction = 'forward' | 'back' | 'left' | 'right' | 'sprint' | 'jump' | 'turnLeft' | 'turnRight' | 'handbrake' | 'signalLeft' | 'signalRight' | 'horn';
+export type WorldAction = 'forward' | 'back' | 'left' | 'right' | 'sprint' | 'jump' | 'turnLeft' | 'turnRight' | 'handbrake' | 'signalLeft' | 'signalRight' | 'horn' | 'aim' | 'fire';
 export type View = 'third' | 'first';
 export interface Impact { speed: number; with: string; at: number }
-export interface TrafficCar { kind: VehicleKind; x: number; z: number; yaw: number; speed: number; offset: number; base: number; steer: number; wheelSpin: number; braking: boolean; prevYaw: number }
-export interface ParkedVehicle { kind: VehicleKind; x: number; z: number; yaw: number }
+export interface TrafficCar { kind: VehicleKind; x: number; z: number; yaw: number; speed: number; offset: number; base: number; steer: number; wheelSpin: number; braking: boolean; prevYaw: number; hp: number; burning: boolean; burnT: number }
+export interface ParkedVehicle { kind: VehicleKind; x: number; z: number; yaw: number; hp?: number; burning?: boolean; burnT?: number }
 /** Map dot for a far-away room member (1 Hz, no full transform). */
 export interface RemoteDot { id: string; x: number; z: number; driving: boolean }
 export interface VehicleTarget { type: 'player' | 'parked' | 'traffic'; index: number; kind: VehicleKind; x: number; z: number; yaw: number; speed: number; dist: number; enterable: boolean; reason: string | null }
@@ -18,7 +19,15 @@ export interface Ped {
   x: number; z: number; yaw: number; route: Point[]; dist: number; speed: number; phase: number; seed: number; move: number; cur: number; scaredUntil: number;
   /** Ragdoll state — active while ped is tumbling after a vehicle hit. */
   ragdoll: boolean; ry: number; rvx: number; rvz: number; rvy: number; rpitch: number; rpitchRate: number; rollYaw: number;
+  /** Gunshot wounds: 100 fresh, dead at 0 (corpse never recovers). */
+  hp: number; dead: boolean;
 }
+/** One tracer + muzzle flash, drawn by the renderer for ~90ms. */
+export interface ShotFX { mx: number; my: number; mz: number; ex: number; ey: number; ez: number; born: number; cls: string }
+/** One explosion flash + shockwave, drawn ~0.6s. */
+export interface BoomFX { x: number; y: number; z: number; born: number }
+/** One burning vehicle (flame + smoke anchor). */
+export interface BurnerFX { x: number; y: number; z: number }
 export interface SnapshotCar { x: number; z: number; yaw: number; speed: number; steer: number; wheelSpin: number; braking: boolean }
 export type PlayMode = 'roam' | 'table' | 'basket';
 /** Wiper control: auto (rain-driven), forced on, or forced off. */
@@ -38,7 +47,7 @@ export interface WorldSnapshot {
   dots: RemoteDot[];
   stridePhase: number; moveBlend: number; airborne: boolean; landDip: number;
   traffic: (SnapshotCar)[];
-  peds: { x: number; z: number; yaw: number; phase: number; moving: number; ragdoll: boolean; ry: number; rpitch: number; rollYaw: number }[];
+  peds: { x: number; z: number; yaw: number; phase: number; moving: number; ragdoll: boolean; ry: number; rpitch: number; rollYaw: number; dead: boolean }[];
   mode: PlayMode; nearTable: boolean; nearHoop: boolean; table: TTSnapshot | null;
   tableFlags: { topspin: boolean; smash: boolean; netCord: boolean; edge: boolean };
   basket: BBSnapshot | null;
@@ -50,8 +59,63 @@ export interface WorldSnapshot {
   pedBloodSeq: number;
   /** Current world time (lets the HUD expire one-shot FX like the blood splash). */
   time: number;
+  // --- GTA combat: health, arsenal, fire, wrecks (all mirrored to the HUD) ---
+  hp: number; dead: boolean; wastedIn: number;
+  armed: boolean; aiming: boolean; gunIndex: number;
+  mag: number; magSize: number;
+  reloading: boolean; reloadT: number; reloadDur: number;
+  hitSeq: number; hitKill: boolean; hitAt: number;
+  shotSeq: number; shotCls: string;
+  drySeq: number; reloadSeq: number; explodeSeq: number;
+  hurtSeq: number; deathSeq: number;
+  shots: ShotFX[]; booms: BoomFX[];
+  burners: BurnerFX[];
+  carBurning: boolean; carWrecked: boolean;
+  /** Projected screen position (0..1) of the aiming point in the current camera frame.
+   *  Filled by WorldEngine each render; used to position the 3rd-person crosshair like PUBG. */
+  aimScreenX: number; aimScreenY: number;
 }
 const clamp = (n: number, low: number, high: number) => Math.max(low, Math.min(high, n));
+
+/** Ray vs axis-aligned rect: smallest t > 0.3 inside, else null. */
+function rayRect(ox: number, oz: number, dx: number, dz: number, cx: number, cz: number, hw: number, hl: number): number | null {
+  let tmin = 0.3, tmax = Infinity;
+  if (Math.abs(dx) < 1e-9) { if (Math.abs(ox - cx) > hw) return null; }
+  else {
+    let t1 = (cx - hw - ox) / dx, t2 = (cx + hw - ox) / dx;
+    if (t1 > t2) { const t = t1; t1 = t2; t2 = t; }
+    tmin = Math.max(tmin, t1); tmax = Math.min(tmax, t2);
+  }
+  if (Math.abs(dz) < 1e-9) { if (Math.abs(oz - cz) > hl) return null; }
+  else {
+    let t1 = (cz - hl - oz) / dz, t2 = (cz + hl - oz) / dz;
+    if (t1 > t2) { const t = t1; t1 = t2; t2 = t; }
+    tmin = Math.max(tmin, t1); tmax = Math.min(tmax, t2);
+  }
+  return tmin <= tmax ? tmin : null;
+}
+
+/** Ray vs yawed vehicle box (forward = (sin yaw, -cos yaw)). */
+function rayBox(ox: number, oz: number, dx: number, dz: number, cx: number, cz: number, hw: number, hl: number, yaw: number): number | null {
+  const fx = Math.sin(yaw), fz = -Math.cos(yaw);
+  const rx = Math.cos(yaw), rz = Math.sin(yaw);
+  const ex = ox - cx, ez = oz - cz;
+  // Local frame: u along right, v along forward.
+  const ou = ex * rx + ez * rz, ov = ex * fx + ez * fz;
+  const du = dx * rx + dz * rz, dv = dx * fx + dz * fz;
+  return rayRect(ou, ov, du, dv, 0, 0, hw, hl);
+}
+
+/** Ray vs ground circle (peds): smallest t > 0.2 inside, else null. */
+function rayCircle(ox: number, oz: number, dx: number, dz: number, cx: number, cz: number, r: number): number | null {
+  const ex = ox - cx, ez = oz - cz;
+  const b = ex * dx + ez * dz;
+  const c = ex * ex + ez * ez - r * r;
+  const disc = b * b - c;
+  if (disc < 0) return null;
+  const t = -b - Math.sqrt(disc);
+  return t > 0.2 ? t : null;
+}
 
 const PED_ROUTES: Point[][] = [];
 {
@@ -96,6 +160,36 @@ export class Simulation {
   carY = 0;
   /** Slope pitch under the car (radians, + climbing) for the body tilt. */
   carPitch = 0;
+  // --- GTA combat: health, arsenal, wrecks ---
+  /** Player health 0-100 (hearts + bar in the HUD). */
+  hp = 100;
+  dead = false;
+  private wastedAt = -999;
+  private lastHurtAt = -999;
+  private lastBloodFxAt = -999;
+  /** Arsenal: armed toggle, selected gun, magazine per gun (reserve infinite). */
+  armed = false;
+  gunIndex = 0;
+  mags: number[] = GUNS.map(g => g.mag);
+  aiming = false;
+  private fireTimer = 0;
+  private triggerEdge = false;
+  reloading = false;
+  private reloadT = 0;
+  private reloadDur = 0;
+  // FX + audio sequence counters (renderer plays sounds on change).
+  hitSeq = 0; hitKill = false; hitAt = -999;
+  shotSeq = 0; drySeq = 0; reloadSeq = 0; explodeSeq = 0; hurtSeq = 0; deathSeq = 0;
+  shots: ShotFX[] = [];
+  booms: BoomFX[] = [];
+  burners: BurnerFX[] = [];
+  /** Torched map parking spots (static collider + visuals both gone). */
+  private clearedStatic: { x: number; z: number }[] = [];
+  /** Player car burning fuse / burnt-out wreck state. */
+  carBurning = false;
+  private carBurnT = 0;
+  carWrecked = false;
+  private wreckT = 0;
   /** Every parked car in the world is stealable. Includes your previously driven cars.
    *  Slots mirror Map PARKED_CARS + RACE_SHOW_CARS (all clear of driving lines). */
   parked: ParkedVehicle[] = [
@@ -165,10 +259,10 @@ export class Simulation {
     const rng = seeded(9001);
     // A living street: 8 looping cars spread evenly over the Grand Circuit.
     const streetCast: VehicleKind[] = ['coupe', 'taxi', 'crossover', 'coach', 'track', 'raptor', 'patrol', 'wagon'];
-    for (let i = 0; i < 8; i++) this.traffic.push({ kind: streetCast[i % streetCast.length], ...routePoint(TRAFFIC_ROUTE, i * TRACK_LENGTH / 8 + 25), speed: 7, offset: i * TRACK_LENGTH / 8 + 25, base: 7, steer: 0, wheelSpin: 0, braking: false, prevYaw: 0 });
+    for (let i = 0; i < 8; i++) this.traffic.push({ kind: streetCast[i % streetCast.length], ...routePoint(TRAFFIC_ROUTE, i * TRACK_LENGTH / 8 + 25), speed: 7, offset: i * TRACK_LENGTH / 8 + 25, base: 7, steer: 0, wheelSpin: 0, braking: false, prevYaw: 0, hp: 100, burning: false, burnT: 0 });
     for (let i = 0; i < 16; i++) {
       const speed = 0.9 + rng() * 0.6;
-      this.peds.push({ x: 0, z: 0, yaw: 0, route: PED_ROUTES[i], dist: rng() * 240, speed, phase: rng() * 6.28, seed: rng(), move: 1, cur: speed, scaredUntil: 0, ragdoll: false, ry: 0, rvx: 0, rvz: 0, rvy: 0, rpitch: 0, rpitchRate: 0, rollYaw: 0 });
+      this.peds.push({ x: 0, z: 0, yaw: 0, route: PED_ROUTES[i], dist: rng() * 240, speed, phase: rng() * 6.28, seed: rng(), move: 1, cur: speed, scaredUntil: 0, ragdoll: false, ry: 0, rvx: 0, rvz: 0, rvy: 0, rpitch: 0, rpitchRate: 0, rollYaw: 0, hp: 100, dead: false });
     }
     this.syncCrowd(0);
   }
@@ -180,7 +274,7 @@ export class Simulation {
     // Your own ride keeps its bridge height: unreachable from far below/above.
     const ownHigh = Math.abs(this.carY - Math.max(0, groundHeight(this.x, this.z, this.y))) > 1.5;
     const pd = Math.hypot(this.x - this.car.x, this.z - this.car.z);
-    candidates.push({ type: 'player', index: -1, kind: this.vehicleKind, x: this.car.x, z: this.car.z, yaw: this.car.yaw, speed: Math.abs(this.car.speed), dist: pd, enterable: pd < R && !ownHigh, reason: ownHigh ? 'too high' : pd < R ? null : 'too far' });
+    candidates.push({ type: 'player', index: -1, kind: this.vehicleKind, x: this.car.x, z: this.car.z, yaw: this.car.yaw, speed: Math.abs(this.car.speed), dist: pd, enterable: pd < R && !ownHigh && !this.carWrecked, reason: this.carWrecked ? 'destroyed' : ownHigh ? 'too high' : pd < R ? null : 'too far' });
     this.parked.forEach((p, i) => {
       const d = Math.hypot(this.x - p.x, this.z - p.z);
       candidates.push({ type: 'parked', index: i, kind: p.kind, x: p.x, z: p.z, yaw: p.yaw, speed: 0, dist: d, enterable: d < R, reason: d < R ? null : 'too far' });
@@ -253,7 +347,7 @@ export class Simulation {
       if (d > bestDist) { bestDist = d; best = offset; }
     }
     const p = routePoint(TRAFFIC_ROUTE, best);
-    this.traffic.push({ kind, x: p.x, z: p.z, yaw: p.yaw, speed: 0, offset: best, base: 6 + (best % 3), steer: 0, wheelSpin: 0, braking: false, prevYaw: p.yaw });
+    this.traffic.push({ kind, x: p.x, z: p.z, yaw: p.yaw, speed: 0, offset: best, base: 6 + (best % 3), steer: 0, wheelSpin: 0, braking: false, prevYaw: p.yaw, hp: 100, burning: false, burnT: 0 });
   }
   /** Teleport to a race grid slot (keeps physics settled). */
   placeAt(x: number, z: number, yaw: number): void {
@@ -297,16 +391,30 @@ export class Simulation {
       dots: [],
       stridePhase: this.stride, moveBlend: this.moveBlend, airborne: this.y > 0.02, landDip: Math.max(0, Math.min(1, this.landDip)),
       traffic: this.traffic.map(t => ({ x: t.x, z: t.z, yaw: t.yaw, speed: t.speed, steer: t.steer, wheelSpin: t.wheelSpin, braking: t.braking })),
-      peds: this.peds.map(p => ({ x: p.x, z: p.z, yaw: p.yaw, phase: p.phase, moving: p.move, ragdoll: p.ragdoll, ry: p.ry, rpitch: p.rpitch, rollYaw: p.rollYaw })),
+      peds: this.peds.map(p => ({ x: p.x, z: p.z, yaw: p.yaw, phase: p.phase, moving: p.move, ragdoll: p.ragdoll, ry: p.ry, rpitch: p.rpitch, rollYaw: p.rollYaw, dead: p.dead })),
       pedBloodAt: this.pedBloodAt,
       pedBloodSeq: this.pedBloodSeq,
       time: this.time,
+      hp: Math.round(this.hp), dead: this.dead,
+      wastedIn: this.dead ? Math.max(0, 4 - (this.time - this.wastedAt)) : 0,
+      armed: this.armed, aiming: this.aiming, gunIndex: this.gunIndex,
+      mag: this.mags[this.gunIndex] ?? 0, magSize: GUNS[this.gunIndex].mag,
+      reloading: this.reloading, reloadT: this.reloadT, reloadDur: this.reloadDur,
+      hitSeq: this.hitSeq, hitKill: this.hitKill, hitAt: this.hitAt,
+      shotSeq: this.shotSeq, shotCls: this.shots.length > 0 ? this.shots[this.shots.length - 1].cls : '',
+      drySeq: this.drySeq, reloadSeq: this.reloadSeq, explodeSeq: this.explodeSeq,
+      hurtSeq: this.hurtSeq, deathSeq: this.deathSeq,
+      shots: this.shots.map(s => ({ ...s })),
+      booms: this.booms.map(b => ({ ...b })),
+      burners: this.burners.map(b => ({ ...b })),
+      carBurning: this.carBurning, carWrecked: this.carWrecked,
       mode: this.mode, nearTable: this.nearTable, nearHoop: this.nearHoop,
       table: this.mode === 'table' ? this.table.snapshot : null,
       tableFlags: { ...this.table.flags },
       basket: this.mode === 'basket' ? this.basket.snapshot : null,
       basketFlags: { played: this.basket.attempts > 0, swish: this.basket.swishes > 0, streak3: this.basket.best >= 3 },
-      blinker: this.blinker, blinkerManual: this.blinkerManual, nearArena: this.nearArena };
+      blinker: this.blinker, blinkerManual: this.blinkerManual, nearArena: this.nearArena,
+      aimScreenX: 0.5, aimScreenY: 0.5 };
   }
   begin(): void { this.phase = 'playing'; this.clearInput(); }
   /** Back to the entry screen (keeps world position; clears transient input). */
@@ -315,7 +423,9 @@ export class Simulation {
   setInput(action: WorldAction, down: boolean, source: string): void {
     if (!down) { this.keys.delete(source); return; }
     if (!this.active) return;
+    if (this.dead) return;
     if (action === 'jump' && !this.keys.has(source)) this.jumpPressed = true;
+    if (action === 'fire' && !this.keys.has(source)) this.triggerEdge = true;
     this.keys.set(source, action);
   }
   setStick(x: number, y: number): void {
@@ -325,19 +435,305 @@ export class Simulation {
   look(dx: number, dy: number): void {
     if (!this.active) return;
     this.lookUntil = this.time + 3;
-    this.yaw += dx * 0.004; this.pitch = clamp(this.pitch + dy * 0.003, -0.7, 0.85);
+    // ADS steadies the hands: slower look while aiming, slowest through glass.
+    let steady = 1;
+    if (this.armed && this.aiming && !this.driving) {
+      steady = GUNS[this.gunIndex]?.scoped ? 0.35 : 0.6;
+    }
+    this.yaw += dx * 0.004 * steady; this.pitch = clamp(this.pitch + dy * 0.003 * steady, -0.7, 0.85);
   }
   toggleView(): void { this.view = this.view === 'third' ? 'first' : 'third'; if (this.driving) { this.yaw = this.car.yaw; this.pitch = 0.08; } }
   togglePause(): void { if (this.phase === 'playing') { this.paused = !this.paused; this.clearInput(); } }
   cycleVehicle(): boolean {
-    if (!this.active || this.mode !== 'roam' || !this.driving || Math.abs(this.car.speed) > 0.2 || this.transition > 0) return false;
+    if (!this.active || this.dead || this.mode !== 'roam' || !this.driving || Math.abs(this.car.speed) > 0.2 || this.transition > 0) return false;
     const next = VEHICLE_KINDS[(VEHICLE_KINDS.indexOf(this.vehicleKind) + 1) % VEHICLE_KINDS.length];
     if (Math.abs(this.lateralSpeed) > 0.2 || this.contact(vehicleBody(this.car.x, this.car.z, this.car.yaw, next), undefined, false, this.carY)) return false;
     this.vehicleKind = next; this.lateralSpeed = 0; return true;
   }
   repair(): void { this.damage = 0; }
+
+  // ---------------- GTA combat: arsenal, wounds, wrecks ----------------
+  /** Cycle armed pistol → … → LMG → disarm (G key / GUN button). */
+  armCycle(): void {
+    if (!this.active || this.dead || this.mode !== 'roam') return;
+    if (!this.armed) { this.armed = true; this.gunIndex = 0; }
+    else {
+      this.gunIndex++;
+      if (this.gunIndex >= GUNS.length) { this.armed = false; this.gunIndex = 0; this.aiming = false; }
+    }
+    this.cancelReload();
+  }
+  /** Arm a specific gun directly (digit keys). */
+  selectGun(i: number): void {
+    if (!this.active || this.dead || this.mode !== 'roam') return;
+    this.armed = true;
+    this.gunIndex = ((i % GUNS.length) + GUNS.length) % GUNS.length;
+    this.cancelReload();
+  }
+  /** Put it away (weapon dock ✕ / cycling past the LMG). */
+  disarm(): void {
+    this.armed = false; this.aiming = false;
+    for (const [s, a] of this.keys) if (a === 'aim') this.keys.delete(s);
+    this.cancelReload();
+  }
+  /** Start a reload (R key / RELOAD button, or auto on empty trigger). */
+  startReload(): void {
+    if (!this.active || this.dead || !this.armed || this.reloading || this.driving || this.mode !== 'roam') return;
+    const gun = GUNS[this.gunIndex];
+    if (this.mags[this.gunIndex] >= gun.mag) return;
+    this.reloading = true; this.reloadT = gun.reload; this.reloadDur = gun.reload;
+    this.reloadSeq++;
+  }
+  private cancelReload(): void { this.reloading = false; this.reloadT = 0; }
+  /** Wound the player (crashes, falls, fire, blasts). Blood flashes at most 2×/s. */
+  hurtPlayer(amount: number, _cause: string, blood = true): void {
+    if (!this.active || this.dead || !(amount > 0)) return;
+    this.hp = Math.max(0, this.hp - amount);
+    this.lastHurtAt = this.time;
+    if (blood && this.time - this.lastBloodFxAt > 0.5) {
+      this.lastBloodFxAt = this.time;
+      this.pedBloodAt = this.time; this.pedBloodSeq += 1;
+    }
+    this.hurtSeq++;
+    if (this.hp <= 0) this.die();
+  }
+  private die(): void {
+    this.dead = true; this.wastedAt = this.time; this.deathSeq++;
+    this.aiming = false; this.cancelReload();
+    if (this.driving) {
+      this.driving = false; this.car.speed = 0;
+      this.x = this.car.x; this.z = this.car.z; this.y = this.carY; this.vy = 0;
+    }
+    this.clearInput();
+  }
+  /** GTA rules: keep your guns, wake up at the spawn with full health. */
+  private respawn(): void {
+    this.x = 12; this.z = 34; this.yaw = -0.25; this.facing = -0.25;
+    const g = Math.max(0, groundHeight(this.x, this.z, 0));
+    this.y = g; this.vy = 0;
+    this.hp = 100; this.dead = false;
+    this.clearInput();
+    this.previous = { x: this.x, z: this.z, y: this.y };
+  }
+  /** One trigger pull (semi) or interval tick (auto): pellets, falloff, FX. */
+  private fireBullet(): void {
+    const gun = GUNS[this.gunIndex];
+    this.mags[this.gunIndex]--;
+    this.fireTimer = gun.interval;
+    this.shotSeq++;
+    // Hip-fire magnetism: snap to the closest target inside a narrow cone.
+    let yaw = this.yaw;
+    if (!this.aiming) {
+      const snap = this.aimSnap(yaw, gun.range);
+      if (snap !== null) yaw = snap;
+    }
+    this.facing = yaw;
+    const moving = Math.hypot(this.pvx, this.pvz) > 1;
+    const spreadDeg = (this.aiming ? gun.spreadAim : gun.spreadHip) + (moving ? 1.5 : 0);
+    const ox = this.x, oy = this.y + 1.55, oz = this.z;
+    const mzl = gun.len / 2 + 0.5;
+    for (let p = 0; p < gun.pellets; p++) {
+      const a = yaw + (Math.random() * 2 - 1) * spreadDeg * Math.PI / 180;
+      const dx = Math.sin(a), dz = -Math.cos(a);
+      const mx = ox + dx * mzl, mz = oz + dz * mzl;
+      let range = gun.range;
+      const wall = this.rayWalls(ox, oz, dx, dz, range);
+      if (wall !== null) range = wall;
+      let ex = ox + dx * range, ez = oz + dz * range;
+      const hit = this.rayTargets(ox, oz, dx, dz, range);
+      if (hit) {
+        const fall = hit.t > gun.range * 0.6 ? 0.5 : 1;
+        if (hit.kind === 'ped') this.pedHit(hit.ped, gun.damage * fall, dx, dz);
+        else this.damageVehicle(hit, gun.damage * gun.vehMult * fall);
+        ex = ox + dx * hit.t; ez = oz + dz * hit.t;
+      }
+      this.shots.push({ mx, my: oy, mz, ex, ey: oy - 0.25, ez, born: this.time, cls: gun.cls });
+    }
+    this.pitch = clamp(this.pitch + gun.kick, -0.7, 0.85);
+  }
+  /** Closest shootable inside a 14° cone (hip-fire assist). */
+  private aimSnap(yaw: number, range: number): number | null {
+    const fx = Math.sin(yaw), fz = -Math.cos(yaw);
+    let best: number | null = null, bestScore = 14 * Math.PI / 180;
+    const consider = (tx: number, tz: number) => {
+      const dx = tx - this.x, dz = tz - this.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist < 1 || dist > range) return;
+      const ang = Math.acos(clamp((dx * fx + dz * fz) / dist, -1, 1));
+      if (ang < bestScore) { bestScore = ang; best = Math.atan2(dx, -dz); }
+    };
+    for (const p of this.peds) if (!p.dead) consider(p.x, p.z);
+    for (const t of this.traffic) consider(t.x, t.z);
+    for (const p of this.parked) consider(p.x, p.z);
+    if (!this.carWrecked) consider(this.car.x, this.car.z);
+    return best;
+  }
+  /** Nearest bullet impact: buildings block, then peds and vehicles. */
+  private rayTargets(ox: number, oz: number, dx: number, dz: number, range: number):
+    { kind: 'ped'; ped: Ped; t: number } | { kind: 'traffic'; index: number; t: number } | { kind: 'parked'; index: number; t: number } | { kind: 'player'; t: number } | null {
+    let best: { kind: 'ped'; ped: Ped; t: number } | { kind: 'traffic'; index: number; t: number } | { kind: 'parked'; index: number; t: number } | { kind: 'player'; t: number } | null = null;
+    const closer = (t: number | null): boolean => t !== null && t < range && (!best || t < best.t);
+    for (const ped of this.peds) {
+      if (ped.dead) continue;
+      const t = rayCircle(ox, oz, dx, dz, ped.x, ped.z, 0.6);
+      if (closer(t)) best = { kind: 'ped', ped, t: t! };
+    }
+    this.traffic.forEach((t, i) => {
+      const b = vehicleBody(t.x, t.z, t.yaw, t.kind);
+      const ht = rayBox(ox, oz, dx, dz, b.x, b.z, b.halfWidth, b.halfLength, b.yaw);
+      if (closer(ht)) best = { kind: 'traffic', index: i, t: ht! };
+    });
+    this.parked.forEach((p, i) => {
+      const b = vehicleBody(p.x, p.z, p.yaw, p.kind);
+      const ht = rayBox(ox, oz, dx, dz, b.x, b.z, b.halfWidth, b.halfLength, b.yaw);
+      if (closer(ht)) best = { kind: 'parked', index: i, t: ht! };
+    });
+    if (!this.carWrecked) {
+      const b = vehicleBody(this.car.x, this.car.z, this.car.yaw, this.vehicleKind);
+      const ht = rayBox(ox, oz, dx, dz, b.x, b.z, b.halfWidth, b.halfLength, b.yaw);
+      if (closer(ht)) best = { kind: 'player', t: ht! };
+    }
+    return best;
+  }
+  /** Buildings swallow bullets (also the bridge deck sides — thin, ignored). */
+  private rayWalls(ox: number, oz: number, dx: number, dz: number, range: number): number | null {
+    let best: number | null = null;
+    for (const box of SOLIDS) {
+      const t = rayBox(ox, oz, dx, dz, box.x, box.z, box.w / 2, box.d / 2, 0);
+      if (t !== null && t < range && (best === null || t < best)) best = t;
+    }
+    return best;
+  }
+  /** A bullet found flesh: wound, knockdown, blood — death at 0 hp. */
+  private pedHit(ped: Ped, dmg: number, kdx: number, kdz: number): void {
+    if (ped.dead || dmg <= 0) return;
+    ped.hp -= dmg;
+    this.pedBloodAt = this.time; this.pedBloodSeq += 1;
+    ped.ragdoll = true; ped.ry = Math.max(ped.ry, 0.1);
+    ped.rvx = kdx * 5; ped.rvz = kdz * 5; ped.rvy = 3.2;
+    ped.rpitch = 0; ped.rpitchRate = -5; ped.rollYaw = ped.yaw;
+    ped.scaredUntil = this.time + 8;
+    if (ped.hp <= 0) ped.dead = true;
+    this.hitSeq++; this.hitKill = ped.dead; this.hitAt = this.time;
+  }
+  /** A bullet found bodywork: shared road to the bonfire for every vehicle. */
+  private damageVehicle(hit: { kind: 'traffic'; index: number } | { kind: 'parked'; index: number } | { kind: 'player' }, dmg: number): void {
+    if (dmg <= 0) return;
+    if (hit.kind === 'traffic') {
+      const t = this.traffic[hit.index]; if (!t) return;
+      t.hp -= dmg;
+      if (t.hp <= 0 && !t.burning) { t.burning = true; t.burnT = 0; }
+    } else if (hit.kind === 'parked') {
+      const p = this.parked[hit.index]; if (!p) return;
+      p.hp = (p.hp ?? 100) - dmg;
+      if ((p.hp ?? 0) <= 0 && !p.burning) { p.burning = true; p.burnT = 0; }
+    } else {
+      this.damage = clamp(this.damage + dmg, 0, 100);
+      if (this.damage >= 100 && !this.carBurning && !this.carWrecked) { this.carBurning = true; this.carBurnT = 0; }
+    }
+    this.hitSeq++; this.hitKill = false; this.hitAt = this.time;
+  }
+  /** Burn fuses tick here; explosions resolve through explodeAt. */
+  private tickBurning(dt: number): void {
+    if (this.carBurning && !this.carWrecked) {
+      this.carBurnT += dt;
+      if (this.carBurnT > 4) this.explodePlayerCar();
+    }
+    if (this.carWrecked) {
+      this.wreckT += dt;
+      if (this.wreckT > 12) this.respawnPlayerCar();
+    }
+    for (const t of this.traffic) if (t.burning) t.burnT += dt;
+    for (const t of [...this.traffic]) {
+      if (!t.burning || t.burnT <= 3) continue;
+      this.explodeAt(t.x, 1, t.z);
+      this.traffic.splice(this.traffic.indexOf(t), 1);
+      this.spawnReplacementTraffic();
+    }
+    for (const p of this.parked) if (p.burning) p.burnT = (p.burnT ?? 0) + dt;
+    for (const p of [...this.parked]) {
+      if (!p.burning || (p.burnT ?? 0) <= 3) continue;
+      this.explodeAt(p.x, 1, p.z);
+      // The map collider dies with the car so no ghost wall remains.
+      const spot = PARKED_CARS.find(c => Math.hypot(c.x - p.x, c.z - p.z) < 1);
+      if (spot) this.clearedStatic.push({ x: spot.x, z: spot.z });
+      this.parked.splice(this.parked.indexOf(p), 1);
+    }
+  }
+  /** Your own ride burns out: eject (or torch in place), wreck, later replace. */
+  private explodePlayerCar(): void {
+    this.explodeAt(this.car.x, this.carY + 1, this.car.z);
+    if (this.driving) {
+      this.hurtPlayer(70, 'blast');
+      if (!this.dead) {
+        this.driving = false; this.car.speed = 0;
+        this.x = this.car.x + 2.5; this.z = this.car.z; this.y = this.carY; this.vy = 0;
+      }
+    }
+    this.carBurning = false; this.carWrecked = true; this.wreckT = 0;
+  }
+  /** Explosion: flash + boom + AoE that wounds you, kills peds, chains cars. */
+  private explodeAt(x: number, y: number, z: number): void {
+    this.booms.push({ x, y, z, born: this.time });
+    this.explodeSeq++;
+    const pd = Math.hypot(this.x - x, this.z - z);
+    if (pd < 9 && Math.abs((this.driving ? this.carY : this.y) - y) < 4) {
+      this.hurtPlayer(85 * (1 - pd / 9), 'blast');
+    }
+    for (const ped of this.peds) {
+      if (ped.dead) continue;
+      const d = Math.hypot(ped.x - x, ped.z - z);
+      if (d >= 9) continue;
+      const kx = d > 0.5 ? (ped.x - x) / d : 0, kz = d > 0.5 ? (ped.z - z) / d : 0;
+      ped.hp = 0;
+      this.pedBloodAt = this.time; this.pedBloodSeq += 1;
+      ped.ragdoll = true; ped.ry = Math.max(ped.ry, 0.2);
+      ped.rvx = kx * 9; ped.rvz = kz * 9; ped.rvy = 5;
+      ped.rpitch = 0; ped.rpitchRate = -7; ped.rollYaw = ped.yaw;
+      ped.scaredUntil = this.time + 8; ped.dead = true;
+      this.hitSeq++; this.hitKill = true; this.hitAt = this.time;
+    }
+    for (const t of this.traffic) {
+      if (Math.hypot(t.x - x, t.z - z) >= 9 || t.burning) continue;
+      t.hp -= 70;
+      if (t.hp <= 0) { t.burning = true; t.burnT = 0; }
+    }
+    for (const p of this.parked) {
+      if (Math.hypot(p.x - x, p.z - z) >= 9 || p.burning) continue;
+      p.hp = (p.hp ?? 100) - 70;
+      if ((p.hp ?? 0) <= 0) { p.burning = true; p.burnT = 0; }
+    }
+    if (!this.carWrecked && Math.hypot(this.car.x - x, this.car.z - z) < 9) {
+      this.damage = clamp(this.damage + 70, 0, 100);
+      if (this.damage >= 100 && !this.carBurning) { this.carBurning = true; this.carBurnT = 0; }
+    }
+  }
+  /** Burnt-out ride is towed: a fresh one waits at the nearest clear roadside. */
+  private respawnPlayerCar(): void {
+    for (let r = 12; r <= 60; r += 6) {
+      for (let a = 0; a < 12; a++) {
+        const x = this.x + Math.cos((a / 12) * Math.PI * 2) * r;
+        const z = this.z + Math.sin((a / 12) * Math.PI * 2) * r;
+        if (Math.abs(x) + 4 >= LIMIT || Math.abs(z) + 4 >= LIMIT) continue;
+        if (!onRoad(x, z, ROAD_HALF - 2) || intersects(x, z, 3) || inWater(x, z)) continue;
+        if (groundHeight(x, z, 0) !== 0) continue;
+        this.placeAt(x, z, Math.atan2(x - this.x, -(z - this.z)));
+        this.damage = 0; this.carWrecked = false; this.carBurning = false;
+        return;
+      }
+    }
+    this.damage = 0; this.carWrecked = false; this.carBurning = false;
+  }
+  /** Live flame anchors for the renderer (player car + every burner). */
+  private collectBurners(): BurnerFX[] {
+    const out: BurnerFX[] = [];
+    if (this.carBurning && !this.carWrecked) out.push({ x: this.car.x, y: this.carY + 1.2, z: this.car.z });
+    for (const t of this.traffic) if (t.burning) out.push({ x: t.x, y: 1.2, z: t.z });
+    for (const p of this.parked) if (p.burning) out.push({ x: p.x, y: 1.2, z: p.z });
+    return out.slice(0, 16);
+  }
   interact(): boolean {
-    if (!this.active) return false;
+    if (!this.active || this.dead) return false;
     if (this.mode !== 'roam') return false;
     if (this.transition > 0) return false;
     if (!this.driving && this.nearTable) return this.enterTable();
@@ -347,7 +743,7 @@ export class Simulation {
       const target = this.nearestVehicle();
       if (!target || !target.enterable) return false;
       if (target.type !== 'player') {
-        this.parked.push({ kind: this.vehicleKind, x: this.car.x, z: this.car.z, yaw: this.car.yaw });
+        this.parked.push({ kind: this.vehicleKind, x: this.car.x, z: this.car.z, yaw: this.car.yaw, hp: 100, burning: false, burnT: 0 });
         if (this.parked.length > 28) this.parked.shift();
       }
       if (target.type === 'parked') {
@@ -438,6 +834,7 @@ export class Simulation {
     const high = Math.abs(y) > 1.5;
     for (const p of PARKED_CARS) {
       if (high) break;
+      if (this.clearedStatic.some(c => Math.abs(c.x - p.x) < 0.5 && Math.abs(c.z - p.z) < 0.5)) continue;
       const hit = bodyContact(body, vehicleBody(p.x, p.z, 0, p.label === 'parked-van' ? 'van' : 'car'));
       if (hit) return { ...hit, label: p.label ?? 'parked car' };
     }
@@ -477,7 +874,7 @@ export class Simulation {
     const high = Math.abs(y) > 1.5;
     return Math.abs(x) + 0.48 >= LIMIT || Math.abs(z) + 0.48 >= LIMIT || intersects(x, z, 0.48) ||
       (!high && !!circleContact(vehicleBody(this.car.x, this.car.z, this.car.yaw, this.vehicleKind), x, z, 0.48)) ||
-      (!high && PARKED_CARS.some(p => circleContact(vehicleBody(p.x, p.z, 0, p.label === 'parked-van' ? 'van' : 'car'), x, z, 0.48))) ||
+      (!high && PARKED_CARS.some(p => !this.clearedStatic.some(c => Math.abs(c.x - p.x) < 0.5 && Math.abs(c.z - p.z) < 0.5) && circleContact(vehicleBody(p.x, p.z, 0, p.label === 'parked-van' ? 'van' : 'car'), x, z, 0.48))) ||
       (!high && this.parked.some(p => circleContact(vehicleBody(p.x, p.z, p.yaw, p.kind), x, z, 0.48))) ||
       (!high && this.traffic.some(t => circleContact(vehicleBody(t.x, t.z, t.yaw, t.kind), x, z, 0.48))) ||
       PROPS.some(p => circleHit(x, z, 0.48, p.x, p.z, p.r));
@@ -524,7 +921,7 @@ export class Simulation {
       const carSpeed = Math.hypot(vx, vz);
       // Peds stay at grade: a car flying over on the bridge deck passes above them.
       const highAbovePeds = Math.abs(this.carY) > 1.5;
-      for (const ped of this.peds) if (!highAbovePeds && !ped.ragdoll && this.time >= ped.scaredUntil && circleContact(body, ped.x, ped.z, 0.5)) {
+      for (const ped of this.peds) if (!highAbovePeds && !ped.dead && !ped.ragdoll && this.time >= ped.scaredUntil && circleContact(body, ped.x, ped.z, 0.5)) {
         // Launch ragdoll — vehicle rolls right over at full speed.
         ped.ragdoll = true;
         ped.ry = 0;
@@ -537,6 +934,11 @@ export class Simulation {
         ped.rpitchRate = (carSpeed > 4 ? -6.5 : -3.5); // forward tumble rate
         ped.rollYaw = ped.yaw; // preserve yaw at moment of impact
         ped.scaredUntil = this.time + 12; // long recover time
+        // Fast hits kill outright (corpse never recovers); slow taps knock down.
+        if (carSpeed > 8) {
+          ped.hp = 0; ped.dead = true;
+          this.hitSeq++; this.hitKill = true; this.hitAt = this.time;
+        }
         // No registerImpact here: pedestrian hits never flash "CRASH vs PEDESTRIAN",
         // never shake the camera, damage the car, or slow it (no crashUntil lockout).
         this.pedBloodAt = this.time;
@@ -566,6 +968,8 @@ export class Simulation {
       const gain = (s - 5) * (minor ? 0.7 : 2.0);
       this.damage = clamp(this.damage + gain, 0, 100);
     }
+    // The driver feels big hits too (seatbelts off, GTA rules).
+    if (this.driving && s > 4) this.hurtPlayer((s - 4) * 2.2, 'crash', s > 8);
     this.crashUntil = this.time + (minor ? 0.25 : s > 8 ? 0.8 : 0.45);
   }
   /** True when an obstacle sits in the lane ahead (0..10m forward, <3m lateral). */
@@ -621,7 +1025,7 @@ export class Simulation {
           ped.rvx *= friction; ped.rvz *= friction; ped.rvy = 0;
           ped.rpitchRate *= friction;
           const groundSpeed = Math.hypot(ped.rvx, ped.rvz);
-          if (groundSpeed < 0.05 && this.time >= ped.scaredUntil - 6) {
+          if (groundSpeed < 0.05 && !ped.dead && this.time >= ped.scaredUntil - 6) {
             // Ped gets up: snap back onto their route closest to current position.
             ped.ragdoll = false; ped.ry = 0; ped.rvx = 0; ped.rvz = 0; ped.rvy = 0; ped.rpitch = 0; ped.rpitchRate = 0;
             // Find closest point on their route.
@@ -762,6 +1166,31 @@ export class Simulation {
       this.boosting = false;
       this.boostDelay = Math.max(0, this.boostDelay - dt);
       if (this.boostDelay <= 0) this.boost = Math.min(100, this.boost + 14 * dt);
+      // --- GTA combat (on foot, roam only): aim, fire, reload, regen ---
+      this.aiming = this.armed && this.held('aim');
+      if (this.armed && this.aiming) this.facing = this.yaw;
+      if (this.hp < 50 && this.time - this.lastHurtAt > 6) this.hp = Math.min(50, this.hp + 10 * dt);
+      if (this.reloading) {
+        this.reloadT -= dt;
+        if (this.reloadT <= 0) {
+          this.reloading = false;
+          this.mags[this.gunIndex] = GUNS[this.gunIndex].mag;
+        }
+      }
+      this.fireTimer = Math.max(0, this.fireTimer - dt);
+      if (this.armed && !this.reloading && this.fireTimer <= 0) {
+        const gun = GUNS[this.gunIndex];
+        const wantFire = gun.auto ? this.held('fire') : this.triggerEdge;
+        if (wantFire) {
+          if (this.mags[this.gunIndex] <= 0) {
+            this.drySeq++; this.fireTimer = 0.3; this.triggerEdge = false;
+            this.startReload();
+          } else {
+            this.fireBullet();
+            if (!gun.auto) this.triggerEdge = false;
+          }
+        }
+      }
       // On foot the canal is a wall and ramps are walkable (1m step-up limit).
       // Mired starts (teleport only) may always step back to dry land.
       const groundHere = Math.max(0, groundHeight(this.x, this.z, this.y));
@@ -773,7 +1202,7 @@ export class Simulation {
         return this.walkBlocked(px, pz);
       };
       const length = Math.max(1, Math.hypot(forward, side));
-      const targetSpeed = this.held('sprint') ? 8 : 4.6;
+      const targetSpeed = this.aiming ? 2.6 : this.held('sprint') ? 8 : 4.6;
       const wishX = (Math.sin(this.yaw) * forward + Math.cos(this.yaw) * side) / length * targetSpeed;
       const wishZ = (-Math.cos(this.yaw) * forward + Math.sin(this.yaw) * side) / length * targetSpeed;
       const wishMag = Math.hypot(wishX, wishZ), curMag = Math.hypot(this.pvx, this.pvz);
@@ -819,12 +1248,26 @@ export class Simulation {
       this.vy -= 17 * dt; this.y = Math.max(ground, this.y + this.vy * dt);
       if (this.y === ground) {
         if (fallVy < -4) this.landDip = 1;
+        if (fallVy < -9) this.hurtPlayer((-fallVy - 9) * 5, 'fall');
         this.vy = 0;
       }
       this.landDip = Math.max(0, this.landDip - 5 * dt);
     }
     this.syncCrowd(dt);
     this.jumpPressed = false;
+    this.triggerEdge = false;
+    // Burn fuses, wreck timers, FX pruning, respawn (every frame, any mode).
+    this.tickBurning(dt);
+    this.burners = this.collectBurners();
+    if (this.shots.length > 40) this.shots.splice(0, this.shots.length - 40);
+    this.shots = this.shots.filter(s => this.time - s.born < 0.25);
+    this.booms = this.booms.filter(b => this.time - b.born < 0.9);
+    for (const f of this.burners) {
+      if (Math.hypot(this.x - f.x, this.z - f.z) >= 3) continue;
+      if (Math.abs((this.driving ? this.carY : this.y) - f.y) >= 3) continue;
+      this.hurtPlayer(9 * dt, 'fire');
+    }
+    if (this.dead && this.time - this.wastedAt > 4) this.respawn();
     // Repair slowly at South Station (on foot or behind the wheel).
     if (Math.hypot(this.x - 42, this.z - 27) < 14 && this.damage > 0) this.damage = Math.max(0, this.damage - 12 * dt);
     const traveled = Math.hypot(this.x - this.previous.x, this.z - this.previous.z);

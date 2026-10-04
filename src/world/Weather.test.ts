@@ -38,6 +38,7 @@ describe('WeatherParticles', () => {
     const p = new WeatherParticles(scene);
     p.setQuality('low');
     expect(p.particleCount).toBe(300);
+    p.setSeason('summer');
     p.setWeather('normal');
     expect(p.active).toBe(false);
     expect(p.group.visible).toBe(false);

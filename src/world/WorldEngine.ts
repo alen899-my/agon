@@ -3,13 +3,14 @@ import * as THREE from 'three';
 import { RealtimeClient, type RaceDirEntry, type RemoteDot, type RemotePos } from '../api/realtime';
 import { GameLoop } from '../game/GameLoop';
 import type { Theme } from '../game/State';
-import { barrelSound, bbSound, countdownBeep, crashThud, crowdCheerSound, finalLapSound, horn, startRainLoop, stopRainLoop, ttSound, unlockAudio } from '../game/Sound';
+import { barrelSound, bbSound, countdownBeep, crashThud, crowdCheerSound, dryFire, explosionSound, finalLapSound, gunshot, horn, hurtSound, reloadSound, startRainLoop, stopRainLoop, ttSound, unlockAudio, wastedSound } from '../game/Sound';
 import { INTENSITY_FOG_FAR, INTENSITY_FOG_NEAR, INTENSITY_GLOOM, INTENSITY_RAIN_VOL, INTENSITY_SUN, SEASON_PRESETS, WEATHER_PRESETS, WeatherParticles, clampIntensity, type IntensityLevel, type Season, type Weather } from './Weather';
 import { wiperAngle } from './VehicleFactory';
 import { LAMPS } from './Map';
 import { AssetKit, buildMap, type Stickman, type Vehicle } from './Assets';
 import { BUILDINGS, GAME_CENTER, HOOP, PLACES, RACE_ARENA, RACE_CROWD, RIM, TABLE, groundHeight, seeded } from './Map';
 import { BarrelSim, createBarrelMesh } from './Barrels';
+import { GUNS, buildGun, type BuiltGun } from './Guns';
 import { Simulation, type WorldAction, type WorldSnapshot } from './Simulation';
 import { COUNTDOWN_MS, RaceSim, type RacerState } from './RaceSim';
 import { gridSlots, trackProgress } from './Track';
@@ -157,6 +158,11 @@ export class WorldEngine {
   private shake = 0; private lastImpactAt = -10; private prevSimTime = 0;
   /** Speed feel: smoothed chase FOV that widens with velocity (free-roam + race). */
   private speedFov = 60;
+  /** 0 = centered chase, 1 = over-the-shoulder aim (eased). */
+  private aimBlend = 0;
+  /** Projected screen-space position (0..1) of the aiming point — updated every render frame. */
+  private _aimScreenPos = { x: 0.5, y: 0.5 };
+  private readonly _aimScreenVec = new THREE.Vector3();
   private quality: QualityLevel = 'balanced'; private pixelCap = QUALITY_PIXEL.balanced;
   private lastW = 1; private lastH = 1;
   readonly barrelSim = new BarrelSim();
@@ -167,6 +173,23 @@ export class WorldEngine {
   private suspended = false; private disposed = false; private hudTime = 0;
   /** Drift skid marks: twin rubber ribbons behind the rear wheels, fading over a minute. */
   private readonly skids = new SkidMarks();
+  /** GTA combat visuals: gun meshes, tracers, muzzle flashes, flames, blasts. */
+  private gunMeshes: BuiltGun[] = [];
+  private fpGuns: (BuiltGun | null)[] = [];
+  private readonly fpHolder = new THREE.Group();
+  private tracers: { mesh: THREE.Mesh; born: number }[] = [];
+  private tracerIdx = 0;
+  private flashes: { sprite: THREE.Sprite; born: number }[] = [];
+  private flashIdx = 0;
+  private flameTex: THREE.CanvasTexture | null = null;
+  private smokeTex: THREE.CanvasTexture | null = null;
+  private flashTex: THREE.CanvasTexture | null = null;
+  private flames: { flame: THREE.Sprite; smoke: THREE.Sprite; seed: number }[] = [];
+  private boomSprites: { sprite: THREE.Sprite; born: number }[] = [];
+  private readonly boomLight = new THREE.PointLight(0xff7722, 0, 34, 1.6);
+  private lastShotSeq = -1; private lastDrySeq = -1; private lastReloadSeq = -1;
+  private lastExplodeSeq = -1; private lastHurtSeq = -1; private lastDeathSeq = -1;
+  private lastHurtSnd = -999;
   /** Continuous engine voices: player car + nearest traffic, skid screech. */
   private readonly vehicleAudio = new VehicleAudio();
   private theme: Theme = 'light';
@@ -404,6 +427,8 @@ export class WorldEngine {
       dots: this.cpuRacers.length > 0
         ? [...this.realtimeDots, ...this.cpuRacers.map(c => ({ id: c.id, x: c.x, z: c.z, driving: true, name: c.name }))]
         : this.realtimeDots,
+      aimScreenX: this._aimScreenPos.x,
+      aimScreenY: this._aimScreenPos.y,
     });
     this.notifyRace();
   }
@@ -950,6 +975,158 @@ export class WorldEngine {
       this.scene.add(v.group); this.parked[i] = v; this.parkedKinds[i] = key;
     });
   }
+  /** GTA combat: gun-in-hand, tracers, muzzle flashes, vehicle fires, blasts + sounds. */
+  private updateCombatFx(sim: Simulation): void {
+    if (sim.shotSeq !== this.lastShotSeq) {
+      this.lastShotSeq = sim.shotSeq;
+      const last = sim.shots[sim.shots.length - 1];
+      gunshot(last?.cls ?? 'pistol');
+    }
+    if (sim.drySeq !== this.lastDrySeq) { this.lastDrySeq = sim.drySeq; dryFire(); }
+    if (sim.reloadSeq !== this.lastReloadSeq) { this.lastReloadSeq = sim.reloadSeq; reloadSound(); }
+    if (sim.explodeSeq !== this.lastExplodeSeq) {
+      this.lastExplodeSeq = sim.explodeSeq;
+      explosionSound(); this.shake = 1;
+      const b = sim.booms[sim.booms.length - 1];
+      if (b) this.boomLight.position.set(b.x, b.y + 1.5, b.z);
+    }
+    if (sim.hurtSeq !== this.lastHurtSeq) {
+      this.lastHurtSeq = sim.hurtSeq;
+      if (sim.time - this.lastHurtSnd > 0.4) { this.lastHurtSnd = sim.time; hurtSound(); }
+    }
+    if (sim.deathSeq !== this.lastDeathSeq) { this.lastDeathSeq = sim.deathSeq; wastedSound(); }
+    this.ensureCombatFx();
+    const showGun = sim.armed && !sim.driving && !sim.dead && sim.mode === 'roam';
+    const third = sim.view === 'third';
+    // Gun seats in the avatar's right hand (arms[1]); the arm overrides the
+    // walk swing and snaps up to aim when aiming.
+    if (this.gunMeshes.length === 0) {
+      for (let i = 0; i < GUNS.length; i++) {
+        const g = buildGun(i, this.kit);
+        g.group.position.set(0, -0.62, -0.04);
+        g.group.visible = false;
+        this.avatar.arms[1].add(g.group);
+        this.gunMeshes.push(g);
+      }
+    }
+    this.gunMeshes.forEach((g, i) => { g.group.visible = showGun && third && i === sim.gunIndex; });
+    if (showGun && third) {
+      // Arm swings up to aim; the gun counter-pitches in the grip so the
+      // barrel stays level and forward instead of tipping skyward.
+      const armX = sim.aiming ? 1.25 : 0.35;
+      this.avatar.arms[1].rotation.x = armX;
+      this.avatar.arms[1].rotation.z = 0;
+      const g = this.gunMeshes[sim.gunIndex];
+      if (g) g.group.rotation.x = -armX;
+    }
+    // Cockpit-style viewmodel riding the camera in first person.
+    const showFp = showGun && !third;
+    this.fpHolder.visible = showFp;
+    if (showFp) {
+      if (!this.fpGuns[sim.gunIndex]) this.fpGuns[sim.gunIndex] = buildGun(sim.gunIndex, this.kit);
+      const fg = this.fpGuns[sim.gunIndex]!;
+      if (fg.group.parent !== this.fpHolder) { this.fpHolder.clear(); this.fpHolder.add(fg.group); }
+      fg.group.position.set(0.24, -0.2, -0.15);
+      fg.group.rotation.set(0, 0, 0);
+      fg.group.visible = true;
+      this.fpHolder.position.copy(this.camera.position);
+      this.fpHolder.quaternion.copy(this.camera.quaternion);
+    }
+    // Fresh shots: one tracer + muzzle flash each (round-robin pools).
+    for (const s of sim.shots) {
+      const age = sim.time - s.born;
+      if (age < 0 || age > 0.09) continue;
+      const tr = this.tracers[this.tracerIdx++ % this.tracers.length];
+      const dx = s.ex - s.mx, dz = s.ez - s.mz;
+      const len = Math.max(0.5, Math.hypot(dx, s.ey - s.my, dz));
+      tr.mesh.position.set((s.mx + s.ex) / 2, (s.my + s.ey) / 2, (s.mz + s.ez) / 2);
+      tr.mesh.lookAt(s.ex, s.ey, s.ez);
+      tr.mesh.scale.set(1, 1, len);
+      tr.born = sim.time;
+      const fl = this.flashes[this.flashIdx++ % this.flashes.length];
+      fl.sprite.position.set(s.mx, s.my, s.mz);
+      fl.born = sim.time;
+      const big = s.cls === 'shotgun' || s.cls === 'sniper' ? 1.15 : 0.7;
+      fl.sprite.scale.set(big, big, 1);
+      (fl.sprite.material as THREE.SpriteMaterial).rotation = Math.random() * Math.PI;
+    }
+    for (const tr of this.tracers) tr.mesh.visible = sim.time - tr.born < 0.09;
+    for (const fl of this.flashes) fl.sprite.visible = sim.time - fl.born < 0.06;
+    // Burning vehicles: flickering flame + rising smoke column each.
+    sim.burners.forEach((b, i) => {
+      const f = this.flames[i % this.flames.length];
+      f.flame.visible = true; f.smoke.visible = true;
+      const flick = 1 + 0.25 * Math.sin(sim.time * 31 + f.seed * 9);
+      f.flame.position.set(b.x, b.y + 0.4 * flick, b.z);
+      f.flame.scale.set(1.5 * flick, 1.9 * flick, 1);
+      const rise = (sim.time * 0.9 + f.seed) % 1.6;
+      f.smoke.position.set(b.x, b.y + 0.9 + rise, b.z);
+      const ss = 1.1 + rise * 1.7;
+      f.smoke.scale.set(ss, ss, 1);
+      (f.smoke.material as THREE.SpriteMaterial).opacity = 0.5 * (1 - rise / 1.6);
+    });
+    const used = new Set(sim.burners.map((_, i) => i % this.flames.length));
+    this.flames.forEach((f, i) => { if (!used.has(i)) { f.flame.visible = false; f.smoke.visible = false; } });
+    // Explosion fireballs + light spike.
+    let glow = 0;
+    sim.booms.forEach((b, i) => {
+      const age = sim.time - b.born;
+      if (age < 0 || age > 0.6) return;
+      const sp = this.boomSprites[i % this.boomSprites.length];
+      sp.sprite.visible = true; sp.born = b.born;
+      sp.sprite.position.set(b.x, b.y + 0.5, b.z);
+      const sc = 2 + (age / 0.6) * 9;
+      sp.sprite.scale.set(sc, sc, 1);
+      (sp.sprite.material as THREE.SpriteMaterial).opacity = 1 - age / 0.6;
+      glow = Math.max(glow, 1 - age / 0.5);
+    });
+    for (const sp of this.boomSprites) if (sim.time - sp.born > 0.6) sp.sprite.visible = false;
+    this.boomLight.intensity = glow * 320;
+  }
+
+  /** Lazily builds every pooled combat sprite/mesh (once, import-safe). */
+  private ensureCombatFx(): void {
+    if (!this.flameTex) {
+      const radial = (stops: [number, string][]): THREE.CanvasTexture => {
+        const canvas = document.createElement('canvas'); canvas.width = 128; canvas.height = 128;
+        const ctx = canvas.getContext('2d')!;
+        const grad = ctx.createRadialGradient(64, 64, 4, 64, 64, 62);
+        for (const [at, color] of stops) grad.addColorStop(at, color);
+        ctx.fillStyle = grad; ctx.fillRect(0, 0, 128, 128);
+        const tex = new THREE.CanvasTexture(canvas); tex.colorSpace = THREE.SRGBColorSpace;
+        return tex;
+      };
+      this.flameTex = radial([[0, 'rgba(255,240,200,1)'], [0.35, 'rgba(255,160,40,0.9)'], [0.7, 'rgba(200,60,10,0.45)'], [1, 'rgba(120,20,0,0)']]);
+      this.smokeTex = radial([[0, 'rgba(60,60,60,0.85)'], [0.6, 'rgba(40,40,40,0.4)'], [1, 'rgba(30,30,30,0)']]);
+      this.flashTex = radial([[0, 'rgba(255,255,240,1)'], [0.3, 'rgba(255,220,120,0.9)'], [1, 'rgba(255,150,40,0)']]);
+      const tracerGeo = new THREE.BoxGeometry(0.035, 0.035, 1);
+      const tracerMat = new THREE.MeshBasicMaterial({ color: 0xffe9a8, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false });
+      for (let i = 0; i < 16; i++) {
+        const mesh = new THREE.Mesh(tracerGeo, tracerMat);
+        mesh.visible = false; mesh.frustumCulled = false;
+        this.scene.add(mesh); this.tracers.push({ mesh, born: -999 });
+      }
+      for (let i = 0; i < 6; i++) {
+        const mat = new THREE.SpriteMaterial({ map: this.flashTex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+        const sprite = new THREE.Sprite(mat); sprite.visible = false;
+        this.scene.add(sprite); this.flashes.push({ sprite, born: -999 });
+      }
+      for (let i = 0; i < 16; i++) {
+        const flame = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.flameTex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+        const smoke = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.smokeTex, transparent: true, depthWrite: false, opacity: 0.5 }));
+        flame.visible = false; smoke.visible = false;
+        this.scene.add(flame, smoke);
+        this.flames.push({ flame, smoke, seed: Math.random() * 10 });
+      }
+      for (let i = 0; i < 4; i++) {
+        const mat = new THREE.SpriteMaterial({ map: this.flashTex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, color: 0xff8830 });
+        const sprite = new THREE.Sprite(mat); sprite.visible = false;
+        this.scene.add(sprite); this.boomSprites.push({ sprite, born: -999 });
+      }
+      this.scene.add(this.boomLight, this.fpHolder);
+    }
+  }
+
   begin(): void { unlockAudio(); this.simulation.begin(); this.emit(); }
   /** Leave the optional race before returning to the entry screen. */
   exitToIntro(): void {
@@ -976,6 +1153,10 @@ export class WorldEngine {
   togglePause(): void { this.simulation.togglePause(); this.emit(); }
   toggleView(): void { this.simulation.toggleView(); this.emit(); }
   cycleVehicle(): void { if (this.race.phase !== 'idle') return; this.simulation.cycleVehicle(); this.emit(); }
+  cycleGun(): void { unlockAudio(); this.simulation.armCycle(); this.emit(); }
+  disarm(): void { this.simulation.disarm(); this.emit(); }
+  reloadGun(): void { this.simulation.startReload(); this.emit(); }
+  selectGun(i: number): void { unlockAudio(); this.simulation.selectGun(i); this.emit(); }
   interact(): void { if (this.race.phase === 'countdown' || this.race.phase === 'racing') return; this.simulation.interact(); this.emit(); }
   waypoint(id: string): void { if (PLACES.some(p => p.id === id)) { this.simulation.waypoint = id; this.emit(); } }
   input(action: WorldAction, down: boolean, source: string): void {
@@ -1276,6 +1457,8 @@ export class WorldEngine {
     this.avatar.group.position.y += bob;
     this.avatar.animate({ phase: sim.stride, intensity: gaitI, airborne: sim.y > 0.02 && !sim.driving, dip: sim.landDip, idle: sim.time });
     this.avatar.group.visible = !sim.driving && sim.view === 'third';
+    // Combat guns, tracers, fires, blasts (+ gunshot/boom audio triggers).
+    this.updateCombatFx(sim);
     // Name tag floats above your head while walking; hidden in cars, cockpit and minigames.
     const showTag = this.playerName !== '' && !sim.driving && sim.view === 'third' && sim.active && sim.mode === 'roam';
     this.nameTag.visible = showTag;
@@ -1284,13 +1467,15 @@ export class WorldEngine {
     const dt = Math.max(0, Math.min(0.05, sim.time - this.prevSimTime));
     this.prevSimTime = sim.time;
     // ── Sense of speed (always, not just racing): FOV widens toward top
-    // speed, boost pushes past it. Eases back when walking or parked. ──
+    // speed, boost pushes past it. Eases back when walking or parked.
+    // Aiming punches the FOV down to the gun's zoom (scope snap for glass). ──
     {
       const spec = VEHICLES[sim.vehicleKind];
       const spd = sim.driving ? Math.abs(sim.car.speed) : 0;
       const raw = spec.topSpeed > 0 ? spd / spec.topSpeed : 0;
-      const wantFov = sim.driving ? 60 + Math.min(1.2, raw) * 15 : 60;
-      this.speedFov += (wantFov - this.speedFov) * Math.min(1, dt * 3);
+      const ads = !sim.driving && sim.armed && sim.aiming && sim.mode === 'roam' ? GUNS[sim.gunIndex] : null;
+      const wantFov = sim.driving ? 60 + Math.min(1.2, raw) * 15 : ads ? ads.zoomFov : 60;
+      this.speedFov += (wantFov - this.speedFov) * Math.min(1, dt * (ads ? 8 : 3));
       if (Math.abs(this.camera.fov - this.speedFov) > 0.05) {
         this.camera.fov = this.speedFov;
         this.camera.updateProjectionMatrix();
@@ -1318,7 +1503,7 @@ export class WorldEngine {
       this.headlight.visible = true;
     } else this.headlight.visible = false;
     const accel = sim.driving ? sim.acceleration : 0;
-    for (const [kind, vehicle] of this.fleet) vehicle.group.visible = kind === sim.vehicleKind;
+    for (const [kind, vehicle] of this.fleet) vehicle.group.visible = kind === sim.vehicleKind && !sim.carWrecked;
     this.car = this.fleet.get(sim.vehicleKind)!;
     this.car.group.position.set(sim.car.x, sim.carY + 0.08, sim.car.z); this.car.group.rotation.y = -sim.car.yaw;
     // Wipers: auto sweeps in rain, manual T-key override (on = always, off = parked).
@@ -1543,14 +1728,22 @@ export class WorldEngine {
       // Both the look target AND the camera anchor lift with the car —
       // otherwise the camera sits at street level staring up through the deck.
       const rideY = sim.driving ? sim.carY : 0;
+      // Over-the-shoulder aim (pro style): ease the lens to the right shoulder
+      // and pull it in close while aiming on foot; centered chase otherwise.
+      const wantShoulder = sim.armed && sim.aiming && !sim.driving && sim.mode === 'roam' ? 1 : 0;
+      this.aimBlend += (wantShoulder - this.aimBlend) * Math.min(1, dt * 7);
+      const shoulder = this.aimBlend;
       this.target.set(x, y + 1.35 + rideY, z);
       // Chase pulls back and trembles a touch as speed climbs — top speed reads fast.
       const spec = VEHICLES[sim.vehicleKind];
       const ratio = sim.driving && spec.topSpeed > 0
         ? Math.min(1.2, Math.abs(sim.car.speed) / spec.topSpeed) : 0;
       const vib = ratio * ratio * 0.06;
-      const distance = sim.driving ? spec.length + 6 + ratio * 2.2 : 6.5;
-      this.desired.set(x - Math.sin(sim.yaw) * distance, y + 3.4 + sim.pitch * 5 + rideY, z + Math.cos(sim.yaw) * distance);
+      const distance = (sim.driving ? spec.length + 6 + ratio * 2.2 : 6.5) * (1 - shoulder * 0.45);
+      this.desired.set(x - Math.sin(sim.yaw) * distance, y + 3.4 + sim.pitch * 5 + rideY - shoulder * 0.5, z + Math.cos(sim.yaw) * distance);
+      // Right-shoulder offset: right of facing = (cos yaw, sin yaw) in XZ.
+      this.desired.x += Math.cos(sim.yaw) * 1.15 * shoulder;
+      this.desired.z += Math.sin(sim.yaw) * 1.15 * shoulder;
       this.direction.subVectors(this.desired, this.target); let cameraDistance = this.direction.length(); this.direction.normalize();
       this.ray.set(this.target, this.direction);
       for (const box of this.cameraBoxes) if (this.ray.intersectBox(box, this.hit)) cameraDistance = Math.min(cameraDistance, Math.max(0.45, this.hit.distanceTo(this.target) - 0.3));
@@ -1560,7 +1753,28 @@ export class WorldEngine {
       // Never sink the lens into the deck/ramps when the chase swings low.
       const lensFloor = Math.max(0, groundHeight(this.camera.position.x, this.camera.position.z, this.camera.position.y)) + 1.1;
       if (this.camera.position.y < lensFloor) this.camera.position.y = lensFloor;
-      this.camera.lookAt(this.target);
+      // Over-the-shoulder aim: blend the look target from the player torso toward a
+      // far aiming point in the player's facing direction so screen-centre = crosshair
+      // instead of the character's body. At shoulder=0 (normal chase) we look at the
+      // torso as before; at shoulder=1 (full ADS) we look 40 m ahead at gun height.
+      const aimFarX = x + Math.sin(sim.yaw) * 40;
+      const aimFarY = y + 1.55 - Math.sin(sim.pitch) * 40;
+      const aimFarZ = z - Math.cos(sim.yaw) * 40;
+      const lookX = this.target.x + (aimFarX - this.target.x) * shoulder;
+      const lookY = this.target.y + (aimFarY - this.target.y) * shoulder;
+      const lookZ = this.target.z + (aimFarZ - this.target.z) * shoulder;
+      this.camera.lookAt(lookX, lookY, lookZ);
+      // Project the hip-fire aiming point (straight ahead, gun height) to screen space
+      // so the HUD can draw the PUBG-style crosshair exactly where bullets will land.
+      if (sim.armed && !sim.driving && sim.mode === 'roam') {
+        this._aimScreenVec.set(x + Math.sin(sim.yaw) * 40, y + 1.55, z - Math.cos(sim.yaw) * 40);
+        this._aimScreenVec.project(this.camera);
+        // NDC is -1..1; convert to 0..1 and clamp for safety.
+        this._aimScreenPos.x = Math.max(0, Math.min(1, (this._aimScreenVec.x + 1) / 2));
+        this._aimScreenPos.y = Math.max(0, Math.min(1, (1 - this._aimScreenVec.y) / 2));
+      } else {
+        this._aimScreenPos.x = 0.5; this._aimScreenPos.y = 0.5;
+      }
     }
     this.sun.position.set(x + 35, 65, z + 25); this.sun.target.position.set(x, 0, z); this.sun.target.updateMatrixWorld();
     this.renderer.render(this.scene, this.camera);

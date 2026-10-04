@@ -166,6 +166,105 @@ export function stopRainLoop(): void {
 /** Snow hushes the world: stop rain, halve engine master via callback. */
 export function isRainLooping(): boolean { return rainNodes !== null; }
 
+/** Gunshot synth per weapon class (crack + body). Import-safe in Node. */
+export function gunshot(cls: string): void {
+  const ac = audio(); if (!ac) return;
+  try {
+    const now = ac.currentTime;
+    const punch: Record<string, { dur: number; vol: number; cutoff: number; thump: number }> = {
+      pistol: { dur: 0.16, vol: 0.32, cutoff: 3200, thump: 140 },
+      smg: { dur: 0.12, vol: 0.26, cutoff: 3800, thump: 160 },
+      shotgun: { dur: 0.34, vol: 0.5, cutoff: 1600, thump: 80 },
+      rifle: { dur: 0.2, vol: 0.38, cutoff: 2600, thump: 110 },
+      sniper: { dur: 0.5, vol: 0.5, cutoff: 4200, thump: 70 },
+      lmg: { dur: 0.18, vol: 0.36, cutoff: 2200, thump: 100 },
+    };
+    const p = punch[cls] ?? punch.pistol;
+    const len = Math.floor(ac.sampleRate * p.dur);
+    const buf = ac.createBuffer(1, len, ac.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / len);
+    const noise = ac.createBufferSource(); noise.buffer = buf;
+    const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = p.cutoff;
+    const ng = ac.createGain();
+    ng.gain.setValueAtTime(p.vol, now);
+    ng.gain.exponentialRampToValueAtTime(0.001, now + p.dur);
+    noise.connect(lp).connect(ng).connect(ac.destination);
+    noise.start(now); noise.stop(now + p.dur);
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(p.thump * 2, now);
+    o.frequency.exponentialRampToValueAtTime(p.thump / 2, now + p.dur * 0.7);
+    g.gain.setValueAtTime(p.vol * 0.8, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + p.dur * 0.7);
+    o.connect(g).connect(ac.destination);
+    o.start(now); o.stop(now + p.dur);
+  } catch { /* Audio unavailable. */ }
+}
+
+/** Dry-fire click on an empty magazine. */
+export function dryFire(): void {
+  blip(1900, 0.04, 0.08, 'square');
+}
+
+/** Two-stage reload clicks (mag out, mag in). */
+export function reloadSound(): void {
+  blip(700, 0.05, 0.1, 'square');
+  setTimeout(() => blip(1050, 0.06, 0.12, 'square'), 160);
+}
+
+/** Big vehicle explosion: sub drop + long noise wash. */
+export function explosionSound(): void {
+  const ac = audio(); if (!ac) return;
+  try {
+    const now = ac.currentTime;
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(110, now);
+    o.frequency.exponentialRampToValueAtTime(26, now + 0.9);
+    g.gain.setValueAtTime(0.55, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 1.1);
+    o.connect(g).connect(ac.destination);
+    o.start(now); o.stop(now + 1.1);
+    const dur = 0.9;
+    const buf = ac.createBuffer(1, Math.floor(ac.sampleRate * dur), ac.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / data.length);
+    const noise = ac.createBufferSource(); noise.buffer = buf;
+    const lp = ac.createBiquadFilter(); lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(2500, now);
+    lp.frequency.exponentialRampToValueAtTime(120, now + dur);
+    const ng = ac.createGain();
+    ng.gain.setValueAtTime(0.5, now);
+    ng.gain.exponentialRampToValueAtTime(0.001, now + dur);
+    noise.connect(lp).connect(ng).connect(ac.destination);
+    noise.start(now); noise.stop(now + dur);
+  } catch { /* Audio unavailable. */ }
+}
+
+/** Flesh-hit thud when the player takes damage. */
+export function hurtSound(): void {
+  const ac = audio(); if (!ac) return;
+  try {
+    const now = ac.currentTime;
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(220, now);
+    o.frequency.exponentialRampToValueAtTime(70, now + 0.18);
+    g.gain.setValueAtTime(0.22, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+    o.connect(g).connect(ac.destination);
+    o.start(now); o.stop(now + 0.22);
+  } catch { /* Audio unavailable. */ }
+}
+
+/** WASTED sting: slow descending minor sting. */
+export function wastedSound(): void {
+  const notes = [392, 311, 233, 155];
+  notes.forEach((freq, i) => {
+    setTimeout(() => blip(freq, 0.4, 0.14, 'sawtooth'), i * 220);
+  });
+}
 /** Dual-tone horn: polite meep for cars, air horn for rigs. */
 export function horn(airHorn = false): void {
   const ac = audio(); if (!ac) return;

@@ -18,9 +18,10 @@ kbd { font: inherit; border: 1px solid var(--line); padding: 2px 4px; border-rad
 .world-stage:fullscreen, .world-stage:-webkit-full-screen { width: 100vw; height: 100vh; max-width: none; border: 0; border-radius: 0; background: #000; }
 .district-shell:fullscreen { padding: 0; background: #000; }
 .district-shell:fullscreen .world-stage { border: 0; border-radius: 0; }
-/* In-canvas chrome: fullscreen + menu buttons only. Everything else lives in the menu. */
-.canvas-corner { position: absolute; top: 12px; right: 12px; z-index: 6; display: flex; gap: 8px; }
-.canvas-corner .control { min-width: 44px; min-height: 44px; font-size: 15px; border-radius: 10px; background: var(--surface); }
+/* In-canvas chrome: unified top-right toolbar (Weapon selector + Fullscreen + Menu in one row). */
+.canvas-corner { position: absolute; top: max(12px, env(safe-area-inset-top)); right: max(12px, env(safe-area-inset-right)); z-index: 8; display: flex; align-items: center; gap: 8px; }
+.canvas-corner .control { min-width: 44px; min-height: 44px; font-size: 15px; border-radius: 10px; background: var(--surface); border: 1px solid var(--line); color: var(--ink); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08); transition: background 0.1s ease; }
+.canvas-corner .control:hover { background: var(--pad); }
 .world-canvas { display: block; height: 100%; width: 100%; touch-action: none; outline: none; }
 .location-card { position: absolute; left: 24px; top: 23px; padding: 17px 20px; background: var(--surface); border: 1px solid var(--line); min-width: 230px; pointer-events: none; }
 .eyebrow { font-size: 8px; letter-spacing: 1.5px; color: var(--muted); font-weight: 600; }
@@ -275,15 +276,256 @@ kbd { font: inherit; border: 1px solid var(--line); padding: 2px 4px; border-rad
 .destination { position: absolute; left: 24px; top: 145px; display: flex; gap: 12px; align-items: center; padding: 12px 15px; border: 1px solid var(--line); background: var(--surface); pointer-events: none; }
 .destination > span { font-size: 24px; } .destination b { display: block; font-size: 11px; font-weight: 500; } .destination small { display: block; font-size: 9px; color: var(--muted); margin-top: 4px; }
 .interact-button { position: absolute; bottom: 108px; left: 50%; transform: translateX(-50%); z-index: 7; min-height: 44px; padding: 0 18px; background: var(--surface); border: 1px solid var(--ink); color: var(--ink); font-size: 10px; letter-spacing: 1px; white-space: nowrap; max-width: calc(100% - 24px); }
-.world-controls { position: absolute; bottom: 22px; left: 24px; right: 24px; display: flex; justify-content: space-between; align-items: flex-end; pointer-events: none; }
-.world-controls.inactive { opacity: .4; } .world-controls.inactive .joystick { pointer-events: none; }
-.stick-wrap { text-align: center; } .joystick { position: relative; border-radius: 50%; border: 1px solid var(--line); background: var(--surface); height: 110px; width: 110px; touch-action: none; pointer-events: auto; user-select: none; }
-.stick-guides { color: var(--line); position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); font-size: 90px; font-weight: 100; }
-.stick-knob { position: absolute; top: 33px; left: 33px; height: 42px; width: 42px; border-radius: 50%; background: var(--ink); pointer-events: none; }
-.control-caption { display: block; font-size: 7px; letter-spacing: 1px; margin-top: 5px; background: var(--surface); padding: 3px; }
-.world-action-pads { display: flex; gap: 10px; pointer-events: auto; }
-.round-pad { height: 69px; width: 69px; border-radius: 50%; color: var(--ink); background: var(--surface); border: 1px solid var(--line); touch-action: none; user-select: none; }
-.round-pad > span { display: block; font-size: 25px; line-height: 1; } .round-pad small { font-size: 7px; letter-spacing: 1px; } .round-pad:active { background: var(--ink); color: var(--surface); }
+/* ── Mobile on-foot controls: joystick LEFT, action cluster RIGHT ── */
+.mobile-stick-zone {
+  position: absolute;
+  left: max(16px, env(safe-area-inset-left));
+  bottom: max(16px, env(safe-area-inset-bottom));
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.mobile-stick-zone.inactive { opacity: .4; }
+.stick-wrap { text-align: center; pointer-events: none; }
+.joystick {
+  position: relative;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  background: var(--surface);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  height: 110px;
+  width: 110px;
+  touch-action: none;
+  pointer-events: auto;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.stick-guides {
+  color: var(--line);
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 78px;
+  font-weight: 100;
+  line-height: 1;
+  pointer-events: none;
+}
+.stick-knob {
+  position: absolute;
+  top: 35px;
+  left: 35px;
+  height: 40px;
+  width: 40px;
+  border-radius: 50%;
+  background: var(--ink);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+.control-caption {
+  display: block;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  color: var(--muted);
+  text-align: center;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 2px 6px;
+  margin-top: 3px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ── Mobile Right Action Zone: JUMP, SPRINT, AIM, RELOAD, FIRE ── */
+.mobile-action-zone {
+  position: absolute;
+  right: max(16px, env(safe-area-inset-right));
+  bottom: max(16px, env(safe-area-inset-bottom));
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.mobile-action-zone.inactive { opacity: .4; }
+.mobile-action-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  pointer-events: auto;
+}
+.mobile-bottom-row {
+  align-items: flex-end;
+  gap: 12px;
+}
+
+/* Common round touch pad */
+.round-pad {
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1.5px solid var(--line);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.12);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  cursor: pointer;
+  transition: transform 0.08s ease, background 0.1s ease;
+}
+.round-pad:active {
+  transform: scale(0.92);
+  background: var(--ink);
+  color: var(--surface);
+}
+.round-pad:disabled { opacity: .4; cursor: default; }
+.round-pad > span {
+  display: block;
+  font-size: 20px;
+  line-height: 1;
+}
+.round-pad small {
+  font-size: 7px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  margin-top: 2px;
+}
+
+/* AIM pad - PUBG style ADS toggle */
+.round-pad.aim-pad.on {
+  background: var(--ink);
+  color: var(--surface);
+  border-color: var(--ink);
+  box-shadow: 0 0 12px rgba(255, 255, 255, 0.4);
+}
+
+/* FIRE pad - prominent PUBG red combat button */
+.round-pad.fire-pad {
+  width: 72px;
+  height: 72px;
+  min-height: 72px;
+  border-width: 2.5px;
+  border-color: #e53935;
+  background: rgba(229, 57, 53, 0.14);
+  color: #e53935;
+  box-shadow: 0 4px 16px rgba(229, 57, 53, 0.28);
+}
+.round-pad.fire-pad > span {
+  font-size: 26px;
+}
+.round-pad.fire-pad small {
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 1.5px;
+}
+.round-pad.fire-pad:active {
+  transform: scale(0.92);
+  background: #e53935;
+  color: #ffffff;
+  box-shadow: 0 0 24px rgba(229, 57, 53, 0.7);
+}
+
+/* Quick ARM pad */
+.round-pad.arm-pad {
+  width: 58px;
+  height: 58px;
+  border-color: var(--ink);
+}
+
+/* Driving controls: Steering Left, Pedals Right */
+.world-controls.driving-controls {
+  position: absolute;
+  left: max(16px, env(safe-area-inset-left));
+  right: max(16px, env(safe-area-inset-right));
+  bottom: max(16px, env(safe-area-inset-bottom));
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  pointer-events: none;
+  z-index: 10;
+}
+.world-controls.inactive { opacity: .4; }
+.world-controls.inactive .drive-pad { pointer-events: none; }
+.drive-steering {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  pointer-events: auto;
+}
+.drive-pedals {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: auto;
+}
+.drive-aux-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.drive-main-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.drive-pad {
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  min-width: 72px;
+  min-height: 72px;
+  padding: 8px 10px;
+  border: 1.5px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 700;
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.12);
+  cursor: pointer;
+  transition: transform 0.08s ease, background 0.1s ease;
+}
+.drive-pad:active {
+  transform: translateY(2px);
+  background: var(--ink);
+  color: var(--surface);
+}
+.drive-pad:disabled { opacity: .4; cursor: default; }
+.drive-pad.on { outline: 2px solid var(--ink); outline-offset: -2px; }
+.drive-arrow { font-size: 26px; line-height: 1; display: block; }
+.drive-pad small { font-size: 8px; letter-spacing: 1.2px; font-weight: 700; }
+.drive-pad.drive-aux-pad {
+  min-width: 48px;
+  min-height: 48px;
+  border-radius: 12px;
+  padding: 4px;
+}
+.drive-pad.drive-aux-pad .drive-arrow { font-size: 18px; }
+.drive-pad.drive-aux-pad small { font-size: 6.5px; letter-spacing: .8px; }
+.drive-pad.boost-pad.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); outline: none; }
 .pause-cover, .map-cover, .world-error { position: absolute; inset: 0; z-index: 10; display: grid; place-items: center; }
 .pause-cover { pointer-events: none; } .pause-cover > div { pointer-events: auto; background: var(--surface); border: 1px solid var(--line); padding: 40px; text-align: center; }
 .pause-cover h2 { font-size: 32px; margin: 14px 0 28px; letter-spacing: -1px; }
@@ -366,20 +608,19 @@ kbd { font: inherit; border: 1px solid var(--line); padding: 2px 4px; border-rad
   .room-code-panel b { font-size: 18px; letter-spacing: 3px; }
   .exploration-count { top: 12px; right: 12px; padding: 9px 12px; } .exploration-count b { font-size: 17px; } .exploration-count small { font-size: 6px; }
   .destination { top: 74px; left: 12px; padding: 6px 10px; gap: 6px; } .destination > span { font-size: 18px; } .destination b { font-size: 9px; } .destination small { font-size: 7px; }
-  .world-controls { bottom: max(10px, env(safe-area-inset-bottom)); left: 16px; right: 12px; } .joystick { height: 86px; width: 86px; } .stick-knob { width: 34px; height: 34px; top: 25px; left: 25px; } .stick-guides { font-size: 70px; } .control-caption { display: none; } .round-pad { width: 52px; height: 52px; } .round-pad > span { font-size: 22px; } .round-pad small { font-size: 6px; }
-  .minimap-button { right: 12px; bottom: 76px; width: 105px; padding: 3px; } .minimap-button > div { font-size: 5px; padding: 4px 1px 1px; } .look-hint { bottom: 12px; font-size: 6px; padding: 7px 10px; } .look-hint > span { font-size: 5px; } .interact-button { bottom: 62px; min-height: 39px; font-size: 8px; }
-  .map-cover { padding: 12px 24px; } .map-sheet { width: min(720px, 100%); } .map-heading { margin-bottom: 8px; } .map-heading h2 { font-size: 21px; margin-top: 4px; } .map-content { grid-template-columns: 230px 1fr; gap: 16px; align-items: start; } .place-list { gap: 3px; } .place-list > button { padding: 7px 10px; } .place-list p { display: none; } .place-list b { font-size: 11px; margin: 2px 0; } .place-list small { font-size: 6px; } .map-caption { font-size: 8px; margin-top: 8px; }
-  .pause-cover > div { padding: 24px; } .pause-cover h2 { font-size: 26px; margin: 10px 0 20px; }
+  .world-controls { bottom: max(10px, env(safe-area-inset-bottom)); left: max(12px, env(safe-area-inset-left)); right: max(12px, env(safe-area-inset-right)); }
+  .joystick { height: 92px; width: 92px; } .stick-knob { width: 34px; height: 34px; top: 29px; left: 29px; } .stick-guides { font-size: 64px; } .control-caption { font-size: 7px; }
+  .round-pad { width: 48px; height: 48px; } .round-pad > span { font-size: 18px; } .round-pad small { font-size: 6px; }
+  .round-pad.fire-pad { width: 64px; height: 64px; min-height: 64px; } .round-pad.fire-pad > span { font-size: 22px; }
+  .mobile-stick-zone { bottom: max(10px, env(safe-area-inset-bottom)); left: max(12px, env(safe-area-inset-left)); }
+  .mobile-action-zone { bottom: max(10px, env(safe-area-inset-bottom)); right: max(12px, env(safe-area-inset-right)); gap: 8px; }
+  .mobile-action-row { gap: 8px; }
+  .hud-map-br { right: auto; bottom: auto; left: max(10px, env(safe-area-inset-left)); top: max(8px, env(safe-area-inset-top)); width: 84px; height: 84px; border-radius: 8px; }
+  .hud-top { left: calc(max(10px, env(safe-area-inset-left)) + 92px); top: max(8px, env(safe-area-inset-top)); }
+  .hud-health { left: max(10px, env(safe-area-inset-left)); top: calc(max(8px, env(safe-area-inset-top)) + 90px); padding: 4px 8px; font-size: 11px; }
+  .minimap-button { right: 12px; bottom: 76px; width: 105px; padding: 3px; } .minimap-button > div { font-size: 5px; padding: 4px 1px 1px; } .look-hint { bottom: 12px; font-size: 6px; padding: 7px 10px; } .look-hint > span { font-size: 5px; } .interact-button { bottom: 84px; left: 50%; transform: translateX(-50%); min-height: 36px; padding: 0 14px; border-radius: 18px; font-size: 9px; font-weight: 700; }
 }
 
-/* Driving controls follow the primary input device, including large tablets. */
-.drive-steering, .drive-pedals { display: flex; gap: 14px; }
-.drive-pad { pointer-events: auto; touch-action: none; user-select: none; min-width: 92px; min-height: 92px; padding: 10px 12px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font-weight: 700; border-radius: 16px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; }
-.drive-arrow { font-size: 34px; line-height: 1; display: block; }
-.drive-pad small { font-size: 9px; letter-spacing: 1.5px; font-weight: 700; }
-.drive-pad:active { transform: translateY(2px); background: var(--line); }
-.drive-pad:disabled { opacity: .4; }
-.drive-pad.on { outline: 2px solid var(--ink); outline-offset: -2px; }
 /* ── Nitro boost (racing only, bottom — flat theme HUD, no neon) ── */
 .boost-wrap { display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
 .boost-meter { height: 8px; min-width: 92px; border: 1px solid var(--line); border-radius: 4px; background: var(--pad); overflow: hidden; }
@@ -393,6 +634,141 @@ kbd { font: inherit; border: 1px solid var(--line); padding: 2px 4px; border-rad
 .nitro-pct { font-size: 9px; font-weight: 700; letter-spacing: .5px; color: var(--ink); min-width: 44px; text-align: right; }
 .nitro-bottom.hot { border-color: var(--ink); border-width: 2px; }
 .nitro-bottom.full .nitro-label { color: var(--ink); }
+/* ── GTA combat HUD: health hearts, ammo panel, crosshair, WASTED ── */
+.hud-health { position: absolute; top: 64px; left: 12px; z-index: 6; display: flex; align-items: center; gap: 8px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 7px 12px; pointer-events: none; }
+.hud-health > span { font-size: 14px; color: #c62828; }
+.hud-health b { font-size: 13px; font-weight: 700; min-width: 26px; text-align: right; }
+.health-track { width: 110px; height: 8px; border-radius: 4px; background: var(--pad); border: 1px solid var(--line); overflow: hidden; }
+.health-track i { display: block; height: 100%; background: var(--ink); transition: width .15s linear; }
+.hud-health.low { border-color: #c62828; border-width: 2px; }
+.hud-health.low > span { animation: bb-pulse .4s infinite alternate; }
+.aim-crosshair { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 5; font-size: 22px; color: #fff; mix-blend-mode: difference; pointer-events: none; }
+.aim-crosshair .hit { color: #fff; }
+.aim-crosshair .hit.kill { color: #ff5252; }
+.ammo-panel { position: absolute; left: 50%; transform: translateX(-50%); bottom: 118px; z-index: 6; display: flex; align-items: center; gap: 10px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 7px 12px; }
+.ammo-gun { border: 0; background: transparent; color: var(--ink); font-size: 9px; font-weight: 700; letter-spacing: 1px; cursor: pointer; padding: 4px 2px; }
+.ammo-panel b { font-size: 20px; font-weight: 700; }
+.ammo-panel b small { font-size: 9px; font-weight: 600; color: var(--muted); margin-left: 3px; }
+.ammo-hint { font-size: 8px; letter-spacing: 1px; color: var(--muted); }
+.reload-track { width: 90px; height: 8px; border-radius: 4px; background: var(--pad); border: 1px solid var(--line); overflow: hidden; }
+.reload-track i { display: block; height: 100%; background: var(--ink); }
+/* ── Weapon dock: sits in the top-right row beside the fullscreen button ── */
+.weapon-dock {
+  position: relative;
+  z-index: 8;
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 3px;
+  height: 44px;
+  box-sizing: border-box;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+.dock-arrow {
+  min-width: 32px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+.dock-arrow:hover { background: var(--pad); color: var(--ink); }
+.dock-arrow:disabled { opacity: .4; cursor: default; }
+.dock-main {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 170px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  padding: 0 10px;
+  cursor: pointer;
+  overflow: hidden;
+  transition: border-color 0.1s ease, background 0.1s ease;
+}
+.dock-main.on { border-color: var(--ink); border-width: 2px; padding: 0 9px; }
+.dock-main:disabled { opacity: .4; cursor: default; }
+.gun-icon { width: 52px; height: 20px; flex: 0 0 auto; }
+.dock-main b { font-size: 11px; font-weight: 700; letter-spacing: 1px; white-space: nowrap; }
+.dock-ammo { margin-left: auto; font-size: 16px; font-weight: 700; white-space: nowrap; }
+.dock-ammo small { font-size: 9px; font-weight: 600; color: var(--muted); margin-left: 3px; }
+.dock-ammo.dim { font-size: 8px; letter-spacing: 1.5px; color: var(--muted); }
+.dock-fist { font-size: 18px; }
+.dock-reload { position: absolute; left: 0; bottom: 0; height: 3px; width: 100%; background: var(--pad); }
+.dock-reload i { display: block; height: 100%; background: var(--ink); }
+.dock-x {
+  min-width: 30px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+.dock-x:hover { color: var(--ink); background: var(--pad); }
+/* ── Scope overlay: PUBG-style tube for scoped glass ── */
+.scope-overlay { position: absolute; inset: 0; z-index: 5; pointer-events: none; background: radial-gradient(circle at 50% 50%, transparent 26vmin, rgba(0, 0, 0, 0.97) 27vmin); }
+.scope-ring { position: absolute; top: 50%; left: 50%; width: 54vmin; height: 54vmin; transform: translate(-50%, -50%); border: 2px solid rgba(20, 20, 20, 0.9); border-radius: 50%; box-shadow: inset 0 0 24px rgba(0, 0, 0, 0.8); }
+.scope-cross-h { position: absolute; top: 50%; left: 50%; width: 54vmin; height: 1px; transform: translate(-50%, -50%); background: rgba(20, 20, 20, 0.9); }
+.scope-cross-v { position: absolute; top: 50%; left: 50%; width: 1px; height: 54vmin; transform: translate(-50%, -50%); background: rgba(20, 20, 20, 0.9); }
+.scope-mils { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); }
+.scope-mils i { position: absolute; width: 5px; height: 5px; border-radius: 50%; background: rgba(20, 20, 20, 0.9); }
+.scope-mils i:nth-child(1) { transform: translate(-50%, -8vmin); }
+.scope-mils i:nth-child(2) { transform: translate(-50%, -3vmin); }
+.scope-mils i:nth-child(3) { transform: translate(-50%, 3vmin); }
+.scope-mils i:nth-child(4) { transform: translate(-50%, 8vmin); }
+/* ── Gun hint toasts ── */
+.gun-hint { position: absolute; left: 50%; bottom: 180px; transform: translateX(-50%); z-index: 12; white-space: nowrap; background: var(--accent); color: var(--accent-ink); font-size: 10px; font-weight: 700; letter-spacing: 1.5px; padding: 9px 16px; border-radius: 20px; pointer-events: none; }
+.gun-intro { position: absolute; left: 50%; bottom: 180px; transform: translateX(-50%); z-index: 12; display: flex; align-items: center; gap: 10px; max-width: calc(100% - 24px); background: var(--surface); border: 1px solid var(--ink); border-radius: 12px; padding: 10px 12px; font-size: 10px; }
+.gun-intro b { font-size: 10px; letter-spacing: 1.5px; white-space: nowrap; }
+.gun-intro span { color: var(--muted); letter-spacing: .5px; }
+.gun-intro .control { flex: 0 0 auto; min-height: 36px; }
+.wasted-cover { position: absolute; inset: 0; z-index: 40; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; background: rgba(0, 0, 0, 0.72); }
+.wasted-cover h2 { font-size: clamp(48px, 12vw, 110px); font-weight: 800; letter-spacing: 6px; color: #9e9e9e; margin: 0; font-family: Georgia, 'Times New Roman', serif; }
+.wasted-cover p { font-size: 11px; letter-spacing: 2px; color: #cfcfcf; margin: 0; }
+.world-combat-pads { display: grid; grid-template-columns: auto auto; gap: 8px; pointer-events: auto; margin-top: 10px; justify-content: end; align-items: stretch; }
+.world-combat-pads .fire-pad { grid-row: span 2; min-height: 148px; }
+.world-combat-pads .control-caption { grid-column: span 2; text-align: right; }
+.round-pad.on { background: var(--ink); color: var(--surface); }
+.round-pad.fire-pad { border-width: 2px; }
+@media (max-width: 640px) {
+  .hud-health { top: calc(max(8px, env(safe-area-inset-top)) + 92px); left: max(8px, env(safe-area-inset-left)); padding: 4px 8px; }
+  .health-track { width: 80px; }
+  .ammo-panel { bottom: 104px; padding: 6px 10px; }
+  .ammo-panel b { font-size: 16px; }
+  .canvas-corner { top: max(6px, env(safe-area-inset-top)); right: max(6px, env(safe-area-inset-right)); gap: 5px; }
+  .canvas-corner .control { min-width: 36px; min-height: 36px; font-size: 13px; border-radius: 8px; }
+  .weapon-dock { height: 36px; border-radius: 8px; padding: 2px; gap: 3px; max-width: calc(100vw - 180px); }
+  .dock-arrow { min-width: 24px; font-size: 10px; border-radius: 6px; }
+  .dock-main { min-width: 0; flex: 1; padding: 0 6px; gap: 5px; border-radius: 6px; }
+  .gun-icon { width: 38px; height: 15px; }
+  .dock-main b { font-size: 9px; letter-spacing: 0.5px; }
+  .dock-ammo { font-size: 13px; }
+  .dock-ammo small { font-size: 8px; }
+  .dock-x { min-width: 24px; font-size: 10px; border-radius: 6px; }
+  .gun-hint, .gun-intro { bottom: 168px; font-size: 9px; }
+}
+@media (hover: hover) and (pointer: fine) {
+  .world-combat-pads { display: none; }
+  .mobile-stick-zone, .mobile-action-zone { display: none; }
+}
 @media (hover: hover) and (pointer: fine) {
   .nitro-bottom { bottom: 26px; }
 }
@@ -411,6 +787,7 @@ kbd { font: inherit; border: 1px solid var(--line); padding: 2px 4px; border-rad
 .desktop-look { display: none; }
 @media (hover: hover) and (pointer: fine) {
   .world-controls, .tt-controls, .bb-controls { display: none; }
+  .mobile-stick-zone, .mobile-action-zone { display: none; }
   .desktop-look { display: inline; } .touch-look { display: none; }
   .blinker-hud { display: none; }
 }
@@ -485,11 +862,48 @@ kbd { font: inherit; border: 1px solid var(--line); padding: 2px 4px; border-rad
 
 /* Clean in-game HUD: driving-only top bar — weather + speed. Map lives bottom-right. */
 .hud-top { position: absolute; top: 12px; left: 12px; right: auto; z-index: 5; display: flex; gap: 10px; align-items: stretch; pointer-events: none; max-width: calc(100% - 24px); }
-/* District minimap: bottom-right, above the touch drive pads (desktop: in the corner). */
-.hud-map-br { position: absolute; right: 16px; bottom: 210px; z-index: 6; width: 148px; height: 148px; padding: 4px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
+/* District minimap: desktop bottom-right, MOBILE / TOUCH TOP-LEFT */
+.hud-map-br {
+  position: absolute;
+  right: 24px;
+  bottom: 24px;
+  z-index: 6;
+  width: 148px;
+  height: 148px;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
 .hud-map-br .district-map { width: 100%; height: 100%; border-radius: 6px; }
-@media (hover: hover) and (pointer: fine) {
-  .hud-map-br { right: 24px; bottom: 24px; }
+
+/* Mobile & Touch Devices: Minimap at TOP-LEFT, Weather adjacent, Health below */
+@media (hover: none), (pointer: coarse), (max-width: 820px) {
+  .hud-map-br {
+    right: auto;
+    bottom: auto;
+    left: max(10px, env(safe-area-inset-left));
+    top: max(10px, env(safe-area-inset-top));
+    width: 96px;
+    height: 96px;
+    border-radius: 10px;
+    z-index: 8;
+  }
+  .hud-top {
+    left: calc(max(10px, env(safe-area-inset-left)) + 104px);
+    top: max(10px, env(safe-area-inset-top));
+    max-width: calc(100vw - 230px);
+    gap: 6px;
+  }
+  .hud-health {
+    left: max(10px, env(safe-area-inset-left));
+    top: calc(max(10px, env(safe-area-inset-top)) + 102px);
+    padding: 5px 10px;
+    border-radius: 8px;
+    z-index: 8;
+  }
 }
 .hud-speed { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; min-width: 0; flex: 0 1 auto; display: flex; align-items: center; gap: 10px; }
 .hud-speed b { font-size: 22px; font-weight: 700; white-space: nowrap; }
@@ -509,15 +923,39 @@ kbd { font: inherit; border: 1px solid var(--line); padding: 2px 4px; border-rad
 /* Cockpit windshield rain: droplets + wiper sweep over the 3D view. */
 .windshield-rain { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 3; pointer-events: none; transition: opacity 0.25s ease; }
 @media (max-width: 640px) {
-  .hud-top { top: 8px; left: 8px; gap: 8px; max-width: calc(100% - 16px); }
-  .hud-map-br { right: 12px; bottom: 208px; width: 112px; height: 112px; border-radius: 8px; }
+  .hud-map-br {
+    width: 86px;
+    height: 86px;
+  }
+  .hud-top {
+    left: calc(max(8px, env(safe-area-inset-left)) + 92px);
+    top: max(8px, env(safe-area-inset-top));
+    gap: 6px;
+  }
+  .hud-health {
+    left: max(8px, env(safe-area-inset-left));
+    top: calc(max(8px, env(safe-area-inset-top)) + 92px);
+    padding: 4px 8px;
+  }
   .hud-speed { padding: 6px 10px; gap: 8px; }
   .hud-speed b { font-size: 16px; } .hud-speed span { font-size: 8px; max-width: 44vw; }
   .hud-cycle { min-width: 40px; min-height: 40px; font-size: 16px; }
 }
 @media (orientation: landscape) and (max-height: 600px) {
-  .hud-top { top: 8px; left: 8px; gap: 8px; }
-  .hud-map-br { right: 12px; bottom: 128px; width: 88px; height: 88px; }
+  .hud-map-br {
+    width: 80px;
+    height: 80px;
+  }
+  .hud-top {
+    left: calc(max(8px, env(safe-area-inset-left)) + 86px);
+    top: max(8px, env(safe-area-inset-top));
+    gap: 6px;
+  }
+  .hud-health {
+    left: max(8px, env(safe-area-inset-left));
+    top: calc(max(8px, env(safe-area-inset-top)) + 86px);
+    padding: 3px 6px;
+  }
   .hud-speed { padding: 5px 10px; } .hud-speed b { font-size: 15px; }
   .hud-speed span { max-width: 40vw; }
 }
