@@ -1,4 +1,4 @@
-import { BUILDINGS, PLACES, ROADS } from '../world/Map';
+import { BRIDGE, BUILDINGS, CANAL, PLACES, PROMENADE, ROADS } from '../world/Map';
 import { startLine, TRACK_POINTS } from '../world/Track';
 import type { Theme } from '../game/State';
 import type { WorldSnapshot } from '../world/Simulation';
@@ -15,6 +15,10 @@ export function DistrictMap({ state, large = false, theme = 'light', raceActive 
   return <svg viewBox="-175 -175 350 350" className={large ? 'district-map large-map' : 'district-map'} role="img" aria-label="Neighborhood map: buildings, streets, landmarks, race track and your position">
     <rect x="-175" y="-175" width="350" height="350" fill={color ? '#a9c795' : '#d1d1d1'} />
     {ROADS.map(r => <g key={r} fill={color ? '#43484f' : '#fafafa'}><rect x={r - 8} y="-175" width="16" height="350" /><rect x="-175" y={r - 8} width="350" height="16" /></g>)}
+    {/* Grand Canal water + promenade + bridge deck (deck drawn over the water). */}
+    <rect x={CANAL.x0} y={CANAL.z0} width={CANAL.x1 - CANAL.x0} height={CANAL.z1 - CANAL.z0} fill={color ? '#3f7fbf' : '#7fa8c9'} />
+    <rect x={PROMENADE.x0} y={PROMENADE.z0} width={PROMENADE.x1 - PROMENADE.x0} height={PROMENADE.z1 - PROMENADE.z0} fill={color ? '#43484f' : '#fafafa'} />
+    <rect x={-BRIDGE.halfW} y={BRIDGE.zSGrade} width={BRIDGE.halfW * 2} height={BRIDGE.zNGrade - BRIDGE.zSGrade} fill={color ? '#43484f' : '#fafafa'} />
     {BUILDINGS.map((b, i) => <rect key={i} x={b.x - b.w / 2} y={b.z - b.d / 2} width={b.w} height={b.d} fill={color ? BUILDING_COLORS[b.shade % 3] : '#888888'} />)}
     {color && <rect x="25" y="-64" width="32" height="31" fill="#5da75d" />}
     {raceActive && <g aria-label="Active race route">

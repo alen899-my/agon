@@ -22,11 +22,11 @@ describe('vehicle collision regressions', () => {
     expect(bodyContact(vehicleBody(0, 0, 0, 'car'), vehicleBody(2.3, 0, 0, 'van'))).toBeNull();
   });
   it('stops at a lamp even at high speed and can reverse away', () => {
-    const s = driving(-12, -59); s.car.speed = 40;
+    const s = driving(-14, -53); s.car.speed = 40;
     s.update(0.25);
-    const lamp = PROPS.find(p => p.x === -12 && p.z === -68)!;
+    const lamp = PROPS.find(p => p.x === -14 && p.z === -62)!;
     expect(circleContact(vehicleBody(s.car.x, s.car.z, s.car.yaw, s.vehicleKind), lamp.x, lamp.z, lamp.r)).toBeNull();
-    expect(s.car.z).toBeGreaterThan(-65.46); expect(s.impact?.with).toBe('lamp');
+    expect(s.car.z).toBeGreaterThan(-59.46); expect(s.impact?.with).toBe('lamp');
     s.clearInput(); tick(s, 60); const z = s.z;
     s.setInput('back', true, 's'); tick(s, 60); expect(s.z).toBeGreaterThan(z + 1);
   });
@@ -67,7 +67,7 @@ describe('vehicle collision regressions', () => {
     expect(PROPS.some(p => Math.hypot(s.x - p.x, s.z - p.z) < p.r + 0.48)).toBe(false);
   });
   it('rejects a bigger vehicle overlapping a prop or a bus bumper', () => {
-    const s = driving(-12, -65.8); s.vehicleKind = 'pickup';
+    const s = driving(-14, -59.8); s.vehicleKind = 'pickup';
     expect(s.cycleVehicle()).toBe(false); expect(s.vehicleKind).toBe('pickup');
   });
   it('ignores zero and invalid time steps instead of corrupting speed', () => {

@@ -1,7 +1,7 @@
 import { type VehicleKind } from './Vehicles';
 import { buildVehicle } from './VehicleFactory';
 import * as THREE from 'three';
-import { BENCHES, BUILDINGS, FALLS, FREE_THROW_DIST, GAME_CENTER, GARDEN_STATUE, HARBOR_STATUE, HOOP, LAMPS, RACE_ARENA, RACE_SHOW_CARS, RACE_SLAB, RIM, ROADS, TABLE, TREES, seeded } from './Map';
+import { BENCHES, BRIDGE, BUILDINGS, CANAL, FALLS, FREE_THROW_DIST, GAME_CENTER, GARDEN_STATUE, HARBOR_STATUE, HOOP, LAMPS, PROMENADE, RACE_ARENA, RACE_SHOW_CARS, RACE_SLAB, RIM, ROADS, ROAD_GAP, TABLE, TREES, WATER_Y, groundHeight, seeded } from './Map';
 
 type Shape = 'box' | 'sphere' | 'cylinder';
 export type MaterialName = 'road' | 'pavement' | 'white' | 'ink' | 'glass' | 'metal' | 'wall0' | 'wall1' | 'wall2' | 'leaf' | 'lampGlow' | 'windowLit';
@@ -48,8 +48,8 @@ export class AssetKit {
   private transform = new THREE.Object3D();
   readonly extra: { dispose: () => void }[] = [];
 
-  stamp(shape: Shape, material: MaterialName, x: number, y: number, z: number, sx: number, sy: number, sz: number, yaw = 0): void {
-    this.transform.position.set(x, y, z); this.transform.scale.set(sx, sy, sz); this.transform.rotation.set(0, yaw, 0);
+  stamp(shape: Shape, material: MaterialName, x: number, y: number, z: number, sx: number, sy: number, sz: number, yaw = 0, pitch = 0): void {
+    this.transform.position.set(x, y, z); this.transform.scale.set(sx, sy, sz); this.transform.rotation.set(pitch, yaw, 0);
     this.transform.updateMatrix();
     const key = `${shape}:${material}`;
     if (!this.batches.has(key)) this.batches.set(key, []);
@@ -176,18 +176,31 @@ export function buildMap(scene: THREE.Scene, kit: AssetKit): void {
   const box = (material: MaterialName, x: number, y: number, z: number, w: number, h: number, d: number) => kit.stamp('box', material, x, y, z, w, h, d);
   box('pavement', 0, -0.3, 0, 350, 0.5, 350);
   for (const road of ROADS) {
-    box('road', road, -0.025, 0, 17, 0.08, 342); box('road', 0, -0.025, road, 342, 0.08, 17);
+    if (road === 0) {
+      // Canal cut: the x=0 avenue slabs stop at the water (bridge flies over).
+      box('road', road, -0.025, -131.5, 17, 0.08, 79); box('road', road, -0.025, 55.5, 17, 0.08, 231);
+    } else box('road', road, -0.025, 0, 17, 0.08, 342);
+    box('road', 0, -0.025, road, 342, 0.08, 17);
     for (let v = -164; v <= 164; v += 7) {
       if (ROADS.every(r => Math.abs(r - v) > 12)) {
-        box('white', road, 0.025, v, 0.12, 0.015, 2.6); box('white', v, 0.025, road, 2.6, 0.015, 0.12);
+        if (!(road === 0 && v > ROAD_GAP.z0 && v < ROAD_GAP.z1)) box('white', road, 0.025, v, 0.12, 0.015, 2.6);
+        box('white', v, 0.025, road, 2.6, 0.015, 0.12);
       }
     }
     for (const cross of ROADS) for (const side of [-1, 1]) for (let i = -3; i <= 3; i++) {
-      box('white', road + i * 1.8, 0.035, cross + side * 11, 1, 0.02, 3.4);
-      box('white', road + side * 11, 0.035, cross + i * 1.8, 3.4, 0.02, 1);
+      const bx = road + i * 1.8, bz = cross + side * 11;
+      const cx = road + side * 11, cz = cross + i * 1.8;
+      // The canal erases any paint that would float over water.
+      const overWater = (x: number, z: number) =>
+        x > CANAL.x0 - 1 && x < CANAL.x1 + 1 && z > CANAL.z0 - 1 && z < CANAL.z1 + 1;
+      if (!overWater(bx, bz)) box('white', bx, 0.035, bz, 1, 0.02, 3.4);
+      if (!overWater(cx, cz)) box('white', cx, 0.035, cz, 3.4, 0.02, 1);
     }
     for (const side of [-1, 1]) {
-      box('white', road + side * 9, 0.035, 0, 0.25, 0.18, 340);
+      if (road === 0) {
+        box('white', road + side * 9, 0.035, -131.5, 0.25, 0.18, 79);
+        box('white', road + side * 9, 0.035, 55.5, 0.25, 0.18, 231);
+      } else box('white', road + side * 9, 0.035, 0, 0.25, 0.18, 340);
       box('white', 0, 0.035, road + side * 9, 340, 0.18, 0.25);
     }
   }
@@ -226,10 +239,11 @@ export function buildMap(scene: THREE.Scene, kit: AssetKit): void {
   kit.stamp('box', 'ink', -27, 3.5, 23, 1.4, 5, 1.4, Math.PI / 4);
   kit.stamp('sphere', 'white', -27, 6.4, 23, 1.4, 1.4, 1.4);
   // Park paths and a dry fountain use the same geometry library.
-  box('leaf', 41, 0.025, -49, 32, 0.06, 31);
-  box('pavement', 41, 0.075, -49, 4, 0.05, 31); box('pavement', 41, 0.075, -49, 32, 0.05, 4);
-  kit.stamp('cylinder', 'white', 43, 0.4, -48, 3.5, 0.8, 3.5);
-  kit.stamp('cylinder', 'glass', 43, 0.81, -48, 2.8, 0.03, 2.8);
+  // The canal clips the lawn's south edge, so turf + path stop at its wall.
+  box('leaf', 41, 0.025, -37.75, 32, 0.06, 8.5);
+  box('pavement', 41, 0.075, -37.75, 4, 0.05, 8.5);
+  kit.stamp('cylinder', 'white', 50, 0.4, -38, 3.5, 0.8, 3.5);
+  kit.stamp('cylinder', 'glass', 50, 0.81, -38, 2.8, 0.03, 2.8);
   const rng = seeded(42);
   // Trees, benches, lamps render from Map data so visuals match colliders.
   for (const [x, z] of TREES) {
@@ -261,7 +275,73 @@ export function buildMap(scene: THREE.Scene, kit: AssetKit): void {
   buildRaceArena(scene, kit, box);
   buildHarbor(scene, kit, box);
   buildGarden(scene, kit, box);
+  buildCanalBridge(scene, kit);
   kit.flush(scene);
+}
+
+/** Grand Canal + Canal Bridge: sunken water basin under an elevated two-lane
+ *  deck on the x=0 avenue. All static instanced geometry (shares the unit
+ *  box/cylinder + shared materials), zero per-frame cost like the harbor. */
+export function buildCanalBridge(scene: THREE.Scene, kit: AssetKit): void {
+  const { x0, x1, z0, z1 } = CANAL;
+  const { halfW, deckY } = BRIDGE;
+  const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
+  const put = (m: MaterialName, x: number, y: number, z: number, w: number, h: number, d: number, yaw = 0, pitch = 0) =>
+    kit.stamp('box', m, x, y, z, w, h, d, yaw, pitch);
+  // Water sheet + dark bed.
+  put('glass', cx, WATER_Y - 0.15, cz, x1 - x0, 0.3, z1 - z0);
+  put('ink', cx, WATER_Y - 0.8, cz, x1 - x0, 0.4, z1 - z0);
+  // Concrete canal walls: parapet on the north side, flush curb on the
+  // south side where the promenade meets the bank at grade.
+  put('wall2', cx, -0.9, z1, x1 - x0, 2.6, 1.2);
+  put('white', cx, 0.45, z1, x1 - x0, 0.1, 1.4);
+  put('wall2', cx, -1.1, z0, x1 - x0, 2.2, 1.2);
+  for (const x of [x0, x1]) {
+    put('wall2', x, -0.9, cz, 1.2, 2.6, z1 - z0);
+    put('white', x, 0.45, cz, 1.4, 0.1, z1 - z0);
+  }
+  // Riverside promenade: paving + water-side curb + car-blocking bollards.
+  const px = (PROMENADE.x0 + PROMENADE.x1) / 2, pz = (PROMENADE.z0 + PROMENADE.z1) / 2;
+  put('pavement', px, -0.01, pz, PROMENADE.x1 - PROMENADE.x0, 0.06, PROMENADE.z1 - PROMENADE.z0);
+  put('wall2', px, -0.8, PROMENADE.z1, PROMENADE.x1 - PROMENADE.x0, 2.4, 0.5);
+  for (const bx of [PROMENADE.x0 + 1.5, PROMENADE.x1 - 1.5]) put('ink', bx, 0.5, pz, 0.4, 1, 0.4);
+  // Deck slab (top flush with the driving surface) + approach ramps.
+  const deckMidZ = (BRIDGE.zSD + BRIDGE.zND) / 2;
+  put('road', 0, deckY - 0.35, deckMidZ, halfW * 2, 0.7, BRIDGE.zND - BRIDGE.zSD);
+  const rampLen = Math.hypot(BRIDGE.zSD - BRIDGE.zSGrade, deckY);
+  const slope = Math.atan2(deckY, BRIDGE.zSD - BRIDGE.zSGrade);
+  const rampS = (BRIDGE.zSGrade + BRIDGE.zSD) / 2, rampN = (BRIDGE.zND + BRIDGE.zNGrade) / 2;
+  put('road', 0, deckY / 2 - 0.44, rampS, halfW * 2, 0.9, rampLen, 0, -slope);
+  put('road', 0, deckY / 2 - 0.44, rampN, halfW * 2, 0.9, rampLen, 0, slope);
+  // Ramp embankment skirts + parapet rails along the whole span.
+  for (const x of [-halfW - 0.2, halfW + 0.2]) {
+    put('wall2', x, 0.9, rampS, 0.4, 2.2, rampLen, 0, -slope);
+    put('wall2', x, 0.9, rampN, 0.4, 2.2, rampLen, 0, slope);
+    put('wall2', x, deckY + 0.55, deckMidZ, 0.5, 1.1, BRIDGE.zND - BRIDGE.zSD);
+    put('wall2', x, deckY / 2 + 0.55, rampS, 0.5, 1.1, rampLen, 0, -slope);
+    put('wall2', x, deckY / 2 + 0.55, rampN, 0.5, 1.1, rampLen, 0, slope);
+  }
+  // Deck paint: center dashes ride the slope, edge lines mark the lanes.
+  for (let z = BRIDGE.zSGrade + 5; z <= BRIDGE.zNGrade - 5; z += 7) {
+    const pitch = -Math.atan2(groundHeight(0, z + 1) - groundHeight(0, z - 1), 2);
+    kit.stamp('box', 'white', 0, groundHeight(0, z) + 0.03, z, 0.15, 0.02, 2.6, 0, pitch);
+  }
+  for (const x of [-halfW + 0.8, halfW - 0.8]) {
+    put('white', x, deckY + 0.03, deckMidZ, 0.25, 0.02, BRIDGE.zND - BRIDGE.zSD);
+    put('white', x, deckY / 2 + 0.03, rampS, 0.25, 0.02, rampLen, 0, -slope);
+    put('white', x, deckY / 2 + 0.03, rampN, 0.25, 0.02, rampLen, 0, slope);
+  }
+  // Center piers under the FLAT deck only (never under a ramp slope, where
+  // their caps would punch through the driving surface): one in the water,
+  // one on the south approach bank.
+  for (const pz of [-64, -84]) {
+    put('wall2', 0, 1.3, pz, 3, 7, 2.4);
+    put('wall2', 0, 4.35, pz, halfW * 2 + 1, 0.9, 2.6);
+  }
+  put('wall2', 0, 2.4, BRIDGE.zSD, halfW * 2 + 2, 4.8, 2);
+  put('wall2', 0, 2.4, BRIDGE.zND, halfW * 2 + 2, 4.8, 2);
+  // (Landing signs removed: the floating planes read as bars across the
+  // entrance. The bridge reads clearly without them.)
 }
 
 /** Movie Street Racing Arena: Tokyo-drift underground meetup.

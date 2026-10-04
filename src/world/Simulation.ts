@@ -1,7 +1,7 @@
 import { bodyContact, boundaryContact, circleContact, vehicleBody, type Body, type Contact } from './Collision';
 import { VEHICLES, VEHICLE_KINDS, type VehicleKind } from './Vehicles';
 import { WEATHER_GRIP, type Season, type Weather } from './Weather';
-import { GAME_CENTER, HOOP, intersects, LIMIT, SOLIDS, PARKED_CARS, PLACES, PROPS, RACE_SHOW_CARS, TRAFFIC_ROUTE, circleHit, seeded, type Point } from './Map';
+import { GAME_CENTER, HOOP, PROMENADE, groundHeight, inPromenade, inWater, intersects, LIMIT, SOLIDS, PARKED_CARS, PLACES, PROPS, RACE_SHOW_CARS, TRAFFIC_ROUTE, circleHit, seeded, type Point } from './Map';
 import { TRACK_LENGTH } from './Track';
 import { TableTennisSim, type TTShot, type TTSnapshot } from './TableTennis';
 import { BasketballSim, type BBSnapshot } from './Basketball';
@@ -92,6 +92,10 @@ export class Simulation {
   transition = 0;
   private lookUntil = 0;
   car = { x: 9, z: 29, yaw: 0, speed: 0, steer: 0, wheelSpin: 0, braking: false };
+  /** Bridge height: surface Y under the car (0 at grade, deckY on the span). */
+  carY = 0;
+  /** Slope pitch under the car (radians, + climbing) for the body tilt. */
+  carPitch = 0;
   /** Every parked car in the world is stealable. Includes your previously driven cars.
    *  Slots mirror Map PARKED_CARS + RACE_SHOW_CARS (all clear of driving lines). */
   parked: ParkedVehicle[] = [
@@ -173,8 +177,10 @@ export class Simulation {
   nearestVehicle(): VehicleTarget | null {
     const R = 6.5;
     const candidates: VehicleTarget[] = [];
+    // Your own ride keeps its bridge height: unreachable from far below/above.
+    const ownHigh = Math.abs(this.carY - Math.max(0, groundHeight(this.x, this.z, this.y))) > 1.5;
     const pd = Math.hypot(this.x - this.car.x, this.z - this.car.z);
-    candidates.push({ type: 'player', index: -1, kind: this.vehicleKind, x: this.car.x, z: this.car.z, yaw: this.car.yaw, speed: Math.abs(this.car.speed), dist: pd, enterable: pd < R, reason: pd < R ? null : 'too far' });
+    candidates.push({ type: 'player', index: -1, kind: this.vehicleKind, x: this.car.x, z: this.car.z, yaw: this.car.yaw, speed: Math.abs(this.car.speed), dist: pd, enterable: pd < R && !ownHigh, reason: ownHigh ? 'too high' : pd < R ? null : 'too far' });
     this.parked.forEach((p, i) => {
       const d = Math.hypot(this.x - p.x, this.z - p.z);
       candidates.push({ type: 'parked', index: i, kind: p.kind, x: p.x, z: p.z, yaw: p.yaw, speed: 0, dist: d, enterable: d < R, reason: d < R ? null : 'too far' });
@@ -255,6 +261,8 @@ export class Simulation {
     this.car.speed = 0; this.car.steer = 0; this.car.braking = false;
     this.x = x; this.z = z; this.yaw = yaw; this.facing = yaw;
     this.lateralSpeed = 0; this.acceleration = 0;
+    this.carY = Math.max(0, groundHeight(x, z)); this.carPitch = 0;
+    this.y = this.carY; this.vy = 0;
     this.boost = 100; this.boosting = false; this.boostDelay = 0;
     this.previous = { x, z, y: this.y };
     this.clearInput();
@@ -324,7 +332,7 @@ export class Simulation {
   cycleVehicle(): boolean {
     if (!this.active || this.mode !== 'roam' || !this.driving || Math.abs(this.car.speed) > 0.2 || this.transition > 0) return false;
     const next = VEHICLE_KINDS[(VEHICLE_KINDS.indexOf(this.vehicleKind) + 1) % VEHICLE_KINDS.length];
-    if (Math.abs(this.lateralSpeed) > 0.2 || this.contact(vehicleBody(this.car.x, this.car.z, this.car.yaw, next))) return false;
+    if (Math.abs(this.lateralSpeed) > 0.2 || this.contact(vehicleBody(this.car.x, this.car.z, this.car.yaw, next), undefined, false, this.carY)) return false;
     this.vehicleKind = next; this.lateralSpeed = 0; return true;
   }
   repair(): void { this.damage = 0; }
@@ -356,6 +364,9 @@ export class Simulation {
       }
       this.driving = true; this.x = this.car.x; this.z = this.car.z; this.y = this.vy = 0;
       this.yaw = this.car.yaw; this.pitch = 0.12;
+      // Parked + traffic targets sit at grade; your own ride keeps its height.
+      if (target.type !== 'player') { this.carY = 0; this.carPitch = 0; this.y = 0; }
+      else this.y = this.carY;
       this.boost = 100; this.boosting = false; this.boostDelay = 0;
       this.transition = 0.35;
     } else {
@@ -364,10 +375,12 @@ export class Simulation {
       const fx = Math.sin(this.car.yaw), fz = -Math.cos(this.car.yaw);
       const rx = Math.cos(this.car.yaw), rz = Math.sin(this.car.yaw);
       const offsets = [[1.9, 0], [-1.9, 0], [1.9, -1.5], [-1.9, -1.5], [0, reach], [0, -reach]];
+      // Exits must land on the same surface (deck exits stay on the deck).
       const exit = offsets.map(([right, forward]) => ({ x: this.car.x + rx * right + fx * forward, z: this.car.z + rz * right + fz * forward }))
-        .find(p => !this.walkBlocked(p.x, p.z));
+        .find(p => !this.walkBlocked(p.x, p.z, this.carY) && Math.abs(Math.max(0, groundHeight(p.x, p.z, this.carY)) - this.carY) < 1.2);
       if (!exit) return false;
       this.driving = false; this.lateralSpeed = 0; this.acceleration = 0; this.skidding = false; this.x = exit.x; this.z = exit.z; this.car.speed = 0; this.car.steer = 0; this.car.braking = false;
+      this.y = this.carY; this.vy = 0;
       this.pvx = 0; this.pvz = 0;
       this.transition = 0.3;
     }
@@ -378,36 +391,69 @@ export class Simulation {
   probeFront(x: number, z: number, yaw: number): { distance: number; blocked: boolean; label: string | null } {
     const fx = Math.sin(yaw), fz = -Math.cos(yaw);
     const bumper = VEHICLES[this.vehicleKind].length / 2 + 0.05;
+    const y = this.driving ? this.carY : this.y;
+    const mired = inWater(this.driving ? this.car.x : this.x, this.driving ? this.car.z : this.z);
     for (let distance = 0.125; distance <= 13; distance += 0.25) {
-      const hit = this.contact({ x: x + fx * (bumper + distance), z: z + fz * (bumper + distance), yaw, halfWidth: 1.12, halfLength: 0.125 });
+      const hit = this.contact({ x: x + fx * (bumper + distance), z: z + fz * (bumper + distance), yaw, halfWidth: 1.12, halfLength: 0.125 }, undefined, false, y, mired);
       if (hit) return { distance: Math.max(0, distance - 0.125), blocked: distance < 6, label: hit.label };
     }
     return { distance: 999, blocked: false, label: null };
   }
 
-  private contact(body: Body, ignore?: TrafficCar, includePlayer = false): (Contact & { label: string }) | null {
+  private contact(body: Body, ignore?: TrafficCar, includePlayer = false, y = 0, mired = false): (Contact & { label: string }) | null {
     const boundary = boundaryContact(body, LIMIT);
     if (boundary) return { ...boundary, label: 'boundary' };
+    // Bridge support: open water and deck edges are walls — unless the body
+    // is already mired, in which case anything goes (escape back to the bank).
+    // The promenade under the span is feet-only: cars read it as a wall.
+    // Normals come from car-perspective heights (promenade counts as blocked)
+    // so the gradient never goes flat at the water line: impacts register,
+    // velocity dies, and the car settles instead of grinding in place.
+    const ch = (x: number, z: number): number => {
+      const g = groundHeight(x, z, y);
+      if (g < 0) return g;
+      if (y < 1.5 && inPromenade(x, z)) return -1.6;
+      return g;
+    };
+    const h = groundHeight(body.x, body.z, y);
+    if (!mired && (h < 0 || Math.abs(h - y) > 1.2)) {
+      const s = 1.2;
+      const gx = ch(body.x + s, body.z) - ch(body.x - s, body.z);
+      const gz = ch(body.x, body.z + s) - ch(body.x, body.z - s);
+      const len = Math.hypot(gx, gz) || 1;
+      return { nx: gx / len, nz: gz / len, depth: 0.3, label: h < 0 ? 'water' : 'ledge' };
+    }
+    if (!mired && y < 1.5 && inPromenade(body.x, body.z)) {
+      const dxl = body.x - PROMENADE.x0, dxr = PROMENADE.x1 - body.x;
+      const dzl = body.z - PROMENADE.z0, dzr = PROMENADE.z1 - body.z;
+      const m = Math.min(dxl, dxr, dzl, dzr);
+      const n = m === dxl ? { nx: -1, nz: 0 } : m === dxr ? { nx: 1, nz: 0 } : m === dzl ? { nx: 0, nz: -1 } : { nx: 0, nz: 1 };
+      return { ...n, depth: 0.3, label: 'promenade' };
+    }
     for (const box of SOLIDS) {
       const hit = bodyContact(body, { x: box.x, z: box.z, yaw: 0, halfWidth: box.w / 2, halfLength: box.d / 2 });
       if (hit) return { ...hit, label: 'building' };
     }
+    // Everything below sits at grade: ignore it while up on the bridge deck.
+    const high = Math.abs(y) > 1.5;
     for (const p of PARKED_CARS) {
+      if (high) break;
       const hit = bodyContact(body, vehicleBody(p.x, p.z, 0, p.label === 'parked-van' ? 'van' : 'car'));
       if (hit) return { ...hit, label: p.label ?? 'parked car' };
     }
     // Dynamic parked fleet (includes stolen-car leftovers + your old rides).
     for (const p of this.parked) {
+      if (high) break;
       const hit = bodyContact(body, vehicleBody(p.x, p.z, p.yaw, p.kind));
       if (hit) return { ...hit, label: 'parked car' };
     }
     // Your last ride stays solid while you are on foot.
-    if (!this.driving) {
+    if (!this.driving && !high) {
       const hit = bodyContact(body, vehicleBody(this.car.x, this.car.z, this.car.yaw, this.vehicleKind));
       if (hit) return { ...hit, label: 'parked car' };
     }
     for (const t of this.traffic) {
-      if (t === ignore) continue;
+      if (t === ignore || high) continue;
       const hit = bodyContact(body, vehicleBody(t.x, t.z, t.yaw, t.kind));
       if (hit) return { ...hit, label: 'traffic' };
     }
@@ -425,12 +471,15 @@ export class Simulation {
     }
     return null;
   }
-  private walkBlocked(x: number, z: number): boolean {
+  private walkBlocked(x: number, z: number, y = this.y): boolean {
+    // Open water blocks — but the bridge deck flying above it does not.
+    if (groundHeight(x, z, y) < 0) return true;
+    const high = Math.abs(y) > 1.5;
     return Math.abs(x) + 0.48 >= LIMIT || Math.abs(z) + 0.48 >= LIMIT || intersects(x, z, 0.48) ||
-      !!circleContact(vehicleBody(this.car.x, this.car.z, this.car.yaw, this.vehicleKind), x, z, 0.48) ||
-      PARKED_CARS.some(p => circleContact(vehicleBody(p.x, p.z, 0, p.label === 'parked-van' ? 'van' : 'car'), x, z, 0.48)) ||
-      this.parked.some(p => circleContact(vehicleBody(p.x, p.z, p.yaw, p.kind), x, z, 0.48)) ||
-      this.traffic.some(t => circleContact(vehicleBody(t.x, t.z, t.yaw, t.kind), x, z, 0.48)) ||
+      (!high && !!circleContact(vehicleBody(this.car.x, this.car.z, this.car.yaw, this.vehicleKind), x, z, 0.48)) ||
+      (!high && PARKED_CARS.some(p => circleContact(vehicleBody(p.x, p.z, 0, p.label === 'parked-van' ? 'van' : 'car'), x, z, 0.48))) ||
+      (!high && this.parked.some(p => circleContact(vehicleBody(p.x, p.z, p.yaw, p.kind), x, z, 0.48))) ||
+      (!high && this.traffic.some(t => circleContact(vehicleBody(t.x, t.z, t.yaw, t.kind), x, z, 0.48))) ||
       PROPS.some(p => circleHit(x, z, 0.48, p.x, p.z, p.r));
   }
   /** Sweep translation AND rotation; only commit non-overlapping poses. */
@@ -440,17 +489,22 @@ export class Simulation {
     const turn = wantedYaw - this.car.yaw;
     const steps = Math.max(1, Math.ceil((Math.hypot(vx, vz) * dt + Math.abs(turn) * VEHICLES[this.vehicleKind].length / 2) / 0.12));
     const h = dt / steps; let yawStep = turn / steps;
+    // Mired in the drink (debug/teleport only — gameplay can never enter
+    // water): relax the support wall so the car can crawl back to the bank.
+    // Raw water test on purpose: a car beached ON the promenade reads dry
+    // ground but still needs the escape hatch.
+    const mired = inWater(this.car.x, this.car.z);
     for (let i = 0; i < steps; i++) {
       const x = this.car.x, z = this.car.z, yaw = this.car.yaw;
       const nx = x + vx * h, nz = z + vz * h, nyaw = yaw + yawStep;
-      const hit = this.contact(vehicleBody(nx, nz, nyaw, this.vehicleKind));
+      const hit = this.contact(vehicleBody(nx, nz, nyaw, this.vehicleKind), undefined, false, this.carY, mired);
       if (!hit) { this.car.x = nx; this.car.z = nz; this.car.yaw = nyaw; }
       else {
         // Resolve to the last safe pose, including the vehicle's rotation.
         let lo = 0, hi = 1;
         for (let j = 0; j < 10; j++) {
           const mid = (lo + hi) / 2;
-          if (this.contact(vehicleBody(x + (nx - x) * mid, z + (nz - z) * mid, yaw + yawStep * mid, this.vehicleKind))) hi = mid;
+          if (this.contact(vehicleBody(x + (nx - x) * mid, z + (nz - z) * mid, yaw + yawStep * mid, this.vehicleKind), undefined, false, this.carY, mired)) hi = mid;
           else lo = mid;
         }
         this.car.x = x + (nx - x) * lo; this.car.z = z + (nz - z) * lo; this.car.yaw = yaw + yawStep * lo;
@@ -464,11 +518,13 @@ export class Simulation {
         yawStep = 0;
         // Preserve tangential travel instead of bouncing the entire car backwards.
         const sx = this.car.x + vx * h * (1 - lo), sz = this.car.z + vz * h * (1 - lo);
-        if (!this.contact(vehicleBody(sx, sz, this.car.yaw, this.vehicleKind))) { this.car.x = sx; this.car.z = sz; }
+        if (!this.contact(vehicleBody(sx, sz, this.car.yaw, this.vehicleKind), undefined, false, this.carY, mired)) { this.car.x = sx; this.car.z = sz; }
       }
       const body = vehicleBody(this.car.x, this.car.z, this.car.yaw, this.vehicleKind);
       const carSpeed = Math.hypot(vx, vz);
-      for (const ped of this.peds) if (!ped.ragdoll && this.time >= ped.scaredUntil && circleContact(body, ped.x, ped.z, 0.5)) {
+      // Peds stay at grade: a car flying over on the bridge deck passes above them.
+      const highAbovePeds = Math.abs(this.carY) > 1.5;
+      for (const ped of this.peds) if (!highAbovePeds && !ped.ragdoll && this.time >= ped.scaredUntil && circleContact(body, ped.x, ped.z, 0.5)) {
         // Launch ragdoll — vehicle rolls right over at full speed.
         ped.ragdoll = true;
         ped.ry = 0;
@@ -491,6 +547,16 @@ export class Simulation {
     this.x = this.car.x; this.z = this.car.z;
     this.car.speed = vx * Math.sin(this.car.yaw) - vz * Math.cos(this.car.yaw);
     this.lateralSpeed = vx * Math.cos(this.car.yaw) + vz * Math.sin(this.car.yaw);
+    // Ride the surface: ramps lift the car, deck edges and water hold it back.
+    const support = groundHeight(this.car.x, this.car.z, this.carY);
+    if (support >= 0 && Math.abs(support - this.carY) <= 1.2) this.carY = support;
+    // Body follows the slope under the nose (facing-relative, so reversing
+    // down a ramp still tilts the right way).
+    const fx = Math.sin(this.car.yaw), fz = -Math.cos(this.car.yaw);
+    const ahead = Math.max(0, groundHeight(this.car.x + fx * 2, this.car.z + fz * 2, this.carY));
+    const behind = Math.max(0, groundHeight(this.car.x - fx * 2, this.car.z - fz * 2, this.carY));
+    const slopePitch = Math.atan2(ahead - behind, 4);
+    this.carPitch += (clamp(slopePitch, -0.3, 0.3) - this.carPitch) * 0.2;
   }
   private registerImpact(speed: number, withWhat: string, minor = false): void {
     const s = Math.abs(speed);
@@ -696,8 +762,16 @@ export class Simulation {
       this.boosting = false;
       this.boostDelay = Math.max(0, this.boostDelay - dt);
       if (this.boostDelay <= 0) this.boost = Math.min(100, this.boost + 14 * dt);
-      // Velocity-based locomotion: accelerate into the wish direction, ease out on release.
-      const grounded = this.y === 0;
+      // On foot the canal is a wall and ramps are walkable (1m step-up limit).
+      // Mired starts (teleport only) may always step back to dry land.
+      const groundHere = Math.max(0, groundHeight(this.x, this.z, this.y));
+      const inDrink = groundHeight(this.x, this.z, this.y) < 0;
+      const grounded = this.y <= groundHere + 0.02;
+      const footBlocked = (px: number, pz: number): boolean => {
+        if (!inDrink && groundHeight(px, pz, this.y) < 0) return true;
+        if (groundHeight(px, pz, this.y) - this.y > 1.0) return true;
+        return this.walkBlocked(px, pz);
+      };
       const length = Math.max(1, Math.hypot(forward, side));
       const targetSpeed = this.held('sprint') ? 8 : 4.6;
       const wishX = (Math.sin(this.yaw) * forward + Math.cos(this.yaw) * side) / length * targetSpeed;
@@ -711,10 +785,13 @@ export class Simulation {
       const dx = this.pvx * dt, dz = this.pvz * dt;
       const x = clamp(this.x + dx, -LIMIT, LIMIT), z = clamp(this.z + dz, -LIMIT, LIMIT);
       // 4) On foot: player car + parked + traffic + props + peds all push back.
-      const blocks = (px: number, pz: number) => this.walkBlocked(px, pz);
+      const blocks = (px: number, pz: number) => footBlocked(px, pz);
       // Axis separation permits sliding along facades instead of sticking to corners.
       if (!intersects(x, this.z, 0.48) && !blocks(x, this.z)) this.x = x; else this.pvx = 0;
       if (!intersects(this.x, z, 0.48) && !blocks(this.x, z)) this.z = z; else this.pvz = 0;
+      // Ramps carry the feet up; walking off the deck edge means falling.
+      const groundNow = Math.max(0, groundHeight(this.x, this.z, this.y));
+      if (this.y < groundNow && groundNow - this.y <= 1.0) { this.y = groundNow; this.vy = 0; }
       // Soft ped push so crowds part around you.
       for (const ped of this.peds) {
         if (circleHit(this.x, this.z, 0.4, ped.x, ped.z, 0.5)) {
@@ -736,10 +813,11 @@ export class Simulation {
       this.stride += speed2d * dt * 2.1;
       this.pace = speed2d;
       // 5) Jump + gravity, with a landing dip scaled by fall speed.
+      const ground = Math.max(0, groundHeight(this.x, this.z, this.y));
       if (this.jumpPressed && grounded) this.vy = 5.4;
       const fallVy = this.vy;
-      this.vy -= 17 * dt; this.y = Math.max(0, this.y + this.vy * dt);
-      if (this.y === 0) {
+      this.vy -= 17 * dt; this.y = Math.max(ground, this.y + this.vy * dt);
+      if (this.y === ground) {
         if (fallVy < -4) this.landDip = 1;
         this.vy = 0;
       }

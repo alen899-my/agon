@@ -82,7 +82,7 @@ export function buildings(): Building[] {
 export const BUILDINGS = buildings();
 export const SOLIDS: Box[] = [...BUILDINGS,
   { x: -27, z: 23, w: 4, d: 4, h: 2.5 },
-  { x: 43, z: -48, w: 7, d: 7, h: 0.8 },
+  { x: 50, z: -38, w: 7, d: 7, h: 0.8 },
   // Table tennis table body blocks walking (players enter via E, not by walking through).
   { x: GAME_CENTER.x, z: GAME_CENTER.z, w: TABLE.w, d: TABLE.d, h: TABLE.h },
   // Basketball pole + stanchion (rim overhangs the court, walkable under it).
@@ -118,13 +118,63 @@ for (const x of [-12, 12, -128, 128]) {
     LAMPS.push({ x, z: lz, r: 0.35, kind: 'prop', label: 'lamp' });
   }
 }
+// Canal Bridge works: the x=0 avenue segment over the canal becomes water,
+// so the two avenue lamps inside the basin move one block over
+// (still clear of every road band).
+for (const lamp of LAMPS) {
+  if (lamp.x === 12 && lamp.z === -68) { lamp.x = 16; lamp.z = -38; }
+  if (lamp.x === 12 && lamp.z === -44) { lamp.x = 24; lamp.z = -38; }
+  // West-bank lamp stood on the promenade desire line; shift it with it.
+  if (lamp.x === -12 && lamp.z === -68) { lamp.x = -14; lamp.z = -62; }
+}
+/** Grand Canal: sunken water basin crossed by the x=0 avenue bridge.
+ *  x0/x1 west/east walls, z0 south edge, z1 north edge. Water top sits at
+ *  WATER_Y; the old roadbed is gone (see ROAD_GAP), so nothing drivable
+ *  remains at grade inside. */
+export const CANAL = { x0: -8, x1: 58, z0: -70, z1: -42 };
+/** Gap carved out of the x=0 avenue slabs where the canal passes under. */
+export const ROAD_GAP = { z0: -72, z1: -40 };
+/** Canal Bridge: elevated two-lane deck over the canal along x=0.
+ *  deckY top surface; ramps rise from grade at zSGrade/zNGrade landings. */
+export const BRIDGE = { halfW: 5, deckY: 5.5, zSGrade: -117, zSD: -95, zND: -57, zNGrade: -35 };
+/** Water surface height (below grade). groundHeight returns this for water. */
+export const WATER_Y = -1.6;
+/** True when (x,z) is open canal water (bridge deck footprint included —
+ *  check groundHeight first when the deck matters). */
+export function inWater(x: number, z: number): boolean {
+  return x >= CANAL.x0 && x <= CANAL.x1 && z >= CANAL.z0 && z <= CANAL.z1;
+}
+/** Riverside promenade: pedestrian towpath along the canal's south bank that
+ *  passes UNDER the bridge deck (cars stay out — see contact()). */
+export const PROMENADE = { x0: -8, x1: 58, z0: -69.4, z1: -66.4 };
+/** True when (x,z) is promenade paving (feet only). */
+export function inPromenade(x: number, z: number): boolean {
+  return x >= PROMENADE.x0 && x <= PROMENADE.x1 && z >= PROMENADE.z0 && z <= PROMENADE.z1;
+}
+/** Deck/ramp surface height where the bridge footprint covers (x,z), else null. */
+function bridgeHeightAt(x: number, z: number): number | null {
+  if (Math.abs(x) > BRIDGE.halfW || z < BRIDGE.zSGrade || z > BRIDGE.zNGrade) return null;
+  if (z >= BRIDGE.zSD && z <= BRIDGE.zND) return BRIDGE.deckY;
+  if (z < BRIDGE.zSD) return BRIDGE.deckY * (z - BRIDGE.zSGrade) / (BRIDGE.zSD - BRIDGE.zSGrade);
+  return BRIDGE.deckY * (BRIDGE.zNGrade - z) / (BRIDGE.zNGrade - BRIDGE.zND);
+}
+/** Walkable/drivable surface height at (x,z) for a body currently at height
+ *  y: the deck only counts when you are already up on it (within 1.2m), so
+ *  feet strolling the promenade below never snap up onto the span. */
+export function groundHeight(x: number, z: number, y = 0): number {
+  const b = bridgeHeightAt(x, z);
+  if (b !== null && Math.abs(b - y) <= 1.2) return b;
+  if (inPromenade(x, z)) return 0;
+  if (inWater(x, z)) return WATER_Y;
+  return 0;
+}
 /** Shared with Assets so visuals and colliders can never drift apart. */
-export const BENCHES: readonly (readonly [number, number])[] = [[-36, 32], [-20, 32], [31, -56], [49, -56], [26, 26], [104, -92], [-48, 122], [48, 122], [100, -98], [30, 104]];
-export const TREES: readonly (readonly [number, number])[] = [[27, -39], [28, -60], [51, -62], [53, -38], [36, -63], [-42, 16], [-43, 31], [-15, 16], [20, 62], [56, 24], [125, -95], [-20, 105], [20, 105], [-64, 122], [64, 104], [95, -115], [95, -128], [100, -64], [-64, 100], [66, 100], [14, 99], [46, 99]];
+export const BENCHES: readonly (readonly [number, number])[] = [[-36, 32], [-20, 32], [31, -34], [49, -56], [26, 26], [104, -92], [-48, 122], [48, 122], [100, -98], [30, 104]];
+export const TREES: readonly (readonly [number, number])[] = [[27, -39], [58, -32], [53, -38], [34, -32], [-42, 16], [-43, 31], [-15, 16], [20, 62], [56, 24], [125, -95], [-20, 105], [20, 105], [-64, 122], [64, 104], [95, -115], [95, -128], [100, -64], [-64, 100], [66, 100], [14, 99], [46, 99], [44, -34]];
 export const PROPS: Collider[] = [
   ...LAMPS,
   { x: -27, z: 23, r: 3.2, kind: 'prop', label: 'sculpture' },
-  { x: 43, z: -48, r: 3.8, kind: 'prop', label: 'fountain' },
+  { x: 50, z: -38, r: 3.8, kind: 'prop', label: 'fountain' },
   ...BENCHES.map(([x, z]): Collider => ({ x, z, r: 1.2, kind: 'prop', label: 'bench' })),
   ...TREES.map(([x, z]): Collider => ({ x, z, r: 0.6, kind: 'prop', label: 'tree' })),
   { x: 30, z: 62, r: 0.5, kind: 'prop', label: 'canopy-pillar' },

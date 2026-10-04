@@ -8,7 +8,7 @@ import { INTENSITY_FOG_FAR, INTENSITY_FOG_NEAR, INTENSITY_GLOOM, INTENSITY_RAIN_
 import { wiperAngle } from './VehicleFactory';
 import { LAMPS } from './Map';
 import { AssetKit, buildMap, type Stickman, type Vehicle } from './Assets';
-import { BUILDINGS, GAME_CENTER, HOOP, PLACES, RACE_ARENA, RACE_CROWD, RIM, TABLE, seeded } from './Map';
+import { BUILDINGS, GAME_CENTER, HOOP, PLACES, RACE_ARENA, RACE_CROWD, RIM, TABLE, groundHeight, seeded } from './Map';
 import { BarrelSim, createBarrelMesh } from './Barrels';
 import { Simulation, type WorldAction, type WorldSnapshot } from './Simulation';
 import { COUNTDOWN_MS, RaceSim, type RacerState } from './RaceSim';
@@ -302,7 +302,8 @@ export class WorldEngine {
         const spec = VEHICLES[sm.vehicleKind];
         const sliding = sm.driving && sm.skidding && Math.abs(sm.car.speed) > 3;
         this.skids.update({
-          active: sm.phase === 'playing' && sliding,
+          // Skid ribbons live at grade: no phantom marks on the water below.
+          active: sm.phase === 'playing' && sliding && sm.carY < 1.5,
           x: sm.car.x, z: sm.car.z, yaw: sm.car.yaw,
           slip: Math.abs(sm.lateralSpeed), time: sm.time,
           rearOff: spec.length * 0.32, trackHalf: spec.width / 2 - 0.03,
@@ -1312,18 +1313,18 @@ export class WorldEngine {
     // Player headlight: shadowless spot thrown ahead of the driven car.
     if (this._nightFactor > 0.01 && sim.driving) {
       const fx = Math.sin(sim.car.yaw), fz = -Math.cos(sim.car.yaw);
-      this.headlight.position.set(sim.car.x + fx * 1.5, 1.1, sim.car.z + fz * 1.5);
-      this.headlight.target.position.set(sim.car.x + fx * 14, 0.2, sim.car.z + fz * 14);
+      this.headlight.position.set(sim.car.x + fx * 1.5, sim.carY + 1.1, sim.car.z + fz * 1.5);
+      this.headlight.target.position.set(sim.car.x + fx * 14, sim.carY + 0.2, sim.car.z + fz * 14);
       this.headlight.visible = true;
     } else this.headlight.visible = false;
     const accel = sim.driving ? sim.acceleration : 0;
     for (const [kind, vehicle] of this.fleet) vehicle.group.visible = kind === sim.vehicleKind;
     this.car = this.fleet.get(sim.vehicleKind)!;
-    this.car.group.position.set(sim.car.x, 0.08, sim.car.z); this.car.group.rotation.y = -sim.car.yaw;
+    this.car.group.position.set(sim.car.x, sim.carY + 0.08, sim.car.z); this.car.group.rotation.y = -sim.car.yaw;
     // Wipers: auto sweeps in rain, manual T-key override (on = always, off = parked).
     const wiper = this.wiperSweep(0);
     this.car.update(sim.car.speed, sim.car.steer, dt, sim.car.braking, {
-      pitch: THREE.MathUtils.clamp(-accel * 0.012, -0.06, 0.08),
+      pitch: THREE.MathUtils.clamp(-accel * 0.012 + sim.carPitch, -0.3, 0.3),
       roll: sim.skidding ? Math.sin(sim.time * 20) * 0.02 : -sim.car.steer * Math.min(0.05, Math.abs(sim.car.speed) * 0.003),
     }, sim.blinker, sim.time, wiper);
     this.car.glazing.visible = !(sim.driving && sim.view === 'first');
@@ -1538,20 +1539,27 @@ export class WorldEngine {
       this.target.copy(this.camera.position).add(this.direction.set(Math.sin(sim.yaw) * 10, -Math.sin(sim.pitch) * 10, -Math.cos(sim.yaw) * 10));
       this.camera.lookAt(this.target);
     } else {
-      this.target.set(x, y + 1.35, z);
+      // Chase rides at car height so the bridge deck doesn't sink out of frame.
+      // Both the look target AND the camera anchor lift with the car —
+      // otherwise the camera sits at street level staring up through the deck.
+      const rideY = sim.driving ? sim.carY : 0;
+      this.target.set(x, y + 1.35 + rideY, z);
       // Chase pulls back and trembles a touch as speed climbs — top speed reads fast.
       const spec = VEHICLES[sim.vehicleKind];
       const ratio = sim.driving && spec.topSpeed > 0
         ? Math.min(1.2, Math.abs(sim.car.speed) / spec.topSpeed) : 0;
       const vib = ratio * ratio * 0.06;
       const distance = sim.driving ? spec.length + 6 + ratio * 2.2 : 6.5;
-      this.desired.set(x - Math.sin(sim.yaw) * distance, y + 3.4 + sim.pitch * 5, z + Math.cos(sim.yaw) * distance);
+      this.desired.set(x - Math.sin(sim.yaw) * distance, y + 3.4 + sim.pitch * 5 + rideY, z + Math.cos(sim.yaw) * distance);
       this.direction.subVectors(this.desired, this.target); let cameraDistance = this.direction.length(); this.direction.normalize();
       this.ray.set(this.target, this.direction);
       for (const box of this.cameraBoxes) if (this.ray.intersectBox(box, this.hit)) cameraDistance = Math.min(cameraDistance, Math.max(0.45, this.hit.distanceTo(this.target) - 0.3));
       this.camera.position.copy(this.target).addScaledVector(this.direction, cameraDistance);
       this.camera.position.x += shakeX + Math.sin(sim.time * 47) * vib;
       this.camera.position.y += shakeY + Math.abs(Math.cos(sim.time * 39)) * vib;
+      // Never sink the lens into the deck/ramps when the chase swings low.
+      const lensFloor = Math.max(0, groundHeight(this.camera.position.x, this.camera.position.z, this.camera.position.y)) + 1.1;
+      if (this.camera.position.y < lensFloor) this.camera.position.y = lensFloor;
       this.camera.lookAt(this.target);
     }
     this.sun.position.set(x + 35, 65, z + 25); this.sun.target.position.set(x, 0, z); this.sun.target.updateMatrixWorld();
