@@ -625,6 +625,7 @@ kbd { font: inherit; border: 1px solid var(--line); padding: 2px 4px; border-rad
   .race-cars { grid-template-columns: repeat(4, 1fr); }
   .blinker-hud { top: 76px; font-size: 8px; }
   .driving-controls { flex-wrap: wrap; gap: 8px; }
+}
 @media (orientation: landscape) and (max-height: 600px) {
   .race-board { max-height: 52vh; }
   .race-lobby, .race-setup { max-height: 74vh; }
