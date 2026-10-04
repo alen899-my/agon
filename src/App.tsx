@@ -95,7 +95,14 @@ export default function App() {
     return true;
   })();
   const gunIntroTouch = (() => {
-    try { return !matchMedia('(hover: hover) and (pointer: fine)').matches; } catch { return false; }
+    try {
+      if (matchMedia('(hover: hover) and (pointer: fine)').matches) return false;
+      if (matchMedia('(any-hover: hover) and (any-pointer: fine)').matches) return false;
+      if (matchMedia('(min-width: 1025px), (min-width: 768px) and (min-height: 550px)').matches) return false;
+      return true;
+    } catch {
+      return false;
+    }
   })();
   const pendingToken = useRef<Session | null>(null);
   const entryLock = useRef(false);

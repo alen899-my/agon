@@ -765,12 +765,31 @@ kbd { font: inherit; border: 1px solid var(--line); padding: 2px 4px; border-rad
   .dock-x { min-width: 24px; font-size: 10px; border-radius: 6px; }
   .gun-hint, .gun-intro { bottom: 168px; font-size: 9px; }
 }
-@media (hover: hover) and (pointer: fine) {
-  .world-combat-pads { display: none; }
-  .mobile-stick-zone, .mobile-action-zone { display: none; }
-}
-@media (hover: hover) and (pointer: fine) {
-  .nitro-bottom { bottom: 26px; }
+/* ── Desktop & Large Screen: Hide all on-screen mobile controls (driving pads, joystick, combat, minigames) ── */
+@media (hover: hover) and (pointer: fine),
+       (any-hover: hover) and (any-pointer: fine),
+       (min-width: 1025px),
+       (min-width: 768px) and (min-height: 550px) {
+  .world-controls,
+  .world-controls.driving-controls,
+  .driving-controls,
+  .drive-steering,
+  .drive-pedals,
+  .drive-aux-row,
+  .drive-main-row,
+  .drive-pad,
+  .mobile-stick-zone,
+  .mobile-action-zone,
+  .world-combat-pads,
+  .tt-controls,
+  .bb-controls {
+    display: none !important;
+  }
+  .desktop-look { display: inline !important; }
+  .touch-look { display: none !important; }
+  .blinker-hud { display: none !important; }
+  .nitro-bottom { bottom: 26px !important; }
+  .gun-intro { bottom: 84px; }
 }
 @media (max-width: 640px) {
   .nitro-bottom { bottom: 148px; padding: 6px 10px; gap: 8px; }
@@ -785,12 +804,6 @@ kbd { font: inherit; border: 1px solid var(--line); padding: 2px 4px; border-rad
 .driving-readout button { padding: 7px; cursor: pointer; background: var(--surface); color: inherit; border: 1px solid var(--line); }
 .driving-readout small { font-size: 8px; color: var(--muted); }
 .desktop-look { display: none; }
-@media (hover: hover) and (pointer: fine) {
-  .world-controls, .tt-controls, .bb-controls { display: none; }
-  .mobile-stick-zone, .mobile-action-zone { display: none; }
-  .desktop-look { display: inline; } .touch-look { display: none; }
-  .blinker-hud { display: none; }
-}
 @media (max-height: 500px) {
   .driving-readout { top: 54px; left: 12px; padding: 6px; font-size: 9px; gap: 2px; }
   .drive-pad { min-width: 72px; min-height: 72px; }
