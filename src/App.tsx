@@ -421,11 +421,11 @@ export default function App() {
           <button className="control" disabled={entering} onClick={() => { const saved = loadSession(); if (saved) void restoreServer(saved); }}>REJOIN</button>
           <button className="control" disabled={entering} onClick={() => void leaveServer()}>LEAVE SERVER</button>
         </div>}
-        <div className="hud-top" role="status" aria-label="Map and speed">
-          <button className="hud-map" onClick={toggleMap} aria-label="Open district map"><DistrictMap state={state} theme={theme} raceActive={engine.current?.raceGuidanceActive ?? false} /></button>
+        <div className="hud-top" role="status" aria-label="Weather and speed">
           {state && <div className="hud-weather" role="status" aria-label={`${state.season}${state.weather === 'rain' ? ', raining — slippery roads' : state.weather === 'snow' ? ', snowing — very slippery roads' : ''}`}>{state.season === 'spring' ? '🌸 SPRING' : state.season === 'summer' ? '☀ SUMMER' : state.season === 'autumn' ? '🍂 AUTUMN' : '❄ WINTER'}{state.weather === 'rain' ? ' · 🌧 RAIN' : state.weather === 'snow' ? ' · ❄ SNOW' : ''}</div>}
           {state?.driving && <div className="hud-speed" aria-label="Speed"><b>{state?.speed ?? 0}<small>KM/H</small></b><span>{VEHICLES[state.vehicleKind].name} · {state.acceleration.toFixed(1)} m/s^2{(state?.damage ?? 0) > 0 ? ` · DMG ${state?.damage}%` : ''}</span><button className="hud-cycle" disabled={!active || Math.abs(state?.car.speed ?? 0) > 0.2} onClick={() => { engine.current?.cycleVehicle(); focus(); }} aria-label="Next vehicle">⇄</button></div>}
         </div>
+        <button className="hud-map-br" onClick={toggleMap} aria-label="Open district map"><DistrictMap state={state} theme={theme} raceActive={engine.current?.raceGuidanceActive ?? false} /></button>
         {state?.view === 'first' && <div className="crosshair" aria-hidden="true">+</div>}
         {state != null && state.pedBloodSeq > 0 && state.time - state.pedBloodAt < 1.5 &&
           <div key={state.pedBloodSeq} className="blood-splash" aria-hidden="true"><div className="blood-splash-drip" /></div>}

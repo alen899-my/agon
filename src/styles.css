@@ -483,10 +483,14 @@ kbd { font: inherit; border: 1px solid var(--line); padding: 2px 4px; border-rad
 }
 @media (prefers-reduced-motion: reduce) { .menu-sheet { animation: none; } .switch > span { transition: none; } }
 
-/* Clean in-game HUD: driving-only top bar — map + speed. */
+/* Clean in-game HUD: driving-only top bar — weather + speed. Map lives bottom-right. */
 .hud-top { position: absolute; top: 12px; left: 12px; right: auto; z-index: 5; display: flex; gap: 10px; align-items: stretch; pointer-events: none; max-width: calc(100% - 24px); }
-.hud-map { pointer-events: auto; width: 88px; height: 88px; flex: 0 0 auto; padding: 3px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
-.hud-map .district-map { width: 100%; height: 100%; border-radius: 6px; }
+/* District minimap: bottom-right, above the touch drive pads (desktop: in the corner). */
+.hud-map-br { position: absolute; right: 16px; bottom: 210px; z-index: 6; width: 148px; height: 148px; padding: 4px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
+.hud-map-br .district-map { width: 100%; height: 100%; border-radius: 6px; }
+@media (hover: hover) and (pointer: fine) {
+  .hud-map-br { right: 24px; bottom: 24px; }
+}
 .hud-speed { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; min-width: 0; flex: 0 1 auto; display: flex; align-items: center; gap: 10px; }
 .hud-speed b { font-size: 22px; font-weight: 700; white-space: nowrap; }
 .hud-speed b small { font-size: 9px; font-weight: 600; color: var(--muted); margin-left: 4px; letter-spacing: 1px; }
@@ -506,14 +510,14 @@ kbd { font: inherit; border: 1px solid var(--line); padding: 2px 4px; border-rad
 .windshield-rain { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 3; pointer-events: none; transition: opacity 0.25s ease; }
 @media (max-width: 640px) {
   .hud-top { top: 8px; left: 8px; gap: 8px; max-width: calc(100% - 16px); }
-  .hud-map { width: 60px; height: 60px; border-radius: 8px; }
+  .hud-map-br { right: 12px; bottom: 208px; width: 112px; height: 112px; border-radius: 8px; }
   .hud-speed { padding: 6px 10px; gap: 8px; }
   .hud-speed b { font-size: 16px; } .hud-speed span { font-size: 8px; max-width: 44vw; }
   .hud-cycle { min-width: 40px; min-height: 40px; font-size: 16px; }
 }
 @media (orientation: landscape) and (max-height: 600px) {
   .hud-top { top: 8px; left: 8px; gap: 8px; }
-  .hud-map { width: 56px; height: 56px; }
+  .hud-map-br { right: 12px; bottom: 128px; width: 88px; height: 88px; }
   .hud-speed { padding: 5px 10px; } .hud-speed b { font-size: 15px; }
   .hud-speed span { max-width: 40vw; }
 }

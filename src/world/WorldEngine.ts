@@ -155,6 +155,8 @@ export class WorldEngine {
   private readonly ghostVehiclePool = new Map<VehicleKind, Vehicle[]>();
   private ghostSeed = 0;
   private shake = 0; private lastImpactAt = -10; private prevSimTime = 0;
+  /** Speed feel: smoothed chase FOV that widens with velocity (free-roam + race). */
+  private speedFov = 60;
   private quality: QualityLevel = 'balanced'; private pixelCap = QUALITY_PIXEL.balanced;
   private lastW = 1; private lastH = 1;
   readonly barrelSim = new BarrelSim();
@@ -1280,6 +1282,19 @@ export class WorldEngine {
     // Car body feel: pitch under accel/brake, roll in corners, bounce on crash.
     const dt = Math.max(0, Math.min(0.05, sim.time - this.prevSimTime));
     this.prevSimTime = sim.time;
+    // ── Sense of speed (always, not just racing): FOV widens toward top
+    // speed, boost pushes past it. Eases back when walking or parked. ──
+    {
+      const spec = VEHICLES[sim.vehicleKind];
+      const spd = sim.driving ? Math.abs(sim.car.speed) : 0;
+      const raw = spec.topSpeed > 0 ? spd / spec.topSpeed : 0;
+      const wantFov = sim.driving ? 60 + Math.min(1.2, raw) * 15 : 60;
+      this.speedFov += (wantFov - this.speedFov) * Math.min(1, dt * 3);
+      if (Math.abs(this.camera.fov - this.speedFov) > 0.05) {
+        this.camera.fov = this.speedFov;
+        this.camera.updateProjectionMatrix();
+      }
+    }
     if (this.raceRoute && this.raceRoute.group.visible) {
       this.raceRoute.update(dt, sim.time, this.isFinalLapActive);
     }
@@ -1513,21 +1528,30 @@ export class WorldEngine {
       if (sim.driving) {
         this.car.group.updateMatrixWorld(true);
         this.camera.position.copy(this.car.eye); this.car.body.localToWorld(this.camera.position);
-        this.camera.position.x += x - sim.car.x + shakeX * 0.15;
+        const spec = VEHICLES[sim.vehicleKind];
+        const ratio = spec.topSpeed > 0 ? Math.min(1.2, Math.abs(sim.car.speed) / spec.topSpeed) : 0;
+        const vib = ratio * ratio * 0.02;
+        this.camera.position.x += x - sim.car.x + shakeX * 0.15 + Math.sin(sim.time * 47) * vib;
         this.camera.position.z += z - sim.car.z;
-        this.camera.position.y += shakeY * 0.15;
+        this.camera.position.y += shakeY * 0.15 + Math.abs(Math.cos(sim.time * 39)) * vib;
       } else this.camera.position.set(x + shakeX, y + 1.84 + shakeY, z);
       this.target.copy(this.camera.position).add(this.direction.set(Math.sin(sim.yaw) * 10, -Math.sin(sim.pitch) * 10, -Math.cos(sim.yaw) * 10));
       this.camera.lookAt(this.target);
     } else {
       this.target.set(x, y + 1.35, z);
-      const distance = sim.driving ? VEHICLES[sim.vehicleKind].length + 6 : 6.5;
+      // Chase pulls back and trembles a touch as speed climbs — top speed reads fast.
+      const spec = VEHICLES[sim.vehicleKind];
+      const ratio = sim.driving && spec.topSpeed > 0
+        ? Math.min(1.2, Math.abs(sim.car.speed) / spec.topSpeed) : 0;
+      const vib = ratio * ratio * 0.06;
+      const distance = sim.driving ? spec.length + 6 + ratio * 2.2 : 6.5;
       this.desired.set(x - Math.sin(sim.yaw) * distance, y + 3.4 + sim.pitch * 5, z + Math.cos(sim.yaw) * distance);
       this.direction.subVectors(this.desired, this.target); let cameraDistance = this.direction.length(); this.direction.normalize();
       this.ray.set(this.target, this.direction);
       for (const box of this.cameraBoxes) if (this.ray.intersectBox(box, this.hit)) cameraDistance = Math.min(cameraDistance, Math.max(0.45, this.hit.distanceTo(this.target) - 0.3));
       this.camera.position.copy(this.target).addScaledVector(this.direction, cameraDistance);
-      this.camera.position.x += shakeX; this.camera.position.y += shakeY;
+      this.camera.position.x += shakeX + Math.sin(sim.time * 47) * vib;
+      this.camera.position.y += shakeY + Math.abs(Math.cos(sim.time * 39)) * vib;
       this.camera.lookAt(this.target);
     }
     this.sun.position.set(x + 35, 65, z + 25); this.sun.target.position.set(x, 0, z); this.sun.target.updateMatrixWorld();

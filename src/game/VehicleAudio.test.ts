@@ -46,6 +46,18 @@ describe('vehicle audio helpers', () => {
     expect(rpmHz(top, top, t)).toBe(t.topHz);
   });
 
+  it('settles revs and drops a gear when you lift off at speed', () => {
+    const t = TIMBRES.sport; // 6 gears
+    const top = VEHICLES.super.topSpeed;
+    const cruise = top * 0.8;
+    // Same road speed: full throttle screams, coasting settles — never pinned.
+    expect(rpmHz(cruise, top, t, 1)).toBeGreaterThan(rpmHz(cruise, top, t, 0) * 1.2);
+    expect(gearFor(cruise, top, t.gears, 1)).toBeGreaterThanOrEqual(gearFor(cruise, top, t.gears, 0));
+    // Full-throttle behavior is unchanged (defaults to load = 1).
+    expect(rpmHz(cruise, top, t)).toBe(rpmHz(cruise, top, t, 1));
+    expect(gearFor(cruise, top, t.gears)).toBe(gearFor(cruise, top, t.gears, 1));
+  });
+
   it('fades gain with distance to silence at the audible edge', () => {
     expect(gainFromDistance(0)).toBe(1);
     expect(gainFromDistance(6)).toBe(1);

@@ -72,24 +72,33 @@ export const AUDIBLE_RADIUS = 45;
 /** Traffic voice pool size (player gets a dedicated voice). */
 export const TRAFFIC_VOICES = 5;
 
-/** Which stepped gear the speed sits in (0-based; always 0 for single-speed). */
-export function gearFor(speed: number, topSpeed: number, gears: number): number {
+/** Which stepped gear the speed sits in (0-based; always 0 for single-speed).
+ *  `load` (0..1 throttle) slides the shift points: cruising at part throttle
+ *  settles a gear lower instead of screaming at redline. Defaults to full
+ *  throttle (classic behavior). */
+export function gearFor(speed: number, topSpeed: number, gears: number, load = 1): number {
   if (gears <= 1) return 0;
   const r = Math.max(0, Math.min(1, Math.abs(speed) / Math.max(1, topSpeed)));
-  return Math.min(gears - 1, Math.floor(r * gears));
+  const l = Math.max(0, Math.min(1, load));
+  const re = r * (0.7 + 0.3 * l);
+  return Math.min(gears - 1, Math.floor(re * gears));
 }
 
 /**
- * Engine pitch: each gear sweeps ~55%→100% of the rev range, then the next
+ * Engine pitch: each gear sweeps ~45%→100% of the rev range, then the next
  * gear drops back down (classic stepped shift). Launches ease up from idle.
- * Single-speed (EV) glides continuously instead.
+ * `load` (0..1 throttle) breathes with your foot: lift off at a steady speed
+ * and the revs settle instead of staying pinned. Single-speed (EV) glides
+ * continuously instead.
  */
-export function rpmHz(speed: number, topSpeed: number, timbre: Timbre): number {
+export function rpmHz(speed: number, topSpeed: number, timbre: Timbre, load = 1): number {
   const r = Math.max(0, Math.min(1, Math.abs(speed) / Math.max(1, topSpeed)));
-  if (timbre.gears <= 1) return timbre.baseHz + (timbre.topHz - timbre.baseHz) * Math.pow(r, 0.8);
-  const total = r * timbre.gears;
+  const l = Math.max(0, Math.min(1, load));
+  const re = r * (0.7 + 0.3 * l);
+  if (timbre.gears <= 1) return timbre.baseHz + (timbre.topHz - timbre.baseHz) * Math.pow(re, 0.8);
+  const total = re * timbre.gears;
   const frac = total - Math.min(timbre.gears - 1, Math.floor(total));
-  const floorF = 0.55 * Math.min(1, total * 1.5);
+  const floorF = 0.45 * Math.min(1, total * 1.5);
   return timbre.baseHz + (timbre.topHz - timbre.baseHz) * (floorF + (1 - floorF) * frac);
 }
 
@@ -353,9 +362,9 @@ export class VehicleAudio {
     }
     const ratio = clamp01(Math.abs(p.speed) / Math.max(1, p.topSpeed));
     driveVoice(ac, this.player, {
-      hz: rpmHz(p.speed, p.topSpeed, timbre),
+      hz: rpmHz(p.speed, p.topSpeed, timbre, p.load),
       load: p.load, ratio,
-      gear: gearFor(p.speed, p.topSpeed, timbre.gears),
+      gear: gearFor(p.speed, p.topSpeed, timbre.gears, p.load),
       level: 1, pan: 0, tc: 0.06,
       idle: Math.abs(p.speed) < 0.5 ? 0.35 : 1,
     });
@@ -389,10 +398,11 @@ export class VehicleAudio {
       const rel = Math.atan2(w.x - lx, w.z - lz) - heading;
       // Fade the pan toward center when very close so it doesn't flip violently.
       const pan = Math.sin(rel) * clamp01(w.dist / 8) * 0.8;
+      const load = ratio > 0.05 ? 0.4 : 0;
       driveVoice(ac, v, {
-        hz: rpmHz(w.speed, spec.topSpeed, timbre),
-        load: ratio > 0.05 ? 0.4 : 0, ratio,
-        gear: gearFor(w.speed, spec.topSpeed, timbre.gears),
+        hz: rpmHz(w.speed, spec.topSpeed, timbre, load),
+        load, ratio,
+        gear: gearFor(w.speed, spec.topSpeed, timbre.gears, load),
         level: gainFromDistance(w.dist) * 0.7, pan, tc: 0.09,
         idle: 1,
       });
