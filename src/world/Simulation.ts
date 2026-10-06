@@ -2,7 +2,7 @@ import { bodyContact, boundaryContact, circleContact, vehicleBody, type Body, ty
 import { VEHICLES, VEHICLE_KINDS, type VehicleKind } from './Vehicles';
 import { WEATHER_GRIP, type Season, type Weather } from './Weather';
 import { GAME_CENTER, HOOP, PROMENADE, ROAD_HALF, groundHeight, inPromenade, inWater, intersects, LIMIT, onRoad, SOLIDS, PARKED_CARS, PLACES, PROPS, RACE_SHOW_CARS, TRAFFIC_ROUTE, circleHit, seeded, type Point } from './Map';
-import { TRACK_LENGTH } from './Track';
+import { TRACK_LENGTH, gridSlots, startLine } from './Track';
 import { GUNS } from './Guns';
 import { TableTennisSim, type TTShot, type TTSnapshot } from './TableTennis';
 import { BasketballSim, type BBSnapshot } from './Basketball';
@@ -76,6 +76,19 @@ export interface WorldSnapshot {
   aimScreenX: number; aimScreenY: number;
 }
 const clamp = (n: number, low: number, high: number) => Math.max(low, Math.min(high, n));
+
+/** Grid bubble: no parked/traffic vehicle may sit this close to a grid slot or the start line while a race is live. */
+export const GRID_BUBBLE_RADIUS = 14;
+/** Cached grid geometry (deterministic): avoids per-tick allocations in the hot loop. */
+const GRID_SLOTS = gridSlots();
+const START_PT = startLine();
+/** True when (x,z) matches a paddock show-car display spot (RACE_SHOW_CARS row). */
+function isShowCarSpot(x: number, z: number): boolean {
+  for (const s of RACE_SHOW_CARS) {
+    if (Math.hypot(x - s.x, z - s.z) < 2) return true;
+  }
+  return false;
+}
 
 /** Ray vs axis-aligned rect: smallest t > 0.3 inside, else null. */
 function rayRect(ox: number, oz: number, dx: number, dz: number, cx: number, cz: number, hw: number, hl: number): number | null {
@@ -230,6 +243,11 @@ export class Simulation {
   blinkerManual = false;
   traffic: TrafficCar[] = [];
   peds: Ped[] = [];
+  /** True while a race is on the lights / live: start line + arena stay empty. */
+  raceClearActive = false;
+  /** Paddock show cars + grid bubble vehicles stashed while `raceClearActive`. */
+  private stashedRaceClearParked: ParkedVehicle[] = [];
+  private stashedRaceClearTraffic: TrafficCar[] = [];
   /** World time of the most recent pedestrian hit (for blood-splash overlay). */
   pedBloodAt = -999;
   /** Hit counter — guarantees a fresh overlay key for every hit. */
@@ -347,7 +365,61 @@ export class Simulation {
       if (d > bestDist) { bestDist = d; best = offset; }
     }
     const p = routePoint(TRAFFIC_ROUTE, best);
+    // While a race is live, never respawn onto the cleared start/grid bubble.
+    if (this.raceClearActive && this.nearGridBubble(p.x, p.z, GRID_BUBBLE_RADIUS)) {
+      const shifted = (best + 120) % TRACK_LENGTH;
+      const q = routePoint(TRAFFIC_ROUTE, shifted);
+      this.traffic.push({ kind, x: q.x, z: q.z, yaw: q.yaw, speed: 0, offset: shifted, base: 6 + (shifted % 3), steer: 0, wheelSpin: 0, braking: false, prevYaw: q.yaw, hp: 100, burning: false, burnT: 0 });
+      return;
+    }
     this.traffic.push({ kind, x: p.x, z: p.z, yaw: p.yaw, speed: 0, offset: best, base: 6 + (best % 3), steer: 0, wheelSpin: 0, braking: false, prevYaw: p.yaw, hp: 100, burning: false, burnT: 0 });
+  }
+  /**
+   * Race-clear mode: empty the paddock show-car row + any vehicle sitting on
+   * the start/grid bubble for `countdown + racing`, then restore afterwards.
+   * Public traffic outside the bubble keeps flowing normally.
+   */
+  setRaceClear(on: boolean): void {
+    if (on === this.raceClearActive) {
+      // Re-sweep while active: a stolen-car leftover may have been dropped on the grid.
+      if (on) this.sweepGridBubble();
+      return;
+    }
+    this.raceClearActive = on;
+    if (on) {
+      this.stashedRaceClearParked = [];
+      this.stashedRaceClearTraffic = [];
+      // Stash the 6 paddock show cars wherever they currently are in the fleet.
+      this.parked = this.parked.filter((p) => {
+        if (isShowCarSpot(p.x, p.z)) { this.stashedRaceClearParked.push(p); return false; }
+        return true;
+      });
+      this.sweepGridBubble();
+    } else {
+      if (this.stashedRaceClearParked.length > 0) this.parked.push(...this.stashedRaceClearParked);
+      if (this.stashedRaceClearTraffic.length > 0) this.traffic.push(...this.stashedRaceClearTraffic);
+      this.stashedRaceClearParked = [];
+      this.stashedRaceClearTraffic = [];
+    }
+  }
+  /** Remove parked + stopped traffic sitting inside the grid bubble (stash for restore). */
+  private sweepGridBubble(): void {
+    this.parked = this.parked.filter((p) => {
+      if (this.nearGridBubble(p.x, p.z, GRID_BUBBLE_RADIUS)) { this.stashedRaceClearParked.push(p); return false; }
+      return true;
+    });
+    this.traffic = this.traffic.filter((t) => {
+      if (this.nearGridBubble(t.x, t.z, GRID_BUBBLE_RADIUS)) { this.stashedRaceClearTraffic.push(t); return false; }
+      return true;
+    });
+  }
+  /** True when (x,z) sits inside the cleared start/grid bubble (slots + start line). */
+  nearGridBubble(x: number, z: number, radius = GRID_BUBBLE_RADIUS): boolean {
+    if (Math.hypot(x - START_PT.x, z - START_PT.z) < radius) return true;
+    for (const slot of GRID_SLOTS) {
+      if (Math.hypot(x - slot.x, z - slot.z) < radius) return true;
+    }
+    return false;
   }
   /** Teleport to a race grid slot (keeps physics settled). */
   placeAt(x: number, z: number, yaw: number): void {
@@ -1001,6 +1073,14 @@ export class Simulation {
       // Offset is accumulated distance, never elapsed time multiplied by changing speed.
       const nextOffset = t.offset + t.speed * dt;
       const q = routePoint(TRAFFIC_ROUTE, nextOffset);
+      // While a race is live, hold traffic outside the cleared grid bubble
+      // instead of driving through the start line. Everything else flows normally.
+      // Both endpoints are checked (no speed gate) so the car stops at the last
+      // outside pose instead of overshooting a car length into the bubble.
+      if (this.raceClearActive && (this.nearGridBubble(t.x, t.z, GRID_BUBBLE_RADIUS) || this.nearGridBubble(q.x, q.z, GRID_BUBBLE_RADIUS))) {
+        t.speed = 0; t.braking = true; t.steer = 0;
+        continue;
+      }
       const dyaw = Math.atan2(Math.sin(q.yaw - t.yaw), Math.cos(q.yaw - t.yaw));
       const yaw = t.yaw + clamp(dyaw, -1.7 * dt, 1.7 * dt);
       t.prevYaw = t.yaw;

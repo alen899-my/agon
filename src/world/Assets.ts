@@ -482,6 +482,8 @@ export function buildRaceArena(scene: THREE.Scene, kit: AssetKit, box?: (m: Mate
     glowMesh.rotation.x = -Math.PI / 2;
     glowMesh.position.set(car.x, 0.082, car.z);
     glowMesh.rotation.z = car.yaw;
+    glowMesh.name = 'show-car-glow';
+    glowMesh.userData.showCarGlow = true;
     scene.add(glowMesh);
   });
 }

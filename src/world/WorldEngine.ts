@@ -137,6 +137,17 @@ export class WorldEngine {
   get raceGuidanceActive(): boolean {
     return this.race.phase === 'countdown' || this.race.phase === 'racing';
   }
+  /** Empty the start/grid bubble for countdown + racing; restore on every other phase. */
+  private updateRaceClear(): void {
+    const active = this.race.phase === 'countdown' || this.race.phase === 'racing';
+    if (active === this.lastRaceClear) {
+      // Re-sweep while active so dropped-off cars can't re-clutter the grid.
+      if (active) this.simulation.setRaceClear(true);
+      return;
+    }
+    this.lastRaceClear = active;
+    this.simulation.setRaceClear(active);
+  }
   get nightFactor(): number { return this._nightFactor; }
   get currentWeather(): Weather { return this.weather; }
   get currentSeason(): Season { return this.season; }
@@ -168,6 +179,10 @@ export class WorldEngine {
   readonly barrelSim = new BarrelSim();
   private lastCountdownSec = -1;
   private prevRacePhase: 'idle' | 'lobby' | 'countdown' | 'racing' | 'finished' = 'idle';
+  /** Tracks Simulation.setRaceClear so the grid stays empty only for countdown + racing. */
+  private lastRaceClear = false;
+  /** Paddock show-car underglow mats, hidden while the grid is cleared. */
+  private showCarGlows: THREE.Mesh[] = [];
   private readonly cameraBoxes = BUILDINGS.map(b => new THREE.Box3(new THREE.Vector3(b.x - b.w / 2 - 0.35, 0, b.z - b.d / 2 - 0.35), new THREE.Vector3(b.x + b.w / 2 + 0.35, b.h + 0.5, b.z + b.d / 2 + 0.35)));
   private target = new THREE.Vector3(); private desired = new THREE.Vector3(); private direction = new THREE.Vector3(); private hit = new THREE.Vector3(); private ray = new THREE.Ray();
   private suspended = false; private disposed = false; private hudTime = 0;
@@ -217,6 +232,9 @@ export class WorldEngine {
     this.renderer.toneMappingExposure = 1.05;
     this.renderer.shadowMap.enabled = true; this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.kit = new AssetKit(); buildMap(this.scene, this.kit);
+    this.scene.traverse((obj) => {
+      if ((obj as THREE.Mesh).userData?.showCarGlow) this.showCarGlows.push(obj as THREE.Mesh);
+    });
     this.scene.add(this.ambient, this.sun, this.sun.target);
     this.sun.castShadow = true; this.sun.shadow.mapSize.set(1024, 1024);
     Object.assign(this.sun.shadow.camera, { left: -44, right: 44, top: 44, bottom: -44, near: 1, far: 150 });
@@ -314,6 +332,7 @@ export class WorldEngine {
         this.lastCountdownSec = -1;
       }
       this.prevRacePhase = this.race.phase;
+      this.updateRaceClear();
 
       // Nitro boost lives only while racing — free-roam driving never drains it.
       this.simulation.boostEnabled = this.race.phase === 'racing';
@@ -421,6 +440,7 @@ export class WorldEngine {
         }
       }
     }
+    this.updateRaceClear();
     this.publish({
       ...sim.snapshot,
       room: this.realtimeRoom ? { code: this.realtimeRoom, members: this.realtimeMembers } : null,
@@ -553,6 +573,8 @@ export class WorldEngine {
       finishMs: me.finishMs, bestLapMs: me.bestLapMs, vehicleKind: me.vehicleKind, ready: false, blinker: 0 });
     this.race.reset();
     this.cleanupCpuRacers();
+    this.lastRaceClear = false;
+    this.simulation.setRaceClear(false);
     this.emit();
   }
   teleportToGrid(): void {
@@ -563,6 +585,9 @@ export class WorldEngine {
     const slot = slots[idx % slots.length];
     const me = this.race.racers.get(this.localRaceId);
     if (!me) return;
+    // Sweep the grid bubble BEFORE placing so the slot is guaranteed empty.
+    this.simulation.setRaceClear(true);
+    this.lastRaceClear = true;
     this.simulation.vehicleKind = me.vehicleKind as VehicleKind;
     this.simulation.driving = true;
     this.simulation.repair();
@@ -1569,6 +1594,7 @@ export class WorldEngine {
       });
     }
     this.syncWorldVehicles();
+    for (const glow of this.showCarGlows) glow.visible = !sim.raceClearActive;
     this.traffic.forEach((vehicle, i) => {
       const p = sim.traffic[i]; if (!p) { vehicle.group.visible = false; return; }
       vehicle.group.visible = true;
