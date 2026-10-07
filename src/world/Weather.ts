@@ -114,7 +114,7 @@ export function wrapCoord(v: number, min: number, size: number): number {
 }
 
 const PARTICLE_COUNTS: Record<string, number> = {
-  low: 300, balanced: 650, high: 1100, ultra: 1600,
+  low: 150, balanced: 350, high: 700, ultra: 1000,
 };
 
 /** 5-step intensity: 1 = light, 3 = normal (today's look), 5 = extreme. */
@@ -124,7 +124,7 @@ const INTENSITY_FRAC: Record<IntensityLevel, number> = { 1: 0.2, 2: 0.35, 3: 0.4
 const INTENSITY_SPEED: Record<IntensityLevel, number> = { 1: 0.8, 2: 0.9, 3: 1, 4: 1.2, 5: 1.4 };
 const INTENSITY_ALPHA: Record<IntensityLevel, number> = { 1: 0.75, 2: 0.9, 3: 1, 4: 1, 5: 1 };
 /** Buffers are over-allocated so level 5 draws past the old maximum. */
-const INTENSITY_OVERALLOC = 2.2;
+const INTENSITY_OVERALLOC = 1.4;
 /** Sun + exposure multiplier per level (brightens noon at 4–5, dims at 1–2). */
 export const INTENSITY_SUN: Record<IntensityLevel, number> = { 1: 0.9, 2: 0.95, 3: 1, 4: 1.2, 5: 1.4 };
 /** Rain-loop volume per level. */

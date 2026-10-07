@@ -21,7 +21,7 @@ export function WindshieldRain({ level, paused, raining, wipersActive, visible }
     const ctx = canvas.getContext('2d')!;
     let w = 0, h = 0;
     const resize = () => {
-      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      const dpr = Math.min(1.25, window.devicePixelRatio || 1);
       const rect = canvas.getBoundingClientRect();
       w = Math.max(1, rect.width); h = Math.max(1, rect.height);
       canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
@@ -35,11 +35,18 @@ export function WindshieldRain({ level, paused, raining, wipersActive, visible }
     let last = performance.now();
     let acc = 0;
     let raf = 0;
+    let tick = 0;
     const spawnPerSec = [8, 16, 30, 55, 95];
+    const coarse = typeof window !== 'undefined' && typeof window.matchMedia === 'function' &&
+      window.matchMedia('(pointer: coarse)').matches;
+    const maxDrops = coarse ? 150 : 350;
     const frame = (now: number) => {
       raf = requestAnimationFrame(frame);
       const dt = Math.max(0, Math.min(0.05, (now - last) / 1000));
       last = now;
+      tick++;
+      // 30Hz overlay on touch devices (half the canvas work, same look).
+      if (coarse && tick % 2 === 0) return;
       const { level: lv, paused: hold, raining: wet, wipersActive: sweeping, visible: show } = state.current;
       if (canvasVisible.current !== show) {
         canvasVisible.current = show;
@@ -51,8 +58,8 @@ export function WindshieldRain({ level, paused, raining, wipersActive, visible }
       if (!hold && dt > 0) {
         t += dt;
         if (wet) {
-          acc += spawnPerSec[lv - 1] * dt;
-          while (acc >= 1 && drops.length < 450) {
+          acc += spawnPerSec[lv - 1] * dt * (coarse ? 0.6 : 1);
+          while (acc >= 1 && drops.length < maxDrops) {
             acc -= 1;
             drops.push({ x: Math.random() * w, y: Math.random() * h * 0.92, r: 1 + Math.random() * 1.6 });
           }
@@ -73,19 +80,25 @@ export function WindshieldRain({ level, paused, raining, wipersActive, visible }
       // Tandem wipers: parked flat left, one wide ~115° sweep up the glass, fall back.
       const theta = Math.PI + 0.05 + ang;
       if (!hold && ang > 0.001) {
-        // Wipe whatever the blades touch as they sweep.
-        drops = drops.filter(d => {
+        // Wipe whatever the blades touch as they sweep (in-place, no filter alloc).
+        // Squared-distance pre-check avoids hypot/atan2 for most drops.
+        const bladeLen2 = bladeLen * bladeLen;
+        let kept = 0;
+        for (let i = 0; i < drops.length; i++) {
+          const d = drops[i];
+          let wiped = false;
           for (const b of blades) {
             const dx = d.x - b.px, dy = d.y - b.py;
-            const dist = Math.hypot(dx, dy);
-            if (dist > bladeLen) continue;
+            const dist2 = dx * dx + dy * dy;
+            if (dist2 > bladeLen2) continue;
             let diff = Math.atan2(dy, dx) - theta;
             while (diff > Math.PI) diff -= Math.PI * 2;
             while (diff < -Math.PI) diff += Math.PI * 2;
-            if (Math.abs(diff) < 0.055) return false;
+            if (Math.abs(diff) < 0.055) { wiped = true; break; }
           }
-          return true;
-        });
+          if (!wiped) drops[kept++] = d;
+        }
+        drops.length = kept;
       }
       ctx.clearRect(0, 0, w, h);
       for (const d of drops) {

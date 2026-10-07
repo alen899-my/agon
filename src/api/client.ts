@@ -141,3 +141,54 @@ export function joinRoom(token: string, code: string): Promise<{ room: RoomInfo;
 export function leaveRoom(token: string, code: string): Promise<{ left: string }> {
   return request('/api/rooms/leave', { method: 'POST', headers: authHeader(token), body: JSON.stringify({ code }) });
 }
+
+export interface DialogueParticipant { id: string; name: string; role: string }
+export interface DialogueContextPayload { participants: DialogueParticipant[]; situation: string; history: string[] }
+
+/** Solo/social chatter via the server Gemini chain (primary lite → lite fallback). Null = scripted/offline. */
+export async function fetchDialogue(token: string, context: DialogueContextPayload): Promise<string[] | null> {
+  if (!token) return null;
+  try {
+    const body = await request<{ lines: string[] | null }>('/api/dialogue', {
+      method: 'POST', headers: authHeader(token), body: JSON.stringify(context),
+    }, 15000);
+    return Array.isArray(body.lines) && body.lines.length > 0 ? body.lines : null;
+  } catch {
+    return null;
+  }
+}
+
+export interface DispatchPayload {
+  now: number;
+  cops: { id: string; x: number; z: number; yaw: number; speed: number; mode: 'patrol' | 'respond' | 'pursue' | 'arrest' | 'return'; lightsOn: boolean; suspectId: string | null }[];
+  suspects: { playerId: string; name: string; x: number; z: number; speed: number; driving: boolean; wanted: number; lastCrimeAt: number; lastKnownX: number; lastKnownZ: number }[];
+  world?: string;
+  escalate?: boolean;
+}
+
+/** Solo police tactics via the server Gemini chain. Null = hold current goal (scripted). */
+export async function fetchDispatch(token: string, payload: DispatchPayload): Promise<{ action: string; suspectId?: string; x?: number; z?: number } | null> {
+  if (!token) return null;
+  try {
+    const body = await request<{ goal: { action: string; suspectId?: string; x?: number; z?: number } | null }>('/api/dialogue/decide', {
+      method: 'POST', headers: authHeader(token), body: JSON.stringify(payload),
+    }, 12000);
+    return body.goal ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export interface AiStatus {
+  enabled: boolean; configured: boolean; provider: string; model: string;
+  escalationModel?: string; requests?: number; successes?: number; lastError?: string;
+}
+
+/** Backend AI health (no auth): model names + last Gemini error. Check this when "no AI is used". */
+export async function fetchAiStatus(): Promise<AiStatus | null> {
+  try {
+    return await request<AiStatus>('/api/dialogue/status', {}, 8000);
+  } catch {
+    return null;
+  }
+}

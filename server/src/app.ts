@@ -6,6 +6,7 @@ import { authRouter } from './routes/auth.routes.js';
 import { healthRouter } from './routes/health.routes.js';
 import { playersRouter } from './routes/players.routes.js';
 import { roomsRouter } from './routes/rooms.routes.js';
+import { dialogueRouter } from './routes/dialogue.routes.js';
 
 export function createApp(): express.Express {
   const app = express();
@@ -17,6 +18,7 @@ export function createApp(): express.Express {
   app.use('/api/auth', authRouter);
   app.use('/api/players', playersRouter);
   app.use('/api/rooms', roomsRouter);
+  app.use('/api/dialogue', dialogueRouter);
 
   app.use(notFound);
   app.use(errorHandler);

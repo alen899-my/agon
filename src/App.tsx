@@ -167,6 +167,7 @@ export default function App() {
     const world = engine.current;
     if (!world) throw new Error('The world is still loading. Please try again.');
     setEnterNote('Connecting to server ' + session.roomCode + '...');
+    world.setAuthToken(session.token);
     await world.joinRoomSession(session.token, session.roomCode!);
     world.setPlayerName(session.name);
     world.begin();
@@ -190,6 +191,7 @@ export default function App() {
       saveSession(session);
       pendingToken.current = null; setCreated(null); setJoinedRoom(null);
       if (previous?.roomCode && previous.token) void apiLeaveRoom(previous.token, previous.roomCode).catch(() => undefined);
+      engine.current.setAuthToken(token);
       engine.current.setPlayerName(player.name); engine.current.begin(); focus(); setEnterNote('');
     } catch (error) {
       // Solo may fall back to offline gameplay when the API is unreachable.
@@ -197,6 +199,7 @@ export default function App() {
         engine.current?.leaveRoomSession();
         saveSession({ token: '', name: display, id: 'offline' });
         pendingToken.current = null; setCreated(null); setJoinedRoom(null);
+        engine.current?.setAuthToken(null);
         engine.current?.setPlayerName(display); engine.current?.begin(); focus();
         setNotice('Playing solo offline. ' + error.message);
       } else {
@@ -283,6 +286,7 @@ export default function App() {
     entryLock.current = true; setEntering(true);
     const session = loadSession();
     // Stop reconnection and remove the reload target before awaiting the API.
+    engine.current?.setAuthToken(session?.token ?? null);
     engine.current?.leaveRoomSession(); engine.current?.exitToIntro();
     if (session) saveSession({ token: session.token, name: session.name, id: session.id });
     setRaceOpen(false); setCreated(null); setJoinedRoom(null); setCopied(false); setLinkCopied(false); setRoomCode(''); setMode('solo');
@@ -510,10 +514,21 @@ export default function App() {
             <button className="control" onClick={dismissGunIntro} aria-label="Dismiss weapon hint">GOT IT</button>
           </div>
         )}
+        {(state?.wanted ?? 0) > 0 && (
+          <div className="hud-wanted" role="status" aria-label={`Wanted level ${state?.wanted} of 5`}>
+            {'★'.repeat(Math.min(5, state?.wanted ?? 0))}{'☆'.repeat(5 - Math.min(5, state?.wanted ?? 0))}
+          </div>
+        )}
         {state?.dead && (
           <div className="wasted-cover" role="alert" aria-label="Wasted">
             <h2>WASTED</h2>
             <p>respawning in {Math.ceil(state?.wastedIn ?? 0)}…</p>
+          </div>
+        )}
+        {state != null && state.bustedSeq > 0 && state.time - state.bustedAt < 3 && (
+          <div className="wasted-cover" role="alert" aria-label="Busted">
+            <h2>BUSTED</h2>
+            <p>the cops impounded your ride…</p>
           </div>
         )}
         {state?.view === 'first' && <div className="crosshair" aria-hidden="true">+</div>}

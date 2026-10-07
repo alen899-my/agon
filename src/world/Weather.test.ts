@@ -37,7 +37,7 @@ describe('WeatherParticles', () => {
     const scene = new THREE.Scene();
     const p = new WeatherParticles(scene);
     p.setQuality('low');
-    expect(p.particleCount).toBe(300);
+    expect(p.particleCount).toBe(150);
     p.setSeason('summer');
     p.setWeather('normal');
     expect(p.active).toBe(false);

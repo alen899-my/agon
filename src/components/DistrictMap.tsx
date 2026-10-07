@@ -41,6 +41,8 @@ export function DistrictMap({ state, large = false, theme = 'light', raceActive 
     </g>
     {(state?.dots ?? []).map(d => <circle key={d.id} cx={d.x} cy={d.z} r={2.4}
       fill={d.driving ? '#111111' : '#ffffff'} stroke="#111111" strokeWidth="0.8" />)}
+    {(state?.buildSites ?? []).map(s => <rect key={s.id} x={s.x-s.w/2} y={s.z-s.d/2} width={s.w} height={s.d} fill={s.stage === 4 ? '#b39a7b' : '#f09b35'}><title>Construction {s.stage}/4</title></rect>)}
+    {(state?.agentWalkers ?? []).map(a => <circle key={a.id} cx={a.x} cy={a.z} r={1.8} fill={a.role === 'police' ? '#397be2' : a.role === 'builder' ? '#ed862f' : a.role === 'medic' ? '#f5f5f5' : '#5aab68'} stroke="#333" strokeWidth="0.5"><title>{a.name}: {a.task}</title></circle>)}
     <text x="158" y="-158" fontSize="10" fontFamily="Arial" fontWeight="bold" fill="#111">N</text>
   </svg>;
 }

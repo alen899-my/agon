@@ -32,3 +32,10 @@ CREATE INDEX IF NOT EXISTS room_members_player_idx ON room_members (player_id);
 CREATE INDEX IF NOT EXISTS rooms_active_idx ON rooms (last_active_at);
 -- NOTE: rooms_public_active_idx is created by migrate() AFTER ensuring the
 -- v2 columns, so booting against a v1 database cannot fail here.
+
+CREATE TABLE IF NOT EXISTS buildings_delta (
+  room_code TEXT NOT NULL REFERENCES rooms(code) ON DELETE CASCADE,
+  site_id TEXT NOT NULL,
+  stage SMALLINT NOT NULL CHECK (stage BETWEEN 1 AND 4),
+  PRIMARY KEY (room_code, site_id)
+);

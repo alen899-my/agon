@@ -1,3 +1,4 @@
+import { loadBuildings, saveBuilding } from '../agents/buildings.js';
 import type { WebSocket } from 'ws';
 import {
   MAX_ROOM_MEMBERS,
@@ -14,7 +15,15 @@ import {
   type RacePosPayload,
   type RosterEntry,
   type ServerMessage,
+  type CrimeReport,
+  rideToMsg,
 } from './protocol.js';
+import { AgentDirector } from '../agents/director.js';
+import { OpenRouterBrain } from '../agents/llm.js';
+import { DialogueBrain } from '../agents/dialogue.js';
+import { modelOptions } from '../agents/provider.js';
+import { ScriptedDispatcher } from '../agents/scripted.js';
+import { config } from '../config.js';
 
 /**
  * Presence hub: one socket set per invite-code room. Relays player
@@ -73,6 +82,8 @@ export class RoomHub {
   private readonly roomTouch = new Map<string, number>();
   /** Arena directory: joinable race lobbies per room, keyed by host player id. */
   private readonly raceDir = new Map<string, Map<string, { hostId: string; hostName: string; laps: number; count: number; phase: 'lobby' | 'countdown' | 'racing' | 'finished' | 'idle' }>>();
+  /** Server-authoritative role agents (police slice) — one director per room. */
+  private readonly directors = new Map<string, { director: AgentDirector; timer: NodeJS.Timeout; lastPush: number }>();
 
   /** Creates tracked state for an authenticated socket; callers wire events. */
   admit(ws: WebSocket, playerId: string, name: string): MemberState {
@@ -129,6 +140,113 @@ export class RoomHub {
     this.dotsTimers.set(code, timer);
   }
 
+  /** Lazily starts the agent director tick for a room (100ms sim, 500ms push). */
+  private ensureAgents(code: string): void {
+    if (this.directors.has(code)) return;
+    const scripted = new ScriptedDispatcher();
+    // Read through validated config (not raw process.env) so AI_MODE,
+    // GEMINI_* and intervals match the booted server. modelOptions(config)
+    // accepts the validated object because the AI_* fields stay strings.
+    const useLlm = config.AI_MODE !== 'scripted';
+    const opts = modelOptions(config as unknown as Record<string, unknown>);
+    if (useLlm && !opts.apiKey) console.warn('[ai] AI_MODE=llm but no API key for provider gemini; using scripted fallback. Set GEMINI_API_KEY.');
+    const brain = useLlm
+      ? new OpenRouterBrain(opts)
+      : scripted;
+    const dialogue = useLlm ? new DialogueBrain({ ...modelOptions(config as unknown as Record<string, unknown>), minIntervalMs: 15000, maxCallsPerMinute: 4 }) : undefined;
+    const director = new AgentDirector({
+      dialogue: dialogue ? context => dialogue.generate(context) : undefined,
+      brain,
+      fallback: scripted,
+      brainIntervalMs: Math.max(6000, config.AI_BRAIN_INTERVAL_MS),
+    });
+    let loaded = false;
+    let loading = false;
+    let nextLoad = 0;
+    const pending = new Map<string, import('../agents/livingWorld.js').BuildDelta>();
+    let saving = false;
+    let nextSave = 0;
+    const timer = setInterval(() => {
+      const room = this.rooms.get(code);
+      if (!room || room.size === 0) {
+        // Keep retrying unsaved stages before releasing an empty room.
+        if (pending.size > 0 || saving) { void flush(); return; }
+        director.dispose(); dialogue?.dispose(); clearInterval(timer);
+        this.directors.delete(code);
+        return;
+      }
+      if (!loaded) {
+        if (!loading && Date.now() >= nextLoad) {
+          loading = true;
+          void loadBuildings(code).then(rows => { director.world.construction.restore(rows); loaded = true; })
+            .catch(() => { nextLoad = Date.now() + 10_000; console.error('[agents] building restore failed; retrying'); })
+            .finally(() => { loading = false; });
+        }
+        return;
+      }
+      director.tick();
+      for (const delta of director.world.construction.drainDeltas()) {
+        pending.set(delta.siteId, delta);
+        for (const member of room.values()) if (member.helloed) send(member.ws, { t: 'build_delta', delta });
+      }
+      void flush();
+      const entry = this.directors.get(code);
+      const now = Date.now();
+      if (entry && now - entry.lastPush >= 500) {
+        entry.lastPush = now;
+        const snap = director.getSnapshot();
+        const a = { ...snap, rides: snap.rides?.map(rideToMsg) };
+        for (const member of room.values()) {
+          if (member.helloed) send(member.ws, { t: 'agent_state', a });
+        }
+      }
+      for (const e of director.drainEvents()) {
+        for (const member of room.values()) {
+          if (member.helloed) send(member.ws, { t: 'agent_event', e });
+        }
+      }
+    }, 100);
+    timer.unref?.();
+    async function flush(): Promise<void> {
+      if (saving || Date.now() < nextSave || pending.size === 0) return;
+      saving = true;
+      try {
+        for (const [id, delta] of pending) {
+          await saveBuilding(code, delta);
+          if (pending.get(id) === delta) pending.delete(id);
+        }
+      } catch { nextSave = Date.now() + 10_000; console.error('[agents] building save failed; retrying'); }
+      finally { saving = false; }
+    }
+    this.directors.set(code, { director, timer, lastPush: 0 });
+  }
+
+  /** Validates a client crime report (bounds + enum). */
+  private validCrime(c: unknown): c is CrimeReport {
+    if (typeof c !== 'object' || c === null) return false;
+    const v = c as Record<string, unknown>;
+    return (
+      typeof v.type === 'string' &&
+      ['kill_ped', 'explosion', 'shooting', 'hit_and_run', 'reckless_driving'].includes(v.type) &&
+      Number.isFinite(v.x) && Math.abs(v.x as number) <= 160 &&
+      Number.isFinite(v.z) && Math.abs(v.z as number) <= 160
+    );
+  }
+
+  /** Crime report: scores wanted, may spawn a cruiser. Throttled like pos. */
+  onCrimeReport(state: MemberState, payload: unknown): void {
+    if (!state.helloed || !state.roomCode) return;
+    const now = Date.now();
+    state.msgStamps = state.msgStamps.filter((t) => now - t < 1000);
+    if (state.msgStamps.length >= POS_PER_SECOND_LIMIT) return;
+    state.msgStamps.push(now);
+    if (!this.validCrime(payload)) return;
+    this.ensureAgents(state.roomCode);
+    this.directors.get(state.roomCode)?.director.reportCrime(
+      state.playerId, state.name, { ...(payload as CrimeReport), at: now },
+    );
+  }
+
   async onHello(state: MemberState, rawCode: unknown, ip: string): Promise<void> {
     if (state.helloed || this.pendingHellos.has(state) || state.ws.readyState !== state.ws.OPEN) return;
     this.pendingHellos.add(state);
@@ -178,6 +296,7 @@ export class RoomHub {
     previous?.ws.close(4409, 'superseded');
     this.touchThrottled(code);
     this.ensureDots(code);
+    this.ensureAgents(code);
     send(state.ws, { t: 'welcome', room: code, you: state.playerId, roster: this.presentRoster(code) });
     const roster = this.presentRoster(code);
     for (const [id, member] of present) {
@@ -197,6 +316,12 @@ export class RoomHub {
     state.msgStamps.push(now);
     if (!validPos(payload)) return;
     state.pos = payload;
+    // Feed the room's agent director (pursuit truth + last-known positions).
+    this.ensureAgents(state.roomCode);
+    this.directors.get(state.roomCode)?.director.setMemberPos(
+      state.playerId, state.name, payload.x, payload.z,
+      Math.abs(payload.speed), payload.driving,
+    );
     const room = this.rooms.get(state.roomCode);
     if (!room) return;
     for (const [id, member] of room) {
@@ -342,6 +467,7 @@ export class RoomHub {
     const room = this.rooms.get(code);
     if (!room || room.get(state.playerId)?.ws !== state.ws) return;
     room.delete(state.playerId);
+    this.directors.get(code)?.director.removeMember(state.playerId);
     this.raceSnapshots.delete(state.playerId);
     this.raceTargets.delete(state.playerId);
     for (const [id, hostId] of this.raceTargets) if (hostId === state.playerId) this.raceTargets.delete(id);

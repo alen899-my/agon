@@ -216,8 +216,8 @@ export class BarrelSim {
       b.roll += b.wRoll * stepDt;
       b.yaw += b.wYaw * stepDt;
 
-      // Air resistance
-      const airDrag = Math.pow(0.985, stepDt * 60);
+      // Air resistance (precomputed base, single pow per frame for all barrels)
+      const airDrag = Math.pow(AIR_DRAG_60, stepDt * 60);
       b.vx *= airDrag;
       b.vz *= airDrag;
 
@@ -239,7 +239,7 @@ export class BarrelSim {
         }
 
         // Ground friction
-        const groundFriction = Math.pow(0.85, stepDt * 60);
+        const groundFriction = Math.pow(GROUND_FRICTION_60, stepDt * 60);
         b.vx *= groundFriction;
         b.vz *= groundFriction;
 
@@ -249,9 +249,10 @@ export class BarrelSim {
           b.roll += (-b.vx / b.radius) * stepDt;
         }
 
-        b.wPitch *= Math.pow(0.82, stepDt * 60);
-        b.wRoll *= Math.pow(0.82, stepDt * 60);
-        b.wYaw *= Math.pow(0.86, stepDt * 60);
+        const angDamp = Math.pow(ANG_DAMP_60, stepDt * 60);
+        b.wPitch *= angDamp;
+        b.wRoll *= angDamp;
+        b.wYaw *= Math.pow(YAW_DAMP_60, stepDt * 60);
       }
 
       // World boundary collision
@@ -332,83 +333,66 @@ export class BarrelSim {
   }
 }
 
+/** Shared barrel geometry (one copy for all 12 drums, not one per drum). */
+const sharedDrumGeo = new THREE.CylinderGeometry(BARREL_RADIUS, BARREL_RADIUS, BARREL_HEIGHT, 14);
+const sharedBandGeo = new THREE.CylinderGeometry(BARREL_RADIUS + 0.004, BARREL_RADIUS + 0.004, 0.24, 14);
+const sharedRibGeo = new THREE.TorusGeometry(BARREL_RADIUS + 0.005, 0.012, 6, 16);
+const sharedChimeGeo = new THREE.TorusGeometry(BARREL_RADIUS + 0.006, 0.016, 6, 16);
+/** Shared materials per color (was: 3 new geos + 3 new mats per barrel). */
+const barrelMatCache = new Map<string, { drum: THREE.Material; band: THREE.Material; rim: THREE.Material }>();
+function barrelMats(color: BarrelColor): { drum: THREE.Material; band: THREE.Material; rim: THREE.Material } {
+  const hit = barrelMatCache.get(color);
+  if (hit) return hit;
+  let bodyHex = 0xffd000; let bandHex = 0x181818; let rimHex = 0x4a4a4a;
+  if (color === 'hazard') { bodyHex = 0xffbe0b; bandHex = 0x212529; rimHex = 0x343a40; }
+  else if (color === 'flame') { bodyHex = 0xd90429; bandHex = 0xf8f9fa; rimHex = 0x2b2d42; }
+  else if (color === 'neon') { bodyHex = 0x70e000; bandHex = 0x181818; rimHex = 0x202020; }
+  else if (color === 'cyan') { bodyHex = 0x00f5d4; bandHex = 0x03045e; rimHex = 0x333333; }
+  else if (color === 'oil') { bodyHex = 0x264653; bandHex = 0xe76f51; rimHex = 0x555555; }
+  const entry = {
+    drum: new THREE.MeshStandardMaterial({ color: bodyHex, roughness: 0.45, metalness: 0.35 }),
+    band: new THREE.MeshStandardMaterial({ color: bandHex, roughness: 0.5, metalness: 0.25 }),
+    rim: new THREE.MeshStandardMaterial({ color: rimHex, roughness: 0.4, metalness: 0.5 }),
+  };
+  barrelMatCache.set(color, entry);
+  return entry;
+}
+// Precomputed per-step drag (was Math.pow per barrel per frame).
+const AIR_DRAG_60 = 0.985; const GROUND_FRICTION_60 = 0.85;
+const ANG_DAMP_60 = 0.82; const YAW_DAMP_60 = 0.86;
+
 /** Construct a high-detail 3D oil drum with ribs and street racing livery. */
 export function createBarrelMesh(color: BarrelColor): THREE.Group {
   const group = new THREE.Group();
-
-  let bodyHex = 0xffd000;
-  let bandHex = 0x181818;
-  let rimHex = 0x4a4a4a;
-
-  if (color === 'hazard') {
-    bodyHex = 0xffbe0b; // Bright hazard yellow
-    bandHex = 0x212529; // Carbon stripe
-    rimHex = 0x343a40;
-  } else if (color === 'flame') {
-    bodyHex = 0xd90429; // Race red
-    bandHex = 0xf8f9fa; // White racing stripe
-    rimHex = 0x2b2d42;
-  } else if (color === 'neon') {
-    bodyHex = 0x70e000; // Toxic drift green
-    bandHex = 0x181818;
-    rimHex = 0x202020;
-  } else if (color === 'cyan') {
-    bodyHex = 0x00f5d4; // Tokyo electric cyan
-    bandHex = 0x03045e;
-    rimHex = 0x333333;
-  } else if (color === 'oil') {
-    bodyHex = 0x264653; // Industrial midnight oil
-    bandHex = 0xe76f51;
-    rimHex = 0x555555;
-  }
-
-  const drumGeo = new THREE.CylinderGeometry(BARREL_RADIUS, BARREL_RADIUS, BARREL_HEIGHT, 18);
-  const drumMat = new THREE.MeshStandardMaterial({
-    color: bodyHex,
-    roughness: 0.45,
-    metalness: 0.35,
-  });
-  const drum = new THREE.Mesh(drumGeo, drumMat);
+  const mats = barrelMats(color);
+  const drum = new THREE.Mesh(sharedDrumGeo, mats.drum);
   drum.castShadow = true;
   drum.receiveShadow = true;
   group.add(drum);
 
   // Center accent band
-  const bandGeo = new THREE.CylinderGeometry(BARREL_RADIUS + 0.004, BARREL_RADIUS + 0.004, 0.24, 18);
-  const bandMat = new THREE.MeshStandardMaterial({
-    color: bandHex,
-    roughness: 0.5,
-    metalness: 0.25,
-  });
-  const band = new THREE.Mesh(bandGeo, bandMat);
-  band.castShadow = true;
+  const band = new THREE.Mesh(sharedBandGeo, mats.band);
+  band.castShadow = false;
   group.add(band);
 
   // Raised body reinforcement ribs (iconic 55-gallon oil drum ribs)
-  const ribGeo = new THREE.TorusGeometry(BARREL_RADIUS + 0.005, 0.012, 6, 20);
-  const ribMat = new THREE.MeshStandardMaterial({
-    color: rimHex,
-    roughness: 0.4,
-    metalness: 0.5,
-  });
-  const rib1 = new THREE.Mesh(ribGeo, ribMat);
+  const rib1 = new THREE.Mesh(sharedRibGeo, mats.rim);
   rib1.rotation.x = Math.PI / 2;
   rib1.position.y = 0.16;
   group.add(rib1);
 
-  const rib2 = new THREE.Mesh(ribGeo, ribMat);
+  const rib2 = new THREE.Mesh(sharedRibGeo, mats.rim);
   rib2.rotation.x = Math.PI / 2;
   rib2.position.y = -0.16;
   group.add(rib2);
 
   // Top & bottom chime rims
-  const chimeGeo = new THREE.TorusGeometry(BARREL_RADIUS + 0.006, 0.016, 6, 20);
-  const chimeTop = new THREE.Mesh(chimeGeo, ribMat);
+  const chimeTop = new THREE.Mesh(sharedChimeGeo, mats.rim);
   chimeTop.rotation.x = Math.PI / 2;
   chimeTop.position.y = BARREL_HEIGHT / 2 - 0.01;
   group.add(chimeTop);
 
-  const chimeBtm = new THREE.Mesh(chimeGeo, ribMat);
+  const chimeBtm = new THREE.Mesh(sharedChimeGeo, mats.rim);
   chimeBtm.rotation.x = Math.PI / 2;
   chimeBtm.position.y = -BARREL_HEIGHT / 2 + 0.01;
   group.add(chimeBtm);

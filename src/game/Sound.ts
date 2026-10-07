@@ -265,6 +265,23 @@ export function wastedSound(): void {
     setTimeout(() => blip(freq, 0.4, 0.14, 'sawtooth'), i * 220);
   });
 }
+/** Police siren wail: two-tone up/down sweep (call throttled, ~1 per 4s). */
+export function policeSiren(vol = 0.06): void {
+  const ac = audio(); if (!ac) return;
+  try {
+    const now = ac.currentTime;
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = 'triangle';
+    o.frequency.setValueAtTime(660, now);
+    o.frequency.linearRampToValueAtTime(880, now + 0.45);
+    o.frequency.linearRampToValueAtTime(660, now + 0.9);
+    g.gain.setValueAtTime(vol, now);
+    g.gain.setValueAtTime(vol, now + 0.85);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.95);
+    o.connect(g).connect(ac.destination);
+    o.start(now); o.stop(now + 0.95);
+  } catch { /* Audio unavailable. */ }
+}
 /** Dual-tone horn: polite meep for cars, air horn for rigs. */
 export function horn(airHorn = false): void {
   const ac = audio(); if (!ac) return;

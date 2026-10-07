@@ -73,6 +73,7 @@ export function attachRealtime(server: HttpServer): RoomHub {
       else if (message.t === 'race_pos') hub.onRacePos(state, (message as { r: unknown }).r);
       else if (message.t === 'race_state') hub.onRaceState(state, (message as { s: unknown }).s);
       else if (message.t === 'race_list') hub.onRaceList(state);
+      else if (message.t === 'crime_report') hub.onCrimeReport(state, (message as { c: unknown }).c);
       else if (message.t === 'ping') {
         if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'pong' }));
       }

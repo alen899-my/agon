@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { RealtimeClient, type RaceDirEntry, type RemoteDot, type RemotePos } from '../api/realtime';
 import { GameLoop } from '../game/GameLoop';
 import type { Theme } from '../game/State';
-import { barrelSound, bbSound, countdownBeep, crashThud, crowdCheerSound, dryFire, explosionSound, finalLapSound, gunshot, horn, hurtSound, reloadSound, startRainLoop, stopRainLoop, ttSound, unlockAudio, wastedSound } from '../game/Sound';
+import { barrelSound, bbSound, countdownBeep, crashThud, crowdCheerSound, dryFire, explosionSound, finalLapSound, gunshot, horn, hurtSound, policeSiren, reloadSound, startRainLoop, stopRainLoop, ttSound, unlockAudio, wastedSound } from '../game/Sound';
 import { INTENSITY_FOG_FAR, INTENSITY_FOG_NEAR, INTENSITY_GLOOM, INTENSITY_RAIN_VOL, INTENSITY_SUN, SEASON_PRESETS, WEATHER_PRESETS, WeatherParticles, clampIntensity, type IntensityLevel, type Season, type Weather } from './Weather';
 import { wiperAngle } from './VehicleFactory';
 import { LAMPS } from './Map';
@@ -19,12 +19,40 @@ import { SkidMarks } from './SkidMarks';
 import { VehicleAudio } from '../game/VehicleAudio';
 import type { TTShot } from './TableTennis';
 import { CpuRacer, CPU_RACER_ID_PREFIX, type CpuDifficulty } from './CpuRacer';
+import { AgentSim } from './AgentSim';
+import { CharacterFactory } from './characters/CharacterFactory';
 
 export type { RacerState };
 
 export type QualityLevel = 'low' | 'balanced' | 'high' | 'ultra';
-const QUALITY_PIXEL: Record<QualityLevel, number> = { low: 1, balanced: 1.5, high: 2, ultra: 2.5 };
-const QUALITY_SHADOW: Record<QualityLevel, number> = { low: 512, balanced: 1024, high: 2048, ultra: 4096 };
+const QUALITY_PIXEL: Record<QualityLevel, number> = { low: 1, balanced: 1.25, high: 1.5, ultra: 2 };
+const QUALITY_SHADOW: Record<QualityLevel, number> = { low: 512, balanced: 1024, high: 2048, ultra: 2048 };
+/** Effective ghost caps per tier (visual parity on high, cheap on low). */
+const QUALITY_GHOSTS: Record<QualityLevel, number> = { low: 8, balanced: 12, high: 18, ultra: 24 };
+/** Shadow frustum half-extent per tier (smaller = sharper + cheaper). */
+const QUALITY_SHADOW_EXTENT: Record<QualityLevel, number> = { low: 30, balanced: 32, high: 40, ultra: 44 };
+
+/** Cheap mobile / low-power heuristic (no extra deps, runs before renderer init). */
+export function isLowPowerDevice(): boolean {
+  try {
+    if (typeof navigator !== 'undefined') {
+      const cores = (navigator as Navigator & { hardwareConcurrency?: number }).hardwareConcurrency ?? 8;
+      const mem = (navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 8;
+      const ua = navigator.userAgent ?? '';
+      const smallScreen = typeof window !== 'undefined' && Math.min(window.innerWidth, window.innerHeight) < 500;
+      const coarse = typeof window !== 'undefined' && typeof window.matchMedia === 'function' &&
+        window.matchMedia('(pointer: coarse)').matches;
+      if (/Mobi|Android|iPhone|iPad/i.test(ua) && (cores <= 6 || mem <= 4 || coarse)) return true;
+      if (cores <= 4 || mem <= 4) return true;
+      if (coarse && smallScreen) return true;
+    }
+  } catch { /* conservative: assume desktop */ }
+  return false;
+}
+/** Resolve an 'auto' request to a concrete tier: low-power -> low, else balanced. */
+export function resolveAutoQuality(): QualityLevel {
+  return isLowPowerDevice() ? 'low' : 'balanced';
+}
 
 /** Max rendered friend ghosts (nearest-first); the rest stay as map dots. */
 const MAX_GHOSTS = 24;
@@ -32,15 +60,26 @@ const MAX_GHOSTS = 24;
 const GHOST_TIMEOUT_MS = 3500;
 
 /** Draws a pill name tag onto a 256x72 canvas. Shared by the local + ghost tags. */
-function drawNameTag(canvas: HTMLCanvasElement, texture: THREE.CanvasTexture, name: string): void {
+function drawNameTag(canvas: HTMLCanvasElement, texture: THREE.CanvasTexture, name: string, speech = false): void {
   const ctx = canvas.getContext('2d')!;
   ctx.clearRect(0, 0, 256, 72);
   if (name) {
-    const label = name.length > 14 ? `${name.slice(0, 13)}…` : name;
+    const label = speech ? name.slice(0, 60) : name.length > 14 ? `${name.slice(0, 13)}…` : name;
     ctx.fillStyle = 'rgba(10, 10, 12, 0.72)';
     if (typeof ctx.roundRect === 'function') { ctx.beginPath(); ctx.roundRect(28, 8, 200, 52, 14); ctx.fill(); }
     else ctx.fillRect(28, 8, 200, 52);
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.65)'; ctx.lineWidth = 2; ctx.stroke();
+    if (speech) {
+      ctx.fillStyle = '#ffffff'; ctx.font = '600 15px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      const words = label.split(' '); const lines: string[] = []; let line = '';
+      for (const word of words) {
+        const next = line ? line + ' ' + word : word;
+        if (ctx.measureText(next).width > 184 && line) { lines.push(line); line = word; } else line = next;
+      }
+      if (line) lines.push(line);
+      lines.slice(0, 3).forEach((text, i) => ctx.fillText(text, 128, 36 + (i - (Math.min(3, lines.length) - 1) / 2) * 16, 184));
+      texture.needsUpdate = true; return;
+    }
     let size = 30;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     do {
@@ -97,7 +136,7 @@ export class WorldEngine {
   private bbNetPos: Float32Array;
   private lastBBEvents = 0;
   private readonly loop: GameLoop;
-  private readonly people: { actor: Stickman }[] = [];
+  private readonly people: { actor: Stickman; tag?: THREE.Sprite; canvas?: HTMLCanvasElement; texture?: THREE.CanvasTexture; label?: string }[] = [];
   /** Static paddock spectators: positioned once, cheering every frame. */
   private readonly crowd: { actor: Stickman; phase: number }[] = [];
   /** Private-server presence. Null in solo. Remotes render as ghosts (Phase 4). */
@@ -128,10 +167,17 @@ export class WorldEngine {
 
   get isFinalLapActive(): boolean {
     if (this.race.phase !== 'racing') return false;
-    const racers = Array.from(this.race.racers.values());
-    if (racers.length === 0) return false;
-    const maxLap = Math.max(...racers.map(r => r.lap));
-    return maxLap >= this.race.laps && !racers.every(r => r.finished);
+    const now = performance.now();
+    if (now - this.finalLapAt < 500) return this.finalLapCache;
+    this.finalLapAt = now;
+    let maxLap = 0; let count = 0; let allFinished = true;
+    for (const r of this.race.racers.values()) {
+      count++;
+      if (r.lap > maxLap) maxLap = r.lap;
+      if (!r.finished) allFinished = false;
+    }
+    this.finalLapCache = count > 0 && maxLap >= this.race.laps && !allFinished;
+    return this.finalLapCache;
   }
 
   get raceGuidanceActive(): boolean {
@@ -176,6 +222,19 @@ export class WorldEngine {
   private readonly _aimScreenVec = new THREE.Vector3();
   private quality: QualityLevel = 'balanced'; private pixelCap = QUALITY_PIXEL.balanced;
   private lastW = 1; private lastH = 1;
+  /** Dynamic resolution: 1 = full pixelCap, scales down under load, recovers when fast. */
+  private dynScale = 1; private frameEMA = 16; private slowFrames = 0; private fastFrames = 0;
+  private lastDynAdjust = 0; private renderCount = 0; private lastRenderMs = 0;
+  /** Throttled ghost ordering (avoid per-frame alloc+sort). */
+  private ghostOrderCache: { id: string; d: number }[] = [];
+  private ghostOrderAt = 0; private ghostWanted = new Set<string>();
+  /** Memoized final-lap check (avoids Array.from + Math.max spread per frame). */
+  private finalLapCache = false; private finalLapAt = 0;
+  /** Waypoint lookup cache (avoids PLACES.find per frame). */
+  private waypointCacheId: string | null = null; private waypointCache: { x: number; z: number } | null = null;
+  /** Reused temps: zero alloc in applyLook / render. */
+  private readonly tmpSky = new THREE.Color(); private readonly tmpNight = new THREE.Color(0x0b1026);
+  private lowPower = false;
   readonly barrelSim = new BarrelSim();
   private lastCountdownSec = -1;
   private prevRacePhase: 'idle' | 'lobby' | 'countdown' | 'racing' | 'finished' = 'idle';
@@ -218,6 +277,12 @@ export class WorldEngine {
   private glowTexture: THREE.CanvasTexture | null = null;
   readonly glowPoints: THREE.Vector3[] = [];
   private readonly headlight = new THREE.SpotLight(0xffe9c4, 0, 42, 0.55, 0.55, 1.1);
+  /** AI role agents (police slice): server truth in rooms, embedded director solo. */
+  readonly agents = new AgentSim();
+  /** Rendered agent bodies, keyed by agent id (cops are few; no pool needed). */
+  private readonly agentPeds = new Map<string, { actor: Stickman; tag: THREE.Sprite; canvas: HTMLCanvasElement; texture: THREE.CanvasTexture; label: string; stride: number; speed: number }>();
+  private readonly constructionMeshes = new Map<string, { stage: number; group: THREE.Group }>();
+  private readonly agentVehicles = new Map<string, Vehicle>();
   /** CPU AI racers for solo mode. */
   private cpuRacers: CpuRacer[] = [];
   /** Rendered ghost vehicles for each CPU car (keyed by cpu id). */
@@ -226,18 +291,27 @@ export class WorldEngine {
   private readonly cpuTags = new Map<string, THREE.Sprite>();
 
   constructor(private canvas: HTMLCanvasElement, private publish: (value: WorldSnapshot) => void) {
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+    this.lowPower = isLowPowerDevice();
+    const useAA = !this.lowPower;
+    this.renderer = new THREE.WebGLRenderer({
+      canvas, antialias: useAA, stencil: false,
+      powerPreference: this.lowPower ? 'low-power' : 'high-performance',
+    });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.05;
-    this.renderer.shadowMap.enabled = true; this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = this.lowPower ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
     this.kit = new AssetKit(); buildMap(this.scene, this.kit);
     this.scene.traverse((obj) => {
       if ((obj as THREE.Mesh).userData?.showCarGlow) this.showCarGlows.push(obj as THREE.Mesh);
     });
     this.scene.add(this.ambient, this.sun, this.sun.target);
-    this.sun.castShadow = true; this.sun.shadow.mapSize.set(1024, 1024);
-    Object.assign(this.sun.shadow.camera, { left: -44, right: 44, top: 44, bottom: -44, near: 1, far: 150 });
+    const initial: QualityLevel = this.lowPower ? 'low' : 'balanced';
+    this.quality = initial; this.pixelCap = QUALITY_PIXEL[initial];
+    this.sun.castShadow = initial !== 'low'; this.sun.shadow.mapSize.set(QUALITY_SHADOW[initial], QUALITY_SHADOW[initial]);
+    const ext0 = QUALITY_SHADOW_EXTENT[initial];
+    Object.assign(this.sun.shadow.camera, { left: -ext0, right: ext0, top: ext0, bottom: -ext0, near: 1, far: 120 });
     this.sun.shadow.bias = -0.0004; this.sun.shadow.normalBias = 0.1;
     this.avatar = this.kit.stickman(true); this.scene.add(this.avatar.group);
     // Floating name tag shown above your head while walking (GTA-style player tag).
@@ -246,10 +320,8 @@ export class WorldEngine {
     const nameMat = new THREE.SpriteMaterial({ map: this.nameTexture, transparent: true, depthTest: false, opacity: 0.95 });
     this.nameTag = new THREE.Sprite(nameMat); this.nameTag.scale.set(1.9, 0.53, 1);
     this.nameTag.renderOrder = 10; this.nameTag.visible = false; this.scene.add(this.nameTag);
-    for (const kind of VEHICLE_KINDS) {
-      const vehicle = this.kit.car(kind, false, 0);
-      vehicle.group.visible = false; this.fleet.set(kind, vehicle); this.scene.add(vehicle.group);
-    }
+    // Lazy fleet: only the default car exists up-front (was 46 kinds x ~25 meshes hidden).
+    this.ensureFleetKind('car');
     this.car = this.fleet.get('car')!;
     this.scene.add(this.skids.group);
     this.parkedKinds = [];
@@ -333,6 +405,19 @@ export class WorldEngine {
       }
       this.prevRacePhase = this.race.phase;
       this.updateRaceClear();
+      // AI role agents: server truth in rooms, embedded scripted director solo.
+      {
+        const inRoom = !!this.realtime?.connected;
+        this.agents.update(dt, this.simulation, !inRoom, inRoom);
+        if (this.agents.sirenDue(this.simulation.time)) {
+          const cop = this.agents.cops[0];
+          const sm = this.simulation;
+          const px = sm.driving ? sm.car.x : sm.x;
+          const pz = sm.driving ? sm.car.z : sm.z;
+          const d = cop ? Math.hypot(cop.x - px, cop.z - pz) : 999;
+          if (d < 70) policeSiren(Math.max(0.015, 0.07 * (1 - d / 70)));
+        }
+      }
 
       // Nitro boost lives only while racing — free-roam driving never drains it.
       this.simulation.boostEnabled = this.race.phase === 'racing';
@@ -376,7 +461,9 @@ export class WorldEngine {
         }
         if (anyFinished || this.playedFinalLapSound) this.notifyRace();
       }
-      if (this.hudTime >= 0.1) { this.hudTime = 0; this.emit(); }
+      // React snapshot at 10Hz desktop, 5Hz on low (halves setState/GC pressure on weak SoCs).
+      const emitEvery = this.quality === 'low' ? 0.2 : 0.1;
+      if (this.hudTime >= emitEvery) { this.hudTime = 0; this.emit(); }
     }, this.render);
     this.emit();
   }
@@ -385,6 +472,10 @@ export class WorldEngine {
     const nowMs = Date.now();
     if (this.raceJoinDeadline && nowMs > this.raceJoinDeadline) {
       this.leaveRace(); this.raceNotice = 'The race host did not respond. Please try joining again.';
+    }
+    // AI-mode crime reports → server director (throttled at the source).
+    if (this.realtime?.connected) {
+      for (const c of this.agents.outbox.splice(0)) this.realtime.sendCrimeReport(c);
     }
     if (this.realtime?.connected && sim.phase === 'playing') {
       this.realtime.sendPos({
@@ -688,13 +779,18 @@ export class WorldEngine {
       if (pool.length < 4) {
         pool.push(v);
         this.ghostVehiclePool.set((v as any).__cpuKind as VehicleKind ?? 'sport', pool);
-      } else this.scene.remove(v.group);
+      } else {
+        this.scene.remove(v.group);
+        this.disposeVehicleMats(v);
+      }
       void id;
     }
     this.cpuVehicles.clear();
     for (const [, tag] of this.cpuTags) {
       this.scene.remove(tag);
-      (tag.material as THREE.Material).dispose();
+      const mat = tag.material as THREE.SpriteMaterial;
+      mat.map?.dispose();
+      mat.dispose();
     }
     this.cpuTags.clear();
     this.cpuRacers = [];
@@ -785,6 +881,15 @@ export class WorldEngine {
           this.realtimeDots = players;
           this.emit();
         },
+        onBuildDelta: delta => this.agents.applyBuildDelta(delta, this.simulation),
+        onAgentState: (a) => {
+          this.agents.applyServerState(a, this.localRaceId, this.simulation);
+          this.emit();
+        },
+        onAgentEvent: (e) => {
+          this.agents.applyServerEvent(e, this.localRaceId, this.simulation);
+          this.emit();
+        },
         onError: (code, message) => {
           if (code === 'race_join_failed') { this.race.reset(); this.raceJoinDeadline = 0; this.raceNotice = message; this.emit(); return; }
           this.connectionNotice = message;
@@ -795,6 +900,7 @@ export class WorldEngine {
           this.connectionNotice = 'Connection interrupted. Reconnecting to your server...';
           this.realtimeRoom = null; this.realtimeMembers = 0; this.realtimeDots = [];
           this.remotes.clear(); this.race.reset(); this.raceDir = []; this.raceJoinDeadline = 0;
+          this.agents.clearRoomState(this.simulation);
           this.emit();
         },
         onClose: () => {
@@ -805,6 +911,7 @@ export class WorldEngine {
           this.race.reset();
           this.raceJoinDeadline = 0;
           this.raceDir = [];
+          this.agents.clearRoomState(this.simulation);
           this.emit();
           done(() => reject(new Error('Lost connection to the server.')));
         },
@@ -828,7 +935,28 @@ export class WorldEngine {
     for (const id of [...this.ghosts.keys()]) this.removeGhost(id);
     // Leaving the server drops any race (host authority lives in the room).
     if (this.race.phase !== 'idle') this.race.reset();
+    // Solo takes over policing from here (embedded scripted director).
+    this.agents.clearRoomState(this.simulation);
     this.emit();
+  }
+  /** Lazy player fleet: build a kind on demand instead of 46 hidden cars up-front. */
+  private ensureFleetKind(kind: VehicleKind): Vehicle {
+    const existing = this.fleet.get(kind);
+    if (existing) return existing;
+    const vehicle = this.kit.car(kind, false, 0);
+    this.applyHeadlightMat(vehicle);
+    vehicle.group.visible = false;
+    this.fleet.set(kind, vehicle);
+    this.scene.add(vehicle.group);
+    return vehicle;
+  }
+  /** Dispose per-car lamp materials (they are unique per vehicle, shared geo is kept). */
+  private disposeVehicleMats(v: Vehicle): void {
+    try {
+      (v.brakeMat as THREE.Material)?.dispose?.();
+      (v.headMat as THREE.Material)?.dispose?.();
+      (v.blinkerMat as THREE.Material)?.dispose?.();
+    } catch { /* ignore dispose races */ }
   }
   private acquireGhostVehicle(kind: VehicleKind): Vehicle {
     const vehicle = this.ghostVehiclePool.get(kind)?.pop();
@@ -850,7 +978,10 @@ export class WorldEngine {
     if (pooled.length < 4) {
       pooled.push(ghost.vehicle);
       this.ghostVehiclePool.set(ghost.vehicleKind, pooled);
-    } else this.scene.remove(ghost.vehicle.group);
+    } else {
+      this.scene.remove(ghost.vehicle.group);
+      this.disposeVehicleMats(ghost.vehicle);
+    }
     ghost.vehicle = null;
     ghost.vehicleKind = null;
   }
@@ -864,7 +995,7 @@ export class WorldEngine {
     this.releaseGhostVehicle(ghost);
     this.ghosts.delete(id);
   }
-  /** Reconciles friend ghosts: stale out, nearest MAX_GHOSTS interpolated in. */
+  /** Reconciles friend ghosts: stale out, nearest N interpolated in (throttled sort). */
   private syncGhosts(dt: number): void {
     const sim = this.simulation;
     const now = performance.now();
@@ -878,14 +1009,26 @@ export class WorldEngine {
       for (const id of [...this.ghosts.keys()]) this.removeGhost(id);
       return;
     }
-    const ordered = [...this.remotes.entries()]
-      .map(([id, r]) => ({ id, r, d: Math.hypot(r.pos.x - sim.x, r.pos.z - sim.z) }))
-      .sort((a, b) => a.d - b.d)
-      .slice(0, MAX_GHOSTS);
-    const wanted = new Set(ordered.map((o) => o.id));
-    for (const id of [...this.ghosts.keys()]) if (!wanted.has(id)) this.removeGhost(id);
+    const maxGhosts = QUALITY_GHOSTS[this.quality] ?? MAX_GHOSTS;
+    // Re-sort at most 4Hz; interpolate cached order every frame (no per-frame alloc+sort).
+    if (now - this.ghostOrderAt > 250 || this.ghostOrderCache.length === 0) {
+      this.ghostOrderAt = now;
+      const entries = [...this.remotes.entries()];
+      this.ghostOrderCache.length = 0;
+      for (let i = 0; i < entries.length; i++) {
+        const [id, r] = entries[i];
+        this.ghostOrderCache.push({ id, d: Math.hypot(r.pos.x - sim.x, r.pos.z - sim.z) });
+      }
+      this.ghostOrderCache.sort((a, b) => a.d - b.d);
+      if (this.ghostOrderCache.length > maxGhosts) this.ghostOrderCache.length = maxGhosts;
+      this.ghostWanted.clear();
+      for (const o of this.ghostOrderCache) this.ghostWanted.add(o.id);
+      for (const id of [...this.ghosts.keys()]) if (!this.ghostWanted.has(id)) this.removeGhost(id);
+    }
     const blend = 1 - Math.exp(-10 * Math.max(0, dt));
-    for (const { id, r } of ordered) {
+    for (const { id } of this.ghostOrderCache) {
+      const r = this.remotes.get(id);
+      if (!r) continue;
       let ghost = this.ghosts.get(id);
       if (!ghost) {
         const actor = this.kit.stickman(false, this.ghostSeed++);
@@ -961,6 +1104,86 @@ export class WorldEngine {
     this.emit();
   }
   /** Keep render meshes in sync with the stealable world: rebuild on kind change, grow/shrink freely. */
+  /** Keep one rendered body per live agent (CharacterFactory decides the mesh). */
+  private syncAgentPeople(dt: number): void {
+    const sim = this.simulation;
+    const live = new Set(this.agents.walkers.map(p => p.id));
+    for (const [id, p] of this.agentPeds) if (!live.has(id)) {
+      this.scene.remove(p.actor.group, p.tag); p.texture.dispose(); (p.tag.material as THREE.Material).dispose(); this.agentPeds.delete(id);
+    }
+    for (const p of this.agents.walkers) {
+      let mesh = this.agentPeds.get(p.id);
+      if (!mesh) {
+        const actor = this.kit.stickman(false, p.outfit);
+        const canvas = document.createElement('canvas'); canvas.width = 256; canvas.height = 72;
+        const texture = new THREE.CanvasTexture(canvas);
+        const tag = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false }));
+        tag.scale.set(3.4, 0.96, 1);
+        mesh = { actor, tag, canvas, texture, label: '', stride: 0, speed: 0 }; this.agentPeds.set(p.id, mesh); this.scene.add(actor.group, tag);
+        actor.group.position.set(p.x, 0, p.z);
+        actor.group.rotation.y = -p.yaw;
+      }
+      const distance = Math.hypot(p.x - sim.x, p.z - sim.z);
+      mesh.actor.group.visible = !p.hidden && distance < (this.quality === 'low' ? 90 : 130);
+      mesh.tag.visible = !p.hidden && distance < (this.quality === 'low' ? 30 : 50);
+      const k = 1 - Math.exp(-dt * 12);
+      const oldX = mesh.actor.group.position.x, oldZ = mesh.actor.group.position.z;
+      mesh.actor.group.position.x += (p.x - mesh.actor.group.position.x) * k;
+      mesh.actor.group.position.z += (p.z - mesh.actor.group.position.z) * k;
+      const yawDelta = Math.atan2(Math.sin(-p.yaw - mesh.actor.group.rotation.y), Math.cos(-p.yaw - mesh.actor.group.rotation.y));
+      mesh.actor.group.rotation.y += yawDelta * k;
+      const travelled = Math.hypot(mesh.actor.group.position.x - oldX, mesh.actor.group.position.z - oldZ);
+      mesh.stride += travelled * 2.4;
+      mesh.speed += (Math.min(p.speed, travelled / Math.max(dt, 0.001)) - mesh.speed) * k;
+      mesh.actor.group.position.y = Math.max(0, groundHeight(p.x, p.z));
+      mesh.tag.position.set(mesh.actor.group.position.x, mesh.actor.group.position.y + (p.say ? 3.1 : 2.8), mesh.actor.group.position.z);
+      mesh.tag.scale.set(p.say ? 3.4 : 1.9, p.say ? 0.96 : 0.53, 1);
+      const label = p.say || p.name;
+      if (label !== mesh.label) { drawNameTag(mesh.canvas, mesh.texture, label, !!p.say); mesh.label = label; }
+      if (distance < 90) mesh.actor.animate({
+        phase: p.task === 'dance' || p.task === 'watch' ? sim.time * 3 : mesh.stride, intensity: Math.min(1, mesh.speed / 2), airborne: false,
+        dip: p.task === 'build' || p.task === 'repair' ? 0.4 : p.task === 'treat' ? 0.3 : p.task === 'sit' ? 0.8 : 0,
+        idle: sim.time,
+        activity: p.task,
+        cheer: p.task === 'dance' ? 1 : p.task === 'watch' ? 0.3 : 0,
+      });
+    }
+    const sites = new Set(this.agents.sites.map(s => s.id));
+    for (const [id, m] of this.constructionMeshes) if (!sites.has(id)) { this.scene.remove(m.group); this.constructionMeshes.delete(id); }
+    for (const site of this.agents.sites) {
+      const old = this.constructionMeshes.get(site.id);
+      if (old?.stage === site.stage) continue;
+      if (old) this.scene.remove(old.group);
+      const group = this.kit.construction(site); this.scene.add(group); this.constructionMeshes.set(site.id, { stage: site.stage, group });
+    }
+  }
+  private syncAgentVehicles(): void {
+    const live = new Set([...this.agents.cops.map((c) => c.id), ...this.agents.rides.map((r) => r.id)]);
+    for (const [id, v] of [...this.agentVehicles]) {
+      if (!live.has(id)) {
+        this.scene.remove(v.group);
+        this.disposeVehicleMats(v);
+        this.agentVehicles.delete(id);
+      }
+    }
+    for (const cop of this.agents.cops) {
+      if (this.agentVehicles.has(cop.id)) continue;
+      const kind = CharacterFactory.get(cop.role)?.body.vehicleKind ?? 'police';
+      const v = this.kit.car(kind, false, 0);
+      this.applyHeadlightMat(v);
+      this.scene.add(v.group);
+      this.agentVehicles.set(cop.id, v);
+    }
+    for (const ride of this.agents.rides) {
+      if (this.agentVehicles.has(ride.id)) continue;
+      const kind = (VEHICLE_KINDS as string[]).includes(ride.kind) ? (ride.kind as VehicleKind) : 'sport';
+      const v = this.kit.car(kind, false, ride.id === 'ride-maya' ? 0 : 1);
+      v.group.position.set(ride.x, 0.08, ride.z); v.group.rotation.y = -ride.yaw;
+      this.applyHeadlightMat(v);
+      this.scene.add(v.group);
+      this.agentVehicles.set(ride.id, v);
+    }
+  }
   private syncWorldVehicles(initial = false): void {
     const sim = this.simulation;
     const trafficVariant = (kind: string, i: number): number => (i * 3 + kind.length + kind.charCodeAt(0)) % 8;
@@ -972,12 +1195,13 @@ export class WorldEngine {
       this.scene.add(v.group); this.traffic.push(v); this.trafficKinds.push(null);
     }
     while (this.traffic.length > sim.traffic.length) {
-      const v = this.traffic.pop()!; this.scene.remove(v.group); this.trafficKinds.pop();
+      const v = this.traffic.pop()!; this.scene.remove(v.group); this.disposeVehicleMats(v); this.trafficKinds.pop();
     }
     sim.traffic.forEach((t, i) => {
       const key = `${t.kind}:${trafficVariant(t.kind, i)}`;
       if (!initial && this.trafficKinds[i] === key) return;
-      this.scene.remove(this.traffic[i].group);
+      const old = this.traffic[i];
+      if (old) { this.scene.remove(old.group); this.disposeVehicleMats(old); }
       const v = this.kit.car(t.kind, false, trafficVariant(t.kind, i));
       this.applyHeadlightMat(v);
       this.scene.add(v.group); this.traffic[i] = v; this.trafficKinds[i] = key;
@@ -989,12 +1213,13 @@ export class WorldEngine {
       this.scene.add(v.group); this.parked.push(v); this.parkedKinds.push(null);
     }
     while (this.parked.length > sim.parked.length) {
-      const v = this.parked.pop()!; this.scene.remove(v.group); this.parkedKinds.pop();
+      const v = this.parked.pop()!; this.scene.remove(v.group); this.disposeVehicleMats(v); this.parkedKinds.pop();
     }
     sim.parked.forEach((p, i) => {
       const key = `${p.kind}:${parkedVariant(p.kind, i)}`;
       if (!initial && this.parkedKinds[i] === key) return;
-      this.scene.remove(this.parked[i].group);
+      const old = this.parked[i];
+      if (old) { this.scene.remove(old.group); this.disposeVehicleMats(old); }
       const v = this.kit.car(p.kind, false, parkedVariant(p.kind, i));
       this.applyHeadlightMat(v);
       this.scene.add(v.group); this.parked[i] = v; this.parkedKinds[i] = key;
@@ -1077,8 +1302,10 @@ export class WorldEngine {
     }
     for (const tr of this.tracers) tr.mesh.visible = sim.time - tr.born < 0.09;
     for (const fl of this.flashes) fl.sprite.visible = sim.time - fl.born < 0.06;
-    // Burning vehicles: flickering flame + rising smoke column each.
-    sim.burners.forEach((b, i) => {
+    // Burning vehicles: flickering flame + rising smoke column each (no per-frame Set alloc).
+    const burnCount = Math.min(sim.burners.length, this.flames.length);
+    for (let i = 0; i < burnCount; i++) {
+      const b = sim.burners[i];
       const f = this.flames[i % this.flames.length];
       f.flame.visible = true; f.smoke.visible = true;
       const flick = 1 + 0.25 * Math.sin(sim.time * 31 + f.seed * 9);
@@ -1089,9 +1316,10 @@ export class WorldEngine {
       const ss = 1.1 + rise * 1.7;
       f.smoke.scale.set(ss, ss, 1);
       (f.smoke.material as THREE.SpriteMaterial).opacity = 0.5 * (1 - rise / 1.6);
-    });
-    const used = new Set(sim.burners.map((_, i) => i % this.flames.length));
-    this.flames.forEach((f, i) => { if (!used.has(i)) { f.flame.visible = false; f.smoke.visible = false; } });
+    }
+    for (let i = 0; i < this.flames.length; i++) {
+      if (i >= burnCount) { this.flames[i].flame.visible = false; this.flames[i].smoke.visible = false; }
+    }
     // Explosion fireballs + light spike.
     let glow = 0;
     sim.booms.forEach((b, i) => {
@@ -1106,7 +1334,7 @@ export class WorldEngine {
       glow = Math.max(glow, 1 - age / 0.5);
     });
     for (const sp of this.boomSprites) if (sim.time - sp.born > 0.6) sp.sprite.visible = false;
-    this.boomLight.intensity = glow * 320;
+    this.boomLight.intensity = glow * 120;
   }
 
   /** Lazily builds every pooled combat sprite/mesh (once, import-safe). */
@@ -1153,6 +1381,24 @@ export class WorldEngine {
   }
 
   begin(): void { unlockAudio(); this.simulation.begin(); this.emit(); }
+  /**
+   * Auth token for solo AI. Call after login (solo + rooms) and clear on
+   * logout/offline. Wires both the solo police dispatcher and the ambient
+   * pedestrian chatter to the server Gemini chain; null = scripted offline.
+   */
+  setAuthToken(token: string | null): void {
+    const clean = token && token.length > 0 ? token : null;
+    this.agents.setServerAiToken(clean);
+    this.simulation.dialogue = clean
+      ? async (context) => {
+          const { fetchDialogue } = await import('../api/client');
+          return fetchDialogue(clean, {
+            participants: context.participants.map(p => ({ id: p.id, name: p.name, role: p.role })),
+            situation: context.situation, history: context.history,
+          });
+        }
+      : undefined;
+  }
   /** Leave the optional race before returning to the entry screen. */
   exitToIntro(): void {
     this.leaveRace(); this.clearInput(); this.simulation.exitToIntro(); this.emit();
@@ -1272,6 +1518,15 @@ export class WorldEngine {
    * Composes the final look: theme base + season overlay + weather overlay + night.
    * Called on theme/season/weather change and while nightFactor is lerping.
    */
+  /** Reuse background Color + Fog objects (no new Color/Fog per frame while night lerps). */
+  private setBackgroundFog(color: THREE.Color, near: number, far: number): void {
+    const bg = this.scene.background;
+    if (bg instanceof THREE.Color) bg.copy(color);
+    else this.scene.background = color.clone();
+    const fog = this.scene.fog;
+    if (fog instanceof THREE.Fog) { fog.color.copy(color); fog.near = near; fog.far = far; }
+    else this.scene.fog = new THREE.Fog(color.getHex(), near, far);
+  }
   applyLook(): void {
     const mats = this.kit.materials;
     const night = this._nightFactor;
@@ -1289,7 +1544,7 @@ export class WorldEngine {
       mats.wall1.color.setHex(0xb65a41);
       mats.wall2.color.setHex(0x6f87a3);
       mats.leaf.color.setHex(0x43a047);
-      const sky = new THREE.Color(0x87bfe8);
+      const sky = this.tmpSky.set(0x87bfe8);
       let fogNear = 100, fogFar = 280;
       let sunI = 3, ambI = 1.6, exposure = 1.1;
       this.sun.color.setHex(0xfff0d6);
@@ -1327,10 +1582,12 @@ export class WorldEngine {
       const darken = night * (0.82 + preset.nightDarken + season.nightDarken);
       sky.multiplyScalar(Math.max(0.06, 1 - darken));
       // True night sky fades toward deep blue, not pure black.
-      if (night > 0) sky.lerp(new THREE.Color(0x0b1026), night * 0.75);
+      if (night > 0) sky.lerp(this.tmpNight, night * 0.75);
       // Intensity owns the air clarity: 1 = crystal clear, 5 = wall of weather.
       fogNear *= INTENSITY_FOG_NEAR[this.intensity]; fogFar *= INTENSITY_FOG_FAR[this.intensity];
-      this.scene.background = sky.clone(); this.scene.fog = new THREE.Fog(sky.getHex(), fogNear, fogFar);
+      // Mobile saver: tighter far plane on low tiers (less fragment work, same look nearby).
+      if (this.quality === 'low') fogFar = Math.min(fogFar, 190);
+      this.setBackgroundFog(sky, fogNear, fogFar);
       // Intensity dials the sun last: level 1 softens noon, 4–5 make it blaze.
       // Heavy precip also glooms the exposure so downpours/whiteouts read dark.
       const boost = INTENSITY_SUN[this.intensity];
@@ -1353,7 +1610,7 @@ export class WorldEngine {
       mats.wall1.color.setHex(0xababab);
       mats.wall2.color.setHex(0x737373);
       mats.leaf.color.setHex(0x626262);
-      let color = new THREE.Color(light ? 0xdadada : 0x242424);
+      const color = this.tmpSky.set(light ? 0xdadada : 0x242424);
       let fogNear = 90, fogFar = 255;
       // Mono stays gray: seasons only shift light energy + haze range + winter blanket.
       const seasonM = SEASON_PRESETS[this.season];
@@ -1382,9 +1639,10 @@ export class WorldEngine {
       this.ambient.color.setHex(0xffffff); this.ambient.groundColor.setHex(0x555555);
       const darken = night * (0.8 + preset.nightDarken + seasonM.nightDarken);
       color.multiplyScalar(Math.max(0.05, 1 - darken));
-      if (night > 0) color.lerp(new THREE.Color(0x0b1026), night * 0.7);
+      if (night > 0) color.lerp(this.tmpNight, night * 0.7);
       fogNear *= INTENSITY_FOG_NEAR[this.intensity]; fogFar *= INTENSITY_FOG_FAR[this.intensity];
-      this.scene.background = color.clone(); this.scene.fog = new THREE.Fog(color.getHex(), fogNear, fogFar);
+      if (this.quality === 'low') fogFar = Math.min(fogFar, 190);
+      this.setBackgroundFog(color, fogNear, fogFar);
       // Intensity dials the sun last: level 1 softens noon, 4–5 make it blaze.
       // Heavy precip also glooms the exposure so downpours/whiteouts read dark.
       const boost = INTENSITY_SUN[this.intensity];
@@ -1397,9 +1655,13 @@ export class WorldEngine {
     // Night glow: warm lamp heads + lit windows fade in with nightFactor.
     mats.lampGlow.emissiveIntensity = night * 2.4;
     mats.windowLit.emissiveIntensity = night * 1.7;
-    for (const s of this.glowSprites) (s.material as THREE.SpriteMaterial).opacity = night * 0.85;
-    this.headlight.intensity = night * 90;
-    this.updateHeadlightMats();
+    const glowOn = night > 0.02;
+    for (const s of this.glowSprites) {
+      s.visible = glowOn;
+      (s.material as THREE.SpriteMaterial).opacity = night * 0.85;
+    }
+    this.headlight.intensity = night * 50;
+    if (this._nightFactor > 0 || night > 0) this.updateHeadlightMats();
   }
   /** Builds glow sprites + registers lamp/floodlight anchors (once). */
   private initNightGlow(): void {
@@ -1443,16 +1705,28 @@ export class WorldEngine {
   }
   resize(width: number, height: number): void {
     this.lastW = Math.max(1, width); this.lastH = Math.max(1, height);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.pixelCap));
+    const eff = Math.min(window.devicePixelRatio || 1, this.pixelCap) * this.dynScale;
+    this.renderer.setPixelRatio(Math.max(0.75, eff));
     this.renderer.setSize(this.lastW, this.lastH, false);
     this.camera.aspect = this.lastW / this.lastH; this.camera.updateProjectionMatrix();
   }
-  /** Graphics quality for high-spec devices. Live-applied: pixel ratio, shadow resolution, shadows on/off. */
+  /** Graphics quality (auto-scaled on weak devices). Live-applied: pixel, shadow, frustum, fog. */
   applyQuality(q: QualityLevel): void {
-    this.quality = q; this.pixelCap = QUALITY_PIXEL[q];
+    this.quality = q; this.pixelCap = QUALITY_PIXEL[q]; this.dynScale = 1;
+    this.slowFrames = 0; this.fastFrames = 0;
     this.precip?.setQuality(q);
-    this.sun.shadow.mapSize.set(QUALITY_SHADOW[q], QUALITY_SHADOW[q]);
-    if (this.sun.shadow.map) { this.sun.shadow.map.dispose(); this.sun.shadow.map = null; }
+    const shadowSize = QUALITY_SHADOW[q];
+    if (this.sun.shadow.mapSize.x !== shadowSize) {
+      this.sun.shadow.mapSize.set(shadowSize, shadowSize);
+      if (this.sun.shadow.map) { this.sun.shadow.map.dispose(); this.sun.shadow.map = null; }
+    }
+    const ext = QUALITY_SHADOW_EXTENT[q];
+    const cam = this.sun.shadow.camera;
+    if (cam.left !== -ext) {
+      Object.assign(cam, { left: -ext, right: ext, top: ext, bottom: -ext, near: 1, far: 120 });
+      cam.updateProjectionMatrix();
+    }
+    this.renderer.shadowMap.type = q === 'low' ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
     const enable = q !== 'low';
     if (this.renderer.shadowMap.enabled !== enable) {
       this.renderer.shadowMap.enabled = enable;
@@ -1463,10 +1737,53 @@ export class WorldEngine {
         for (const m of mats as THREE.Material[]) if (m && !seen.has(m)) { seen.add(m); m.needsUpdate = true; }
       });
     }
+    // Cheaper depth range on low (fill-rate + z-precision win, same nearby look).
+    this.camera.far = q === 'low' ? 220 : 340;
+    this.camera.updateProjectionMatrix();
+    // Small props stop casting on low/balanced-mobile (big shadow-pass saving, invisible at distance).
+    const smallCast = q === 'high' || q === 'ultra';
+    try {
+      this.ttBall.castShadow = smallCast;
+      this.bbBall.castShadow = smallCast;
+      this.bbRim.castShadow = smallCast;
+      for (const p of this.people) p.actor.group.traverse(o => { if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).castShadow = smallCast; });
+      for (const c of this.crowd) c.actor.group.traverse(o => { if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).castShadow = smallCast; });
+      this.avatar.group.traverse(o => { if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).castShadow = true; });
+    } catch { /* props may not exist yet in tests */ }
+    this.ghostOrderAt = 0;
     this.resize(this.lastW, this.lastH);
+    this.applyLook();
+  }
+  /** Dynamic resolution: hold 50-60fps by scaling pixelRatio 0.75x..1x of the tier cap. */
+  private autoResolution(now: number): void {
+    if (this.lastRenderMs === 0) { this.lastRenderMs = now; return; }
+    const ms = now - this.lastRenderMs;
+    this.lastRenderMs = now;
+    if (ms <= 0 || ms > 100) return;
+    this.frameEMA += (ms - this.frameEMA) * 0.06;
+    if (now - this.lastDynAdjust < 1500) return;
+    if (this.frameEMA > 20 && this.dynScale > 0.75) {
+      this.slowFrames++;
+      this.fastFrames = 0;
+      if (this.slowFrames >= 2) {
+        this.slowFrames = 0; this.lastDynAdjust = now;
+        this.dynScale = Math.max(0.75, this.dynScale - 0.15);
+        this.resize(this.lastW, this.lastH);
+      }
+    } else if (this.frameEMA < 12 && this.dynScale < 1) {
+      this.fastFrames++;
+      this.slowFrames = 0;
+      if (this.fastFrames >= 8) {
+        this.fastFrames = 0; this.lastDynAdjust = now;
+        this.dynScale = Math.min(1, this.dynScale + 0.1);
+        this.resize(this.lastW, this.lastH);
+      }
+    } else { this.slowFrames = 0; this.fastFrames = 0; }
   }
   private render = (alpha: number): void => {
     if (this.disposed) return;
+    this.autoResolution(performance.now());
+    this.renderCount++;
     const sim = this.simulation; if (!sim.active) alpha = 1;
     const raceGuidance = this.raceGuidanceActive;
     if (raceGuidance && !this.raceRoute) {
@@ -1528,8 +1845,8 @@ export class WorldEngine {
       this.headlight.visible = true;
     } else this.headlight.visible = false;
     const accel = sim.driving ? sim.acceleration : 0;
+    this.car = this.ensureFleetKind(sim.vehicleKind);
     for (const [kind, vehicle] of this.fleet) vehicle.group.visible = kind === sim.vehicleKind && !sim.carWrecked;
-    this.car = this.fleet.get(sim.vehicleKind)!;
     this.car.group.position.set(sim.car.x, sim.carY + 0.08, sim.car.z); this.car.group.rotation.y = -sim.car.yaw;
     // Wipers: auto sweeps in rain, manual T-key override (on = always, off = parked).
     const wiper = this.wiperSweep(0);
@@ -1545,17 +1862,34 @@ export class WorldEngine {
     const doorOpen = sim.transition > 0 ? Math.min(1, sim.transition / 0.3) * 1.15 : 0;
     for (const [i, door] of this.car.doors.entries()) door.rotation.y = (i === 0 ? 1 : -1) * doorOpen;
     // Ped + traffic + parked positions are owned by the simulation (braking / collisions).
+    // Distance-skip: far peds keep position but skip skeletal animate (cheap LOD).
+    const cullDist = this.quality === 'low' ? 70 : 110;
+    const px = sim.driving ? sim.car.x : sim.x, pz = sim.driving ? sim.car.z : sim.z;
     this.people.forEach((person, i) => {
       const point = sim.peds[i]; if (!point) return;
+      const dx = point.x - px, dz = point.z - pz;
+      const far = dx * dx + dz * dz > cullDist * cullDist;
+      if (point.say && !person.tag) {
+        person.canvas = document.createElement('canvas'); person.canvas.width = 256; person.canvas.height = 72;
+        person.texture = new THREE.CanvasTexture(person.canvas);
+        person.tag = new THREE.Sprite(new THREE.SpriteMaterial({ map: person.texture, transparent: true, depthWrite: false }));
+        person.tag.scale.set(3.4, 0.96, 1); this.scene.add(person.tag);
+      }
+      if (person.tag) {
+        person.tag.visible = !!point.say && !point.ragdoll && !point.dead && dx * dx + dz * dz < 900;
+        person.tag.position.set(point.x, 2.8, point.z);
+        if (person.label !== point.say) {
+          drawNameTag(person.canvas!, person.texture!, point.say ?? '', true); person.label = point.say;
+        }
+      }
       if (point.ragdoll) {
-        // Ragdoll: elevate to ry height, pitch forward (tumble), use rollYaw from moment of impact.
         person.actor.group.position.set(point.x, 0.08 + point.ry, point.z);
         person.actor.group.rotation.set(point.rpitch, -point.rollYaw, 0, 'YXZ');
-        person.actor.animate({ phase: point.phase, intensity: 0, airborne: point.ry > 0.05, dip: 0, idle: sim.time + i * 1.7 });
+        if (!far) person.actor.animate({ phase: point.phase, intensity: 0, airborne: point.ry > 0.05, dip: 0, idle: sim.time + i * 1.7 });
       } else {
         person.actor.group.position.set(point.x, 0.08, point.z);
         person.actor.group.rotation.set(0, -point.yaw, 0);
-        person.actor.animate({ phase: point.phase, intensity: point.move, airborne: false, dip: 0, idle: sim.time + i * 1.7 });
+        if (!far) person.actor.animate({ phase: point.phase, intensity: point.move, airborne: false, dip: 0, idle: sim.time + i * 1.7, activity: point.activity });
       }
     });
     // Dynamic interactive barrels: vehicle & player collision, physics, and mesh sync
@@ -1582,31 +1916,65 @@ export class WorldEngine {
     const nearArena = arenaDist < 36;
     const isRacing = this.race.phase === 'countdown' || this.race.phase === 'racing';
     const cheerLevel = isRacing ? 1.0 : nearArena ? 0.85 : 0.45;
-    for (let i = 0; i < this.crowd.length; i++) {
-      const fan = this.crowd[i];
-      fan.actor.animate({
-        phase: fan.phase + sim.time * (4.8 + (i % 3) * 0.7),
-        intensity: 0,
-        airborne: false,
-        dip: 0,
-        idle: sim.time + i * 0.9,
-        cheer: cheerLevel,
-      });
+    // Far crowd: animate at 1/3 rate (same look nearby, ~66% cheaper far away).
+    const crowdTick = nearArena || isRacing || this.renderCount % 3 === 0;
+    if (crowdTick) {
+      for (let i = 0; i < this.crowd.length; i++) {
+        const fan = this.crowd[i];
+        fan.actor.animate({
+          phase: fan.phase + sim.time * (4.8 + (i % 3) * 0.7),
+          intensity: 0,
+          airborne: false,
+          dip: 0,
+          idle: sim.time + i * 0.9,
+          cheer: cheerLevel,
+        });
+      }
     }
     this.syncWorldVehicles();
     for (const glow of this.showCarGlows) glow.visible = !sim.raceClearActive;
+    const vehCull = this.quality === 'low' ? 120 : 160;
+    const vehCull2 = vehCull * vehCull;
     this.traffic.forEach((vehicle, i) => {
       const p = sim.traffic[i]; if (!p) { vehicle.group.visible = false; return; }
+      const tdx = p.x - px, tdz = p.z - pz;
+      if (tdx * tdx + tdz * tdz > vehCull2) { vehicle.group.visible = false; return; }
       vehicle.group.visible = true;
       vehicle.group.position.set(p.x, 0.08, p.z); vehicle.group.rotation.y = -p.yaw;
       vehicle.update(p.speed, p.steer, dt, p.braking, undefined, 0, sim.time, wiperAngle(sim.time + i * 0.53, this.intensity) * (sim.weather === 'rain' ? 1 : 0));
     });
     this.parked.forEach((vehicle, i) => {
       const p = sim.parked[i]; if (!p) { vehicle.group.visible = false; return; }
+      const pdx = p.x - px, pdz = p.z - pz;
+      if (pdx * pdx + pdz * pdz > vehCull2) { vehicle.group.visible = false; return; }
       vehicle.group.visible = true;
       vehicle.group.position.set(p.x, 0.08, p.z); vehicle.group.rotation.y = -p.yaw;
       vehicle.update(0, 0, 0, false);
     });
+    // AI role agents (police cruisers): bodies resolve via CharacterFactory.
+    this.syncAgentPeople(dt);
+    this.syncAgentVehicles();
+    for (const cop of this.agents.cops) {
+      const vehicle = this.agentVehicles.get(cop.id);
+      if (!vehicle) continue;
+      vehicle.group.visible = Math.hypot(cop.x - sim.x, cop.z - sim.z) < (this.quality === 'low' ? 100 : 150);
+      vehicle.group.position.set(cop.onFoot ? cop.vehicleX ?? cop.x : cop.x, 0.08, cop.onFoot ? cop.vehicleZ ?? cop.z : cop.z);
+      vehicle.group.rotation.y = -cop.yaw;
+      const blink = cop.lightsOn ? (Math.floor(sim.time * 4) % 2 === 0 ? 1 : 2) : 0;
+      vehicle.update(cop.speed, 0, dt, false, undefined, blink, sim.time, 0);
+    }
+    // Street-racer rides (Maya vs Leo): real cars on the Grand Circuit.
+    for (const ride of this.agents.rides) {
+      const vehicle = this.agentVehicles.get(ride.id);
+      if (!vehicle) continue;
+      vehicle.group.visible = Math.hypot(ride.x - sim.x, ride.z - sim.z) < (this.quality === 'low' ? 100 : 150);
+      const blend = 1 - Math.exp(-dt * 14);
+      vehicle.group.position.x += (ride.x - vehicle.group.position.x) * blend;
+      vehicle.group.position.z += (ride.z - vehicle.group.position.z) * blend;
+      const turn = Math.atan2(Math.sin(-ride.yaw - vehicle.group.rotation.y), Math.cos(-ride.yaw - vehicle.group.rotation.y));
+      vehicle.group.rotation.y += turn * blend;
+      vehicle.update(ride.speed, ride.steer ?? 0, dt, ride.braking || ride.state === 'countdown', undefined, 0, sim.time, 0);
+    }
     // Friend ghosts from the private server (nearest MAX_GHOSTS, interpolated).
     this.syncGhosts(dt);
     // CPU ghost vehicles: move each car to the AI driver's latest position.
@@ -1616,7 +1984,7 @@ export class WorldEngine {
         if (v) {
           v.group.position.set(cpu.x, 0.08, cpu.z);
           v.group.rotation.y = -cpu.yaw;
-          v.update(cpu.speed, 0, dt, false, undefined, 0, sim.time, 0);
+          v.update(cpu.speed, cpu.steer, dt, cpu.braking, undefined, 0, sim.time, 0);
         }
         const tag = this.cpuTags.get(cpu.id);
         if (tag) {
@@ -1698,7 +2066,13 @@ export class WorldEngine {
     if (sim.impact && sim.impact.at !== this.lastImpactAt) { this.lastImpactAt = sim.impact.at; this.shake = Math.min(1, sim.impact.speed / 40 + 0.35); crashThud(sim.impact.speed); }
     this.shake *= 0.9;
     const shakeX = this.shake * Math.sin(sim.time * 70) * 0.35, shakeY = this.shake * Math.cos(sim.time * 55) * 0.25;
-    const waypoint = PLACES.find(p => p.id === sim.waypoint);
+    let waypoint = this.waypointCache;
+    if (this.waypointCacheId !== sim.waypoint) {
+      this.waypointCacheId = sim.waypoint;
+      const found = PLACES.find(p => p.id === sim.waypoint);
+      waypoint = found ? { x: found.x, z: found.z } : null;
+      this.waypointCache = waypoint;
+    }
     // Hide the waypoint ring during a match — it sits on the court otherwise.
     this.marker.visible = Boolean(waypoint) && !inTable && !inBasket && this.race.phase === 'idle';
     if (waypoint && !inTable && !inBasket) this.marker.position.set(waypoint.x, 0.25, waypoint.z);
@@ -1806,6 +2180,12 @@ export class WorldEngine {
     this.renderer.render(this.scene, this.camera);
   };
   destroy(): void {
+    this.agents.dispose();
+    for (const p of this.agentPeds.values()) { p.texture.dispose(); (p.tag.material as THREE.Material).dispose(); }
+    this.agentPeds.clear();
+    for (const p of this.people) { p.texture?.dispose(); if (p.tag) (p.tag.material as THREE.Material).dispose(); }
+    for (const v of this.agentVehicles.values()) this.disposeVehicleMats(v);
+    this.agentVehicles.clear();
     this.disposed = true; this.loop.stop(); this.clearInput();
     this.cancelRoomJoin?.();
     this.realtime?.dispose(); this.realtime = null;

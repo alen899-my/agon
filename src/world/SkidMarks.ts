@@ -71,6 +71,7 @@ export class SkidMarks {
   readonly group = new THREE.Group();
   private readonly trails: [Trail, Trail];
   private readonly material: THREE.ShaderMaterial;
+  private lastRebuild = -1;
 
   constructor() {
     this.material = new THREE.ShaderMaterial({
@@ -100,10 +101,22 @@ export class SkidMarks {
     const cz = s.z + Math.cos(s.yaw) * s.rearOff;
     const lx = Math.cos(s.yaw) * s.trackHalf, lz = Math.sin(s.yaw) * s.trackHalf;
     const strength = Math.max(0, Math.min(1, 0.35 + s.slip / 8));
+    const before0 = this.trails[0].pts.length;
+    const before1 = this.trails[1].pts.length;
+    const start0 = this.trails[0].start;
+    const start1 = this.trails[1].start;
     this.pushSample(this.trails[0], s, cx + lx, cz + lz, strength);
     this.pushSample(this.trails[1], s, cx - lx, cz - lz, strength);
-    this.rebuild(this.trails[0], s.time);
-    this.rebuild(this.trails[1], s.time);
+    // Skip full buffer rebuild + GPU upload when nothing changed and no fade is due.
+    // Fades are second-granularity; rebuild at most 2Hz when idle.
+    const changed = this.trails[0].pts.length !== before0 || this.trails[1].pts.length !== before1 ||
+      this.trails[0].start !== start0 || this.trails[1].start !== start1;
+    const idleDue = Math.floor(s.time * 2) !== Math.floor(this.lastRebuild * 2);
+    if (changed || idleDue || s.active) {
+      this.lastRebuild = s.time;
+      this.rebuild(this.trails[0], s.time);
+      this.rebuild(this.trails[1], s.time);
+    }
   }
 
   private pushSample(tr: Trail, s: SkidSample, x: number, z: number, strength: number): void {

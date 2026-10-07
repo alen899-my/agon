@@ -627,7 +627,8 @@ export function buildVehicle(kit: KitLike, kind: VehicleKind = 'car', variant = 
   const group = new THREE.Group(); const body = new THREE.Group(); group.add(body);
 
   const color = pickVehiclePaint(kind, variant);
-  const paintMat = cached(kit, `paint:${color}`, () => new THREE.MeshPhysicalMaterial({ color, roughness: 0.32, metalness: 0.3, clearcoat: 0.7, clearcoatRoughness: 0.2 }));
+  // MeshStandardMaterial instead of MeshPhysicalMaterial/clearcoat: ~same look, far cheaper on mobile GPUs.
+  const paintMat = cached(kit, `paint:${color}`, () => new THREE.MeshStandardMaterial({ color, roughness: 0.35, metalness: 0.35 }));
   const glassMat = cached(kit, 'glass', () => new THREE.MeshStandardMaterial({ color: 0x14202b, roughness: 0.06, metalness: 0.7 }));
   const shieldMat = cached(kit, 'glass-windshield', () => new THREE.MeshStandardMaterial({ color: 0xbdd5e4, roughness: 0.05, metalness: 0.1, transparent: true, opacity: 0.42 }));
   const lamp = (k: string, color: number, emissive: number) => cached(kit, `lamp:${k}`, () => new THREE.MeshStandardMaterial({ color, emissive, emissiveIntensity: 1.2 }));

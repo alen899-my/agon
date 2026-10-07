@@ -30,6 +30,15 @@ const schema = z.object({
   JWT_SECRET: z.string().min(16, 'JWT_SECRET must be at least 16 characters'),
   JWT_EXPIRES_IN: z.string().default('30d'),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  OPENROUTER_API_KEY: z.string().default(''),
+  AI_PROVIDER: z.enum(['gemini', 'openrouter']).default('gemini'),
+  GEMINI_API_KEY: z.string().default(''),
+  GEMINI_MODEL: z.string().default('gemini-3.5-flash-lite'),
+  GEMINI_ESCALATION_MODEL: z.string().default('gemini-3.8-flash'),
+  OPENROUTER_ESCALATION_MODEL: z.string().default(''),
+  OPENROUTER_MODEL: z.string().default('openrouter/free'),
+  AI_MODE: z.enum(['llm', 'scripted']).default('llm'),
+  AI_BRAIN_INTERVAL_MS: z.coerce.number().int().positive().default(8000),
 });
 
 export type AppConfig = z.infer<typeof schema>;

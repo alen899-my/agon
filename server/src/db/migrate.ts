@@ -48,6 +48,12 @@ END $$;
 
 /** v2: named + public/private servers. Runs on every boot so existing databases heal. */
 const ENSURE_V2_STATEMENTS = [
+  `CREATE TABLE IF NOT EXISTS buildings_delta (
+  room_code TEXT NOT NULL REFERENCES rooms(code) ON DELETE CASCADE,
+  site_id TEXT NOT NULL,
+  stage SMALLINT NOT NULL CHECK (stage BETWEEN 1 AND 4),
+  PRIMARY KEY (room_code, site_id)
+);`,
   "ALTER TABLE rooms ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT 'District Server'",
   "ALTER TABLE rooms ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'private'",
   'CREATE INDEX IF NOT EXISTS rooms_public_active_idx ON rooms (visibility, last_active_at DESC)',

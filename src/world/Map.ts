@@ -1,3 +1,4 @@
+export { BUILD_LOTS } from '../../server/src/agents/livingWorld';
 import type { VehicleKind } from './Vehicles';
 
 export interface Point { x: number; z: number }

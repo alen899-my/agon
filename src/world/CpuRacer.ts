@@ -1,6 +1,7 @@
 import { TRACK_POINTS } from './Track';
 import { trackProgress } from './Track';
 import type { RacerState } from './RaceSim';
+import { raceDistanceAt, racePathAt } from '../../server/src/agents/racePath';
 
 export const CPU_RACER_ID_PREFIX = 'cpu-';
 
@@ -46,35 +47,18 @@ function sampleTrack(dist: number): { x: number; z: number; yaw: number } {
   return { x: TRACK_POINTS[0].x, z: TRACK_POINTS[0].z, yaw: 0 };
 }
 
-/** Returns corner sharpness (0 = straight, 1 = hairpin) at a track position. */
-function cornerSharpness(trackDist: number): number {
-  const ahead = 18; // look-ahead distance in metres
-  const a = sampleTrack(trackDist);
-  const b = sampleTrack(trackDist + ahead);
-  let dYaw = b.yaw - a.yaw;
-  while (dYaw > Math.PI) dYaw -= Math.PI * 2;
-  while (dYaw < -Math.PI) dYaw += Math.PI * 2;
-  return Math.min(1, Math.abs(dYaw) / (Math.PI * 0.55));
-}
-
 export class CpuRacer {
   readonly id: string;
   readonly name: string;
   readonly vehicleKind: string;
 
   /** World position. */
-  x = 0; z = 0; yaw = 0; speed = 0;
+  x = 0; z = 0; yaw = 0; speed = 0; steer = 0; braking = false;
 
   /** Distance along the track poly (wraps). */
   private trackDist = 0;
-  /** Noise accumulator for organic steering. */
-  private noiseAngle = 0;
-  private noiseTimer = 0;
-  private noiseTarget = 0;
-
   private readonly speedFactor: number;
   private readonly cornerBrake: number;
-  private readonly noise: number;
   /** Base top-speed in m/s derived from the vehicle kind's topSpeed (km/h / 3.6). */
   private readonly baseTopSpeed: number;
 
@@ -96,7 +80,6 @@ export class CpuRacer {
     const d = CPU_DIFFICULTIES[difficulty];
     this.speedFactor = d.speedFactor;
     this.cornerBrake = d.cornerBrake;
-    this.noise = d.noise;
     this.baseTopSpeed = (topSpeedKmh / 3.6) * d.speedFactor;
 
     // Place on the track grid position for this CPU slot.
@@ -107,6 +90,7 @@ export class CpuRacer {
     this.x = pos.x + rx * this.laneOffset;
     this.z = pos.z + rz * this.laneOffset;
     this.yaw = pos.yaw;
+    this.trackDist = raceDistanceAt(this.x, this.z, this.laneOffset);
 
     this.state = {
       id: this.id,
@@ -125,39 +109,48 @@ export class CpuRacer {
 
   /** Advance the CPU car by `dt` seconds. Returns true if it just finished. */
   tick(dt: number, nowMs: number, startedAt: number, totalLaps: number): boolean {
-    if (this.state.finished) return false;
+    if (!Number.isFinite(dt) || dt <= 0) return false;
+    if (dt > 1 / 30) {
+      const count = Math.ceil(dt / (1 / 30));
+      let finished = false;
+      for (let i = 0; i < count; i++) finished = this.tick(dt / count, nowMs - (count - 1 - i) * dt / count * 1000, startedAt, totalLaps) || finished;
+      return finished;
+    }
+    if (this.state.finished) {
+      const previousSpeed = this.speed;
+      this.speed = Math.max(0, this.speed - 8 * dt); this.braking = this.speed > 0;
+      this.trackDist += (previousSpeed + this.speed) * 0.5 * dt;
+      const p = racePathAt(this.trackDist, this.laneOffset);
+      this.x = p.x; this.z = p.z; this.yaw = p.yaw;
+      return false;
+    }
     const elapsed = nowMs - startedAt;
     if (elapsed <= 0) return false;
 
     // Initialise lap start time on first tick.
     if (this.lapStartTime === 0) this.lapStartTime = startedAt;
 
-    // Corner braking: slow down proportionally to sharpness.
-    const sharpness = cornerSharpness(this.trackDist);
-    const targetSpeed = this.baseTopSpeed * (1 - this.cornerBrake * sharpness);
+    // Look ahead far enough to brake within the available straight.
+    let targetSpeed = Math.min(45, this.baseTopSpeed);
+    for (let look = 0; look <= 145; look += 2) {
+      const curvature = Math.abs(racePathAt(this.trackDist + look, this.laneOffset).curvature);
+      const cornerSpeed = Math.sqrt((6 - this.cornerBrake * 3) / Math.max(0.001, curvature));
+      targetSpeed = Math.min(targetSpeed, Math.sqrt(cornerSpeed * cornerSpeed + 2 * 8 * look));
+    }
 
     // Simple speed lerp toward target (gentle acceleration / hard braking).
-    const accelRate = this.baseTopSpeed * 1.2;
-    const brakeRate = this.baseTopSpeed * 2.5;
+    const accelRate = 13.5 * this.speedFactor;
+    const brakeRate = 8;
     const rate = targetSpeed > this.speed ? accelRate : brakeRate;
+    const previousSpeed = this.speed;
     this.speed += Math.sign(targetSpeed - this.speed) * Math.min(rate * dt, Math.abs(targetSpeed - this.speed));
-
-    // Organic steering noise that drifts slowly so the car weaves.
-    this.noiseTimer -= dt;
-    if (this.noiseTimer <= 0) {
-      this.noiseTimer = 0.6 + Math.random() * 1.2;
-      this.noiseTarget = (Math.random() * 2 - 1) * this.noise;
-    }
-    this.noiseAngle += (this.noiseTarget - this.noiseAngle) * Math.min(1, dt * 3);
+    this.braking = this.speed < previousSpeed - 0.01;
 
     // Advance along the track centerline with lateral lane offset.
-    this.trackDist += this.speed * dt;
-    const pos = sampleTrack(this.trackDist);
-    const rx = Math.cos(pos.yaw);
-    const rz = Math.sin(pos.yaw);
-    this.x = pos.x + rx * this.laneOffset;
-    this.z = pos.z + rz * this.laneOffset;
-    this.yaw = pos.yaw + this.noiseAngle;
+    this.trackDist += (previousSpeed + this.speed) * 0.5 * dt;
+    const pos = racePathAt(this.trackDist, this.laneOffset);
+    this.x = pos.x; this.z = pos.z; this.yaw = pos.yaw;
+    this.steer = Math.max(-1, Math.min(1, Math.atan(2.7 * pos.curvature) / 0.55));
 
     // Update RacerState via trackProgress.
     const p = trackProgress(this.x, this.z);
@@ -206,8 +199,9 @@ export class CpuRacer {
     this.x = pos.x + rx * this.laneOffset;
     this.z = pos.z + rz * this.laneOffset;
     this.yaw = pos.yaw;
+    this.trackDist = raceDistanceAt(this.x, this.z, this.laneOffset);
     this.speed = 0;
-    this.noiseAngle = 0; this.noiseTimer = 0; this.noiseTarget = 0;
+    this.steer = 0; this.braking = false;
     this.lapStartTime = startedAt;
     this.lastLapDist = null;
     this.nextCheckpoint = 1;

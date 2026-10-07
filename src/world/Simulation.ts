@@ -1,3 +1,5 @@
+import type { BuiltBox, PedAgent, BuildSite } from '../../server/src/agents/livingWorld';
+import { dialogueLines, type DialogueGenerator } from '../../server/src/agents/dialogueTypes';
 import { bodyContact, boundaryContact, circleContact, vehicleBody, type Body, type Contact } from './Collision';
 import { VEHICLES, VEHICLE_KINDS, type VehicleKind } from './Vehicles';
 import { WEATHER_GRIP, type Season, type Weather } from './Weather';
@@ -16,6 +18,13 @@ export interface ParkedVehicle { kind: VehicleKind; x: number; z: number; yaw: n
 export interface RemoteDot { id: string; x: number; z: number; driving: boolean }
 export interface VehicleTarget { type: 'player' | 'parked' | 'traffic'; index: number; kind: VehicleKind; x: number; z: number; yaw: number; speed: number; dist: number; enterable: boolean; reason: string | null }
 export interface Ped {
+  dialogue?: string[];
+  activity?: 'walk' | 'talk' | 'listen' | 'phone' | 'rest';
+  say?: string;
+  socialUntil?: number;
+  socialStarted?: number;
+  socialPeer?: number;
+  socialCooldown?: number;
   x: number; z: number; yaw: number; route: Point[]; dist: number; speed: number; phase: number; seed: number; move: number; cur: number; scaredUntil: number;
   /** Ragdoll state — active while ped is tumbling after a vehicle hit. */
   ragdoll: boolean; ry: number; rvx: number; rvz: number; rvy: number; rpitch: number; rpitchRate: number; rollYaw: number;
@@ -34,6 +43,8 @@ export type PlayMode = 'roam' | 'table' | 'basket';
 export type WiperMode = 'auto' | 'on' | 'off';
 export type { Season, Weather };
 export interface WorldSnapshot {
+  agentWalkers: PedAgent[];
+  buildSites: BuildSite[];
   phase: 'ready' | 'playing'; paused: boolean; view: View; driving: boolean; weather: Weather; season: Season; wiperMode: WiperMode;
   x: number; z: number; yaw: number; speed: number; distance: number;
   location: string; discovered: string[]; waypoint: string | null; nearbyCar: boolean;
@@ -74,6 +85,17 @@ export interface WorldSnapshot {
   /** Projected screen position (0..1) of the aiming point in the current camera frame.
    *  Filled by WorldEngine each render; used to position the 3rd-person crosshair like PUBG. */
   aimScreenX: number; aimScreenY: number;
+  /** AI-mode police slice: my wanted stars (server or solo director owns the value). */
+  wanted: number;
+  /** Busted overlay trigger (increments per arrest) + world time of the last one. */
+  bustedSeq: number; bustedAt: number;
+}
+
+/** One locally observed crime for the agent director (server room or solo). */
+export interface CrimeEvent {
+  type: 'kill_ped' | 'explosion' | 'shooting' | 'hit_and_run' | 'reckless_driving';
+  x: number;
+  z: number;
 }
 const clamp = (n: number, low: number, high: number) => Math.max(low, Math.min(high, n));
 
@@ -150,6 +172,11 @@ const PED_ROUTES: Point[][] = [];
 
 /** Browser-independent world rules. X/Z use meters, Y is height above pavement. */
 export class Simulation {
+  dialogue?: DialogueGenerator;
+  private dialogueMemory: string[] = [];
+  builtBoxes: BuiltBox[] = [];
+  agentWalkers: PedAgent[] = [];
+  buildSites: BuildSite[] = [];
   x = 12; z = 34; y = 0; vy = 0;
   previous = { x: this.x, z: this.z, y: 0 };
   yaw = -0.25; pitch = 0.13; facing = 0;
@@ -252,6 +279,17 @@ export class Simulation {
   pedBloodAt = -999;
   /** Hit counter — guarantees a fresh overlay key for every hit. */
   pedBloodSeq = 0;
+  /** AI-mode police slice: display-state wanted stars + busted trigger. */
+  wanted = 0;
+  bustedSeq = 0;
+  bustedAt = -999;
+  /** Crime reporter: edge-detects combat seq counters into director events. */
+  private lastCrimeHitSeq = 0;
+  private lastCrimeShotSeq = 0;
+  private lastCrimeExplodeSeq = 0;
+  private readonly crimeCooldownUntil = new Map<CrimeEvent['type'], number>();
+  private pendingCrimes: CrimeEvent[] = [];
+  private recklessSince = -999;
   // --- character locomotion: smoothed velocity, stride phase, landing dip ---
   pvx = 0; pvz = 0; stride = 0; moveBlend = 0; landDip = 0;
   /** Weather mode (grip multiplier). Set by WorldEngine.setWeather. */
@@ -421,6 +459,75 @@ export class Simulation {
     }
     return false;
   }
+  /**
+   * AI-mode crime reporter: edge-detects combat seq counters into typed
+   * director events (server room or solo). Throttled per type so a shotgun
+   * burst or multi-car pileup scores once, not per pellet.
+   */
+  drainCrimeEvents(): CrimeEvent[] {
+    return this.pendingCrimes.splice(0);
+  }
+  private pushCrime(type: CrimeEvent['type'], point: Point = this): void {
+    if (this.time < (this.crimeCooldownUntil.get(type) ?? -999)) return;
+    this.crimeCooldownUntil.set(type, this.time + (type === 'shooting' || type === 'reckless_driving' ? 6 : 2.5));
+    this.pendingCrimes.push({ type, x: point.x, z: point.z });
+  }
+  private noticeCrimes(): void {
+    if (this.phase !== 'playing' || this.mode !== 'roam') {
+      this.lastCrimeHitSeq = this.hitSeq;
+      this.lastCrimeShotSeq = this.shotSeq;
+      this.lastCrimeExplodeSeq = this.explodeSeq;
+      this.recklessSince = -999;
+      return;
+    }
+    const exploded = this.explodeSeq !== this.lastCrimeExplodeSeq;
+    const hit = this.hitSeq !== this.lastCrimeHitSeq;
+    const shot = this.shotSeq !== this.lastCrimeShotSeq;
+    this.lastCrimeHitSeq = this.hitSeq;
+    this.lastCrimeShotSeq = this.shotSeq;
+    this.lastCrimeExplodeSeq = this.explodeSeq;
+    if (exploded) {
+      this.pushCrime('explosion', this.booms.at(-1) ?? this);
+    } else if (hit && this.hitKill) {
+      // Vehicle kill at speed reads as hit-and-run; gun kills as kill_ped.
+      this.pushCrime(this.driving && Math.abs(this.car.speed) > 4 ? 'hit_and_run' : 'kill_ped');
+    } else if (shot) {
+      this.pushCrime('shooting');
+    }
+    // Reckless driving: >90 km/h sustained 3s behind the wheel.
+    if (this.driving && !this.dead && Math.abs(this.car.speed) * 3.6 > 90) {
+      if (this.recklessSince < 0) this.recklessSince = this.time;
+      else if (this.time - this.recklessSince > 3) this.pushCrime('reckless_driving');
+    } else {
+      this.recklessSince = -999;
+    }
+  }
+  /**
+   * BUSTED: the cop held you. Gusseted like a GTA bust — back on foot at the
+   * spawn, car towed to the nearest clear roadside, wanted cleared by caller.
+   */
+  busted(): void {
+    this.bustedSeq++;
+    this.bustedAt = this.time;
+    this.wanted = 0;
+    this.driving = false;
+    this.car.speed = 0;
+    this.x = 12; this.z = 34; this.yaw = -0.25; this.facing = -0.25;
+    this.y = Math.max(0, groundHeight(this.x, this.z, 0)); this.vy = 0;
+    this.clearInput();
+    this.previous = { x: this.x, z: this.z, y: this.y };
+    for (let r = 12; r <= 48; r += 6) {
+      for (let a = 0; a < 12; a++) {
+        const x = this.x + Math.cos((a / 12) * Math.PI * 2) * r;
+        const z = this.z + Math.sin((a / 12) * Math.PI * 2) * r;
+        if (Math.abs(x) + 4 >= LIMIT || Math.abs(z) + 4 >= LIMIT) continue;
+        if (!onRoad(x, z, ROAD_HALF - 2) || intersects(x, z, 3) || inWater(x, z)) continue;
+        this.car.x = x; this.car.z = z; this.car.yaw = 0;
+        this.carY = 0; this.carPitch = 0;
+        return;
+      }
+    }
+  }
   /** Teleport to a race grid slot (keeps physics settled). */
   placeAt(x: number, z: number, yaw: number): void {
     this.car.x = x; this.car.z = z; this.car.yaw = yaw;
@@ -461,6 +568,8 @@ export class Simulation {
       parked: this.parked.map(p => ({ ...p })),
       room: null,
       dots: [],
+      agentWalkers: this.agentWalkers.map(p => ({ ...p })),
+      buildSites: this.buildSites.map(s => ({ ...s })),
       stridePhase: this.stride, moveBlend: this.moveBlend, airborne: this.y > 0.02, landDip: Math.max(0, Math.min(1, this.landDip)),
       traffic: this.traffic.map(t => ({ x: t.x, z: t.z, yaw: t.yaw, speed: t.speed, steer: t.steer, wheelSpin: t.wheelSpin, braking: t.braking })),
       peds: this.peds.map(p => ({ x: p.x, z: p.z, yaw: p.yaw, phase: p.phase, moving: p.move, ragdoll: p.ragdoll, ry: p.ry, rpitch: p.rpitch, rollYaw: p.rollYaw, dead: p.dead })),
@@ -476,6 +585,7 @@ export class Simulation {
       shotSeq: this.shotSeq, shotCls: this.shots.length > 0 ? this.shots[this.shots.length - 1].cls : '',
       drySeq: this.drySeq, reloadSeq: this.reloadSeq, explodeSeq: this.explodeSeq,
       hurtSeq: this.hurtSeq, deathSeq: this.deathSeq,
+      wanted: this.wanted, bustedSeq: this.bustedSeq, bustedAt: this.bustedAt,
       shots: this.shots.map(s => ({ ...s })),
       booms: this.booms.map(b => ({ ...b })),
       burners: this.burners.map(b => ({ ...b })),
@@ -670,7 +780,7 @@ export class Simulation {
   /** Buildings swallow bullets (also the bridge deck sides — thin, ignored). */
   private rayWalls(ox: number, oz: number, dx: number, dz: number, range: number): number | null {
     let best: number | null = null;
-    for (const box of SOLIDS) {
+    for (const box of [...SOLIDS, ...this.builtBoxes]) {
       const t = rayBox(ox, oz, dx, dz, box.x, box.z, box.w / 2, box.d / 2, 0);
       if (t !== null && t < range && (best === null || t < best)) best = t;
     }
@@ -898,7 +1008,7 @@ export class Simulation {
       const n = m === dxl ? { nx: -1, nz: 0 } : m === dxr ? { nx: 1, nz: 0 } : m === dzl ? { nx: 0, nz: -1 } : { nx: 0, nz: 1 };
       return { ...n, depth: 0.3, label: 'promenade' };
     }
-    for (const box of SOLIDS) {
+    for (const box of [...SOLIDS, ...this.builtBoxes]) {
       const hit = bodyContact(body, { x: box.x, z: box.z, yaw: 0, halfWidth: box.w / 2, halfLength: box.d / 2 });
       if (hit) return { ...hit, label: 'building' };
     }
@@ -944,7 +1054,7 @@ export class Simulation {
     // Open water blocks — but the bridge deck flying above it does not.
     if (groundHeight(x, z, y) < 0) return true;
     const high = Math.abs(y) > 1.5;
-    return Math.abs(x) + 0.48 >= LIMIT || Math.abs(z) + 0.48 >= LIMIT || intersects(x, z, 0.48) ||
+    return Math.abs(x) + 0.48 >= LIMIT || Math.abs(z) + 0.48 >= LIMIT || intersects(x, z, 0.48) || intersects(x, z, 0.48, this.builtBoxes) ||
       (!high && !!circleContact(vehicleBody(this.car.x, this.car.z, this.car.yaw, this.vehicleKind), x, z, 0.48)) ||
       (!high && PARKED_CARS.some(p => !this.clearedStatic.some(c => Math.abs(c.x - p.x) < 0.5 && Math.abs(c.z - p.z) < 0.5) && circleContact(vehicleBody(p.x, p.z, 0, p.label === 'parked-van' ? 'van' : 'car'), x, z, 0.48))) ||
       (!high && this.parked.some(p => circleContact(vehicleBody(p.x, p.z, p.yaw, p.kind), x, z, 0.48))) ||
@@ -1091,6 +1201,7 @@ export class Simulation {
         t.steer = clamp(dyaw, -1, 1); t.wheelSpin += t.speed * dt / 0.4;
       }
     }
+    this.updatePedActivities();
     for (const ped of this.peds) {
       // Ragdoll physics: arc through the air then slide on the ground.
       if (ped.ragdoll) {
@@ -1124,6 +1235,10 @@ export class Simulation {
         continue;
       }
       if (this.time < ped.scaredUntil) { ped.move += (0 - ped.move) * Math.min(1, 6 * dt); continue; }
+      if (ped.activity && ped.activity !== 'walk') {
+        ped.cur = 0; ped.move = 0;
+        continue;
+      }
       // Ease off before sharp corners so turns look walked, not snapped.
       const yawNow = routePoint(ped.route, ped.dist).yaw;
       const yawAhead = routePoint(ped.route, ped.dist + 2.5).yaw;
@@ -1143,7 +1258,66 @@ export class Simulation {
       ped.phase += ped.cur * dt * 2.4;
       ped.move += ((ped.cur > 0.2 ? 1 : 0) - ped.move) * Math.min(1, 6 * dt);
       const q = routePoint(ped.route, ped.dist);
-      ped.x = q.x; ped.z = q.z; ped.yaw = q.yaw;
+      ped.x = q.x; ped.z = q.z;
+      const turn = Math.atan2(Math.sin(q.yaw - ped.yaw), Math.cos(q.yaw - ped.yaw));
+      ped.yaw += clamp(turn, -4 * dt, 4 * dt);
+    }
+  }
+  private updatePedActivities(): void {
+    const safe = (p: Ped) => !p.dead && !p.ragdoll && this.time >= p.scaredUntil
+      && !(this.driving && Math.hypot(this.car.x - p.x, this.car.z - p.z) < 5);
+    for (const p of this.peds) {
+      p.say = undefined; p.activity = 'walk';
+      if (p.socialPeer !== undefined) {
+        const peer = this.peds[p.socialPeer];
+        if (!peer || !safe(p) || !safe(peer) || this.time >= (p.socialUntil ?? 0)) {
+          p.socialPeer = undefined; p.socialCooldown = this.time + 24;
+        }
+      }
+    }
+    for (let i = 0; i < this.peds.length; i++) {
+      const p = this.peds[i];
+      if (!safe(p)) continue;
+      if (this.dialogue && p.socialPeer === undefined && this.time >= (p.socialCooldown ?? 3)) {
+        const j = this.peds.findIndex((q, j) => j !== i && safe(q) && q.socialPeer === undefined
+          && this.time >= (q.socialCooldown ?? 3) && Math.hypot(p.x - q.x, p.z - q.z) < 4);
+        if (j >= 0) {
+          const q = this.peds[j];
+          p.socialPeer = j; q.socialPeer = i;
+          p.socialStarted = q.socialStarted = this.time;
+          p.socialUntil = q.socialUntil = this.time + 15;
+          p.dialogue = q.dialogue = undefined;
+          const began = this.time;
+          void Promise.resolve().then(() => this.dialogue!({
+            participants: [i, j].map(index => ({ id: `ped-${index}`, name: `Neighbor ${index + 1}`, role: 'resident' })),
+            situation: `Taking a break near (${Math.round(p.x)},${Math.round(p.z)}). Weather: ${this.weather}.`,
+            history: [...this.dialogueMemory],
+          })).then(result => {
+            if (p.socialPeer !== j || q.socialPeer !== i || p.socialStarted !== began || this.time - began >= 15) return;
+            const lines = dialogueLines(result);
+            if (!lines) { p.socialUntil = q.socialUntil = this.time; return; }
+            p.dialogue = q.dialogue = lines;
+            p.socialStarted = q.socialStarted = this.time;
+            p.socialUntil = q.socialUntil = this.time + lines.length * 3;
+          }).catch(() => { if (p.socialStarted === began) p.socialUntil = q.socialUntil = this.time; });
+        }
+      }
+      if (p.socialPeer !== undefined) {
+        const peer = this.peds[p.socialPeer];
+        const turn = Math.floor((this.time - (p.socialStarted ?? this.time)) / 3);
+        const speaking = !!p.dialogue && (i < p.socialPeer) === (turn % 2 === 0);
+        p.activity = speaking ? 'talk' : 'listen';
+        p.yaw = Math.atan2(peer.x - p.x, p.z - peer.z);
+        if (speaking) {
+          p.say = p.dialogue?.[turn];
+          const memory = `Neighbor ${i + 1}: ${p.say}`;
+          if (p.say && this.dialogueMemory.at(-1) !== memory) this.dialogueMemory = [...this.dialogueMemory, memory].slice(-8);
+        }
+      } else {
+        const routine = (this.time + p.seed * 45) % 45;
+        if (routine < 5) p.activity = 'phone';
+        else if (routine < 9) p.activity = 'rest';
+      }
     }
   }
   update(dt: number): void {
@@ -1348,6 +1522,7 @@ export class Simulation {
       this.hurtPlayer(9 * dt, 'fire');
     }
     if (this.dead && this.time - this.wastedAt > 4) this.respawn();
+    this.noticeCrimes();
     // Repair slowly at South Station (on foot or behind the wheel).
     if (Math.hypot(this.x - 42, this.z - 27) < 14 && this.damage > 0) this.damage = Math.max(0, this.damage - 12 * dt);
     const traveled = Math.hypot(this.x - this.previous.x, this.z - this.previous.z);

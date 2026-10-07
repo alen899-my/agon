@@ -1,3 +1,4 @@
+import type { PedAgent, BuildSite, BuildDelta } from '../../server/src/agents/livingWorld';
 import { realtimeUrl } from './client';
 
 /**
@@ -60,6 +61,56 @@ export interface RaceDirEntry {
   phase: RaceSnapshotMsg['phase'];
 }
 
+/** Client-observed crime attributed to the sender (server validates + scores). */
+export interface CrimeReport {
+  type: 'kill_ped' | 'explosion' | 'shooting' | 'hit_and_run' | 'reckless_driving';
+  x: number;
+  z: number;
+}
+
+export interface CopStateMsg {
+  onFoot?: boolean;
+  vehicleX?: number;
+  vehicleZ?: number;
+  id: string;
+  x: number;
+  z: number;
+  yaw: number;
+  speed: number;
+  mode: 'patrol' | 'respond' | 'pursue' | 'arrest' | 'return';
+  lightsOn: boolean;
+  suspectId: string | null;
+}
+
+export interface RideMsg {
+  steer?: number; braking?: boolean;
+  id: string;
+  name: string;
+  kind: string;
+  x: number;
+  z: number;
+  yaw: number;
+  speed: number;
+  lap: number;
+  state: 'countdown' | 'racing' | 'cooldown';
+}
+
+export interface AgentStateMsg {
+  walkers?: PedAgent[];
+  sites?: BuildSite[];
+  cops: CopStateMsg[];
+  wanted: Record<string, number>;
+  rides?: RideMsg[];
+}
+
+export interface AgentEventMsg {
+  kind: 'pursuit_start' | 'busted' | 'stand_down';
+  copId: string;
+  suspectId: string | null;
+  x: number;
+  z: number;
+}
+
 export interface RealtimeEvents {
   onWelcome: (room: string, you: string, roster: RosterEntry[]) => void;
   onRoster: (roster: RosterEntry[]) => void;
@@ -68,6 +119,9 @@ export interface RealtimeEvents {
   onRaceState: (id: string, name: string, s: RaceSnapshotMsg) => void;
   onRaceDir: (races: RaceDirEntry[]) => void;
   onDots: (players: RemoteDot[]) => void;
+  onBuildDelta?: (delta: BuildDelta) => void;
+  onAgentState?: (a: AgentStateMsg) => void;
+  onAgentEvent?: (e: AgentEventMsg) => void;
   onError: (code: string, message: string) => void;
   onClose: () => void;
   onReconnecting?: () => void;
@@ -118,6 +172,10 @@ export class RealtimeClient {
 
   requestRaceDir(): void {
     if (this.connected) this.ws!.send(JSON.stringify({ t: 'race_list' }));
+  }
+
+  sendCrimeReport(c: CrimeReport): void {
+    if (this.connected) this.ws!.send(JSON.stringify({ t: 'crime_report', c }));
   }
 
   dispose(): void {
@@ -192,6 +250,15 @@ export class RealtimeClient {
           break;
         case 'dots':
           this.events.onDots(message.players as RemoteDot[]);
+          break;
+        case 'build_delta':
+          this.events.onBuildDelta?.(message.delta as BuildDelta);
+          break;
+        case 'agent_state':
+          this.events.onAgentState?.(message.a as AgentStateMsg);
+          break;
+        case 'agent_event':
+          this.events.onAgentEvent?.(message.e as AgentEventMsg);
           break;
         case 'error':
           if (!this.welcomed) this.fail(String(message.code ?? 'error'), String(message.message ?? 'Could not join the server.'));

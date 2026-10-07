@@ -1,3 +1,4 @@
+import type { Appearance, BuildSite } from '../../server/src/agents/livingWorld';
 import { type VehicleKind } from './Vehicles';
 import { buildVehicle } from './VehicleFactory';
 import * as THREE from 'three';
@@ -6,7 +7,7 @@ import { BENCHES, BRIDGE, BUILDINGS, CANAL, FALLS, FREE_THROW_DIST, GAME_CENTER,
 type Shape = 'box' | 'sphere' | 'cylinder';
 export type MaterialName = 'road' | 'pavement' | 'white' | 'ink' | 'glass' | 'metal' | 'wall0' | 'wall1' | 'wall2' | 'leaf' | 'lampGlow' | 'windowLit';
 
-export interface GaitState { phase: number; intensity: number; airborne: boolean; dip: number; idle: number; cheer?: number }
+export interface GaitState { phase: number; intensity: number; airborne: boolean; dip: number; idle: number; cheer?: number; activity?: string }
 export interface Stickman {
   group: THREE.Group; hips: THREE.Group; torso: THREE.Group; head: THREE.Group;
   arms: THREE.Group[]; elbows: THREE.Group[]; legs: THREE.Group[]; knees: THREE.Group[]; feet: THREE.Mesh[];
@@ -60,7 +61,9 @@ export class AssetKit {
       const [shape, material] = key.split(':') as [Shape, MaterialName];
       const mesh = new THREE.InstancedMesh(this.geometry[shape], this.materials[material], matrices.length);
       matrices.forEach((matrix, index) => mesh.setMatrixAt(index, matrix));
-      mesh.castShadow = !['road', 'pavement', 'glass'].includes(material); mesh.receiveShadow = true;
+      // Small / emissive / ground mats never cast (saves a full shadow pass over foliage+windows).
+      mesh.castShadow = !['road', 'pavement', 'glass', 'leaf', 'windowLit', 'lampGlow', 'white'].includes(material);
+      mesh.receiveShadow = true;
       mesh.computeBoundingSphere(); scene.add(mesh);
     }
     this.batches.clear();
@@ -71,16 +74,42 @@ export class AssetKit {
     parent.add(mesh); return mesh;
   }
   sign(scene: THREE.Scene, text: string, x: number, y: number, z: number, width: number, yaw = 0): void {
-    const canvas = document.createElement('canvas'); canvas.width = 1024; canvas.height = 192;
+    const canvas = document.createElement('canvas'); canvas.width = 512; canvas.height = 96;
     const ctx = canvas.getContext('2d')!;
-    ctx.fillStyle = '#181818'; ctx.fillRect(0, 0, 1024, 192);
-    ctx.fillStyle = '#ffffff'; ctx.font = '600 84px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(text, 512, 100, 960);
+    ctx.fillStyle = '#181818'; ctx.fillRect(0, 0, 512, 96);
+    ctx.fillStyle = '#ffffff'; ctx.font = '600 42px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(text, 256, 50, 480);
     const texture = new THREE.CanvasTexture(canvas); texture.colorSpace = THREE.SRGBColorSpace;
     const material = new THREE.MeshBasicMaterial({ map: texture }); const geometry = new THREE.PlaneGeometry(width, width * 96 / 512);
     const mesh = new THREE.Mesh(geometry, material); mesh.position.set(x, y, z); mesh.rotation.y = yaw; scene.add(mesh);
     this.extra.push(texture, material, geometry);
   }
-  stickman(player = false, variation = 0): Stickman {
+  private readonly outfitMaterials = new Map<number, THREE.MeshStandardMaterial>();
+  private colorMaterial(color: number): THREE.MeshStandardMaterial {
+    let material = this.outfitMaterials.get(color);
+    if (!material) { material = new THREE.MeshStandardMaterial({ color, roughness: 0.85 }); this.outfitMaterials.set(color, material); this.extra.push(material); }
+    return material;
+  }
+  construction(site: BuildSite): THREE.Group {
+    const group = new THREE.Group(); group.position.set(site.x, 0, site.z);
+    const height = Math.max(0.15, site.h * site.stage / 4);
+    this.mesh(group, 'box', 'wall1', 0, 0.075, 0, site.w, 0.15, site.d);
+    if (site.stage >= 4) {
+      this.mesh(group, 'box', 'wall0', 0, height / 2, 0, site.w, height, site.d);
+      this.mesh(group, 'box', 'ink', 0, 1.3, -site.d / 2 - 0.02, 1.4, 2.6, 0.08);
+      for (const x of [-site.w * 0.28, site.w * 0.28]) this.mesh(group, 'box', 'glass', x, 4.5, -site.d / 2 - 0.04, 1.5, 2, 0.08);
+    } else {
+      for (const x of [-site.w / 2, site.w / 2]) for (const z of [-site.d / 2, site.d / 2]) this.mesh(group, 'box', 'metal', x, Math.max(2, height) / 2, z, 0.16, Math.max(2, height), 0.16);
+      if (site.stage > 0) {
+        // The solid mass shows the entire authoritative solid footprint.
+        const shell = this.mesh(group, 'box', 'wall1', 0, height / 2, 0, site.w, height, site.d);
+        shell.material = this.colorMaterial(0xa69479);
+        this.mesh(group, 'box', 'metal', 0, height, 0, site.w + 0.2, 0.15, site.d + 0.2);
+      }
+    }
+    return group;
+  }
+  stickman(player = false, appearance: number | Appearance = 0): Stickman {
+    const variation = typeof appearance === 'number' ? appearance : 0;
     const group = new THREE.Group(); const material: MaterialName = player ? 'ink' : variation % 3 === 0 ? 'wall2' : variation % 3 === 1 ? 'ink' : 'wall1';
     // Hips root -> pelvis, torso chain, jointed arms/legs with knees + elbows.
     const hips = new THREE.Group(); hips.position.set(0, 0.95, 0); group.add(hips);
@@ -102,6 +131,19 @@ export class AssetKit {
       const knee = new THREE.Group(); knee.position.set(0, -0.44, 0); hip.add(knee); knees.push(knee);
       this.mesh(knee, 'cylinder', material, 0, -0.2, 0, 0.065, 0.4, 0.065);
       const foot = this.mesh(knee, 'box', material, 0, -0.42, -0.06, 0.14, 0.09, 0.28); feet.push(foot);
+    }
+    if (typeof appearance !== 'number') {
+      const paint = (node: THREE.Object3D, color: number) => node.traverse(o => { if (o instanceof THREE.Mesh) o.material = this.colorMaterial(color); });
+      paint(hips, appearance.pants); paint(torso, appearance.shirt); paint(head, appearance.skin);
+      for (const elbow of elbows) paint(elbow, appearance.skin);
+      if (appearance.hat && appearance.hat !== 'none') {
+        const hat = this.mesh(head, 'box', 'ink', 0, 0.46, -0.03, 0.49, 0.12, 0.49);
+        hat.material = this.colorMaterial(appearance.hat === 'helmet' ? 0xffcf38 : appearance.shirt);
+      }
+      if (appearance.vest || appearance.apron) {
+        const vest = this.mesh(torso, 'box', 'white', 0, appearance.apron ? 0.12 : 0.3, -0.135, 0.3, appearance.apron ? 0.6 : 0.13, 0.04);
+        vest.material = this.colorMaterial(appearance.apron ? 0x28633c : 0xe8ff77);
+      }
     }
     if (player) {
       this.mesh(torso, 'box', 'white', 0, 0.35, -0.075, 0.2, 0.3, 0.02);
@@ -162,6 +204,25 @@ export class AssetKit {
         hips.rotation.y = Math.sin(s.idle * 0.6) * 0.03;
         arms[0].rotation.x = Math.sin(s.idle * 1.7) * 0.03; arms[1].rotation.x = Math.sin(s.idle * 1.7 + 1) * 0.03;
       } else { torso.scale.y = 1; hips.rotation.y = 0; }
+      if (!moving) {
+        const beat = Math.sin(s.idle * 4);
+        if (s.activity === 'talk' || s.activity === 'sell') {
+          arms[0].rotation.x = -0.7 + beat * 0.18; elbows[0].rotation.x = -0.7;
+          head.rotation.y = Math.sin(s.idle * 1.5) * 0.12;
+        } else if (s.activity === 'listen') {
+          head.rotation.x = Math.sin(s.idle * 2) * 0.08;
+        } else if (s.activity === 'phone' || s.activity === 'photo') {
+          arms[0].rotation.x = -1.1; elbows[0].rotation.x = -1.3;
+          if (s.activity === 'photo') { arms[1].rotation.x = -1.1; elbows[1].rotation.x = -1.3; }
+          head.rotation.x = 0.15;
+        } else if (s.activity === 'repair' || s.activity === 'build' || s.activity === 'treat') {
+          torso.rotation.x = 0.45; arms[0].rotation.x = -0.8 + beat * 0.3;
+          arms[1].rotation.x = -0.8 - beat * 0.2; elbows[0].rotation.x = -0.6;
+        } else if (s.activity === 'rest' || s.activity === 'sit') {
+          head.rotation.y = Math.sin(s.idle * 0.4) * 0.3;
+          arms[0].rotation.z = -0.2; arms[1].rotation.z = 0.2;
+        }
+      }
     } };
   }
   car(kind: VehicleKind = 'car', _dark = false, variant = 0): Vehicle {

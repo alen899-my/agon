@@ -65,9 +65,8 @@ describe('CpuRacer AI Driver', () => {
     let now = startedAt + 100;
     let finished = false;
 
-    // Fast-forward ticks to simulate completing 1 lap
-    // At ~80 m/s, 1100m takes about 14 seconds (~800 ticks at 16ms)
-    for (let i = 0; i < 1500; i++) {
+    // Allow braking for the district's tight street corners, not a flat-out lap.
+    for (let i = 0; i < 10000; i++) {
       finished = cpu.tick(0.02, now, startedAt, 1);
       now += 20;
       if (finished) break;
