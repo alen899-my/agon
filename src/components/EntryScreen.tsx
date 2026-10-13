@@ -316,7 +316,7 @@ export function EntryScreen(props: Props) {
 
         {tab !== 'solo' && <p className="form-note">Use a different player name for each person joining.</p>}
         {enterNote && <p className="form-note" role="status">{enterNote}</p>}
-        <div className="intro-tags"><span>7 LOCATIONS</span><span>2 PERSPECTIVES</span><span>NO RUSH</span></div>
+        <div className="intro-tags"><span>8 LOCATIONS</span><span>F1 CIRCUIT</span><span>NO RUSH</span></div>
       </div>
     </div>
   );

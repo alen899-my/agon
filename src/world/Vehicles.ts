@@ -14,6 +14,7 @@ export interface VehicleSpec {
 }
 
 export const VEHICLES = {
+  f1: { name: 'Formula One', inspiredBy: 'Modern single-seat formula racer', category: 'sport', length: 5.5, width: 2.0, height: 0.65, topSpeed: 320 / 3.6, acceleration: 24, grip: 13, blurb: 'Open-wheel single-seater with slick tyres and ground-effect aerodynamics' },
   car: { name: 'Sedan', inspiredBy: 'Toyota Camry', category: 'car', length: 4.3, width: 1.9, height: 0.75, topSpeed: 32, acceleration: 7, grip: 8, blurb: 'Everyday 4-door family sedan' },
   hatch: { name: 'Hatchback', inspiredBy: 'VW Golf GTI', category: 'car', length: 4.0, width: 1.85, height: 0.8, topSpeed: 33, acceleration: 7.5, grip: 8.5, blurb: 'Nimble 5-door hot hatch' },
   taxi: { name: 'Taxi', inspiredBy: 'Crown Vic cab', category: 'car', length: 4.5, width: 1.9, height: 0.8, topSpeed: 33, acceleration: 7.2, grip: 8, blurb: 'City yellow cab, always on shift' },
@@ -65,11 +66,21 @@ export const VEHICLES = {
 export type VehicleKind = keyof typeof VEHICLES;
 export const VEHICLE_KINDS = Object.keys(VEHICLES) as VehicleKind[];
 
+/** Keep the visible front wheels aligned with the steering used by physics. */
+export function vehicleSteeringAngle(kind: VehicleKind, steer: number, speed: number): number {
+  const velocity = Math.abs(speed);
+  const lock = kind === 'f1'
+    ? 0.68 / (1 + velocity / 38 + (velocity / 65) ** 2)
+    : 0.55 / (1 + velocity / 24);
+  return Math.max(-1, Math.min(1, steer)) * lock;
+}
+
 export type WheelStyle = 'sport' | 'touring' | 'offroad' | 'steel' | 'dually';
 
 /** Factory paint palettes: first entry = signature/hero color, rest = traffic variety.
  *  Service/livery kinds stay fixed (taxi yellow, police, fire, ambulance). */
 export const VEHICLE_PAINTS: Record<VehicleKind, number[]> = {
+  f1: [0xdc172c, 0x16b8aa, 0xff8000, 0x225ac7, 0xf2f3f4],
   car: [0xd8dce2, 0x1c1e22, 0xf5f5f5, 0x8a0f1a, 0x2456c8, 0x2f4a3c, 0x8a8f96],
   hatch: [0xc23b2e, 0x2456c8, 0xf5f5f5, 0x1c1e22, 0xf2b705, 0x2f8f5b, 0x8a8f96],
   taxi: [0xf2b705],
@@ -120,6 +131,7 @@ export const VEHICLE_PAINTS: Record<VehicleKind, number[]> = {
 
 /** Distinct rim/tire treatment per model so wheels stop looking cloned. */
 export const VEHICLE_WHEELS: Record<VehicleKind, WheelStyle> = {
+  f1: 'sport',
   car: 'touring', hatch: 'touring', taxi: 'steel', police: 'steel',
   sport: 'sport', muscle: 'sport', super: 'sport', convertible: 'sport',
   suv: 'offroad', pickup: 'offroad', van: 'steel', minivan: 'touring',

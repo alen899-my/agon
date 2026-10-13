@@ -12,9 +12,11 @@ import { BUILDINGS, GAME_CENTER, HOOP, PLACES, RACE_ARENA, RACE_CROWD, RIM, TABL
 import { BarrelSim, createBarrelMesh } from './Barrels';
 import { GUNS, buildGun, type BuiltGun } from './Guns';
 import { Simulation, type WorldAction, type WorldSnapshot } from './Simulation';
-import { COUNTDOWN_MS, RaceSim, type RacerState } from './RaceSim';
+import { COUNTDOWN_MS, RaceSim, type RacerState, type RaceTrackId } from './RaceSim';
 import { gridSlots, trackProgress } from './Track';
+import { F1_ORIGIN, f1GridSlots, f1Progress } from './F1Track';
 import { RaceRoute } from './RaceRoute';
+import { F1Route } from './F1Route';
 import { SkidMarks } from './SkidMarks';
 import { VehicleAudio } from '../game/VehicleAudio';
 import type { TTShot } from './TableTennis';
@@ -150,6 +152,7 @@ export class WorldEngine {
   /** Host-authoritative race lobby. Works over the same presence socket. */
   readonly race = new RaceSim();
   private raceRoute: RaceRoute | null = null;
+  private f1Route: F1Route | null = null;
   private playedFinalLapSound = false;
   private readonly raceListeners = new Set<() => void>();
 
@@ -182,6 +185,17 @@ export class WorldEngine {
 
   get raceGuidanceActive(): boolean {
     return this.race.phase === 'countdown' || this.race.phase === 'racing';
+  }
+  private onF1IslandPos(sim: { x: number; z: number; car: { x: number; z: number } }): boolean {
+    const px = sim.car?.x ?? sim.x;
+    const pz = sim.car?.z ?? sim.z;
+    return Math.hypot(px - F1_ORIGIN.x, pz - 20) < 420 || Math.hypot(sim.x - F1_ORIGIN.x, sim.z - 20) < 420;
+  }
+  /** Y for a grid slot: city slots sit at grade, F1 slots ride the spline elevation. */
+  private gridSlotY(track: RaceTrackId, slot: { x: number; z: number; yaw: number } & { y?: number }): number {
+    if (track === 'f1' && typeof (slot as { y?: number }).y === 'number') return (slot as { y?: number }).y! + 0.08;
+    if (track === 'f1') return groundHeight(slot.x, slot.z) + 0.08;
+    return 0.08;
   }
   /** Empty the start/grid bubble for countdown + racing; restore on every other phase. */
   private updateRaceClear(): void {
@@ -547,6 +561,18 @@ export class WorldEngine {
   get raceId(): string {
     return this.localRaceId;
   }
+  get raceMapOpponents(): { id: string; name: string; x: number; z: number }[] {
+    const positions = new Map(this.realtimeDots.map(dot => [dot.id, { x: dot.x, z: dot.z }]));
+    for (const [id, remote] of this.remotes) {
+      if (performance.now() - remote.updatedAt < 3000) positions.set(id, remote.pos);
+    }
+    for (const cpu of this.cpuRacers) positions.set(cpu.id, cpu);
+    return this.race.standings().flatMap(racer => {
+      const pos = positions.get(racer.id);
+      if (racer.id === this.localRaceId || !pos || !Number.isFinite(pos.x) || !Number.isFinite(pos.z)) return [];
+      return [{ id: racer.id, name: racer.name, x: pos.x, z: pos.z }];
+    });
+  }
   get raceName(): string {
     return this.playerName;
   }
@@ -559,16 +585,26 @@ export class WorldEngine {
     if (!this.realtime?.connected || this.race.phase !== 'idle' || this.simulation.mode !== 'roam') return false;
     this.raceNotice = '';
     const id = this.ensureRaceId();
-    this.race.create(id, this.playerName || 'YOU', vehicleKind, laps);
+    this.race.create(id, this.playerName || 'YOU', vehicleKind, laps, 'city');
     this.raceStateDirty = true;
     this.emit();
     return true;
   }
-  private joinRaceLobby(hostId: string, vehicleKind: VehicleKind): void {
+  /** Separate F1 portal host: same lobby workflow, island circuit. */
+  createF1Race(laps: number, vehicleKind = this.simulation.vehicleKind): boolean {
+    if (!this.realtime?.connected || this.race.phase !== 'idle' || this.simulation.mode !== 'roam') return false;
+    this.raceNotice = '';
+    const id = this.ensureRaceId();
+    this.race.create(id, this.playerName || 'YOU', vehicleKind, laps, 'f1');
+    this.raceStateDirty = true;
+    this.emit();
+    return true;
+  }
+  private joinRaceLobby(hostId: string, vehicleKind: VehicleKind, track: RaceTrackId = 'city'): void {
     this.raceNotice = '';
     this.raceJoinDeadline = Date.now() + 6000;
     const id = this.ensureRaceId();
-    this.race.joinAs(id, this.playerName || 'YOU', vehicleKind, hostId);
+    this.race.joinAs(id, this.playerName || 'YOU', vehicleKind, hostId, track);
     this.raceStateDirty = true;
     // Announce immediately so the host merges us into the lobby roster.
     this.lastRacePosSend = 0;
@@ -583,7 +619,21 @@ export class WorldEngine {
     if (!this.realtime?.connected || this.race.phase !== 'idle' || this.simulation.mode !== 'roam') return false;
     const entry = this.raceDir.find((r) => r.hostId === hostId);
     if (!entry || entry.phase !== 'lobby' || entry.count >= 8) return false;
-    this.joinRaceLobby(hostId, vehicleKind);
+    if ((entry.track ?? 'city') !== 'city') return false;
+    this.joinRaceLobby(hostId, vehicleKind, 'city');
+    this.realtime?.requestRaceDir();
+    return true;
+  }
+  /**
+   * Join a specific F1 race: same workflow, island circuit only.
+   * Returns false when that race is full, already started, or a city loop.
+   */
+  joinF1RaceByHost(hostId: string, vehicleKind = this.simulation.vehicleKind): boolean {
+    if (!this.realtime?.connected || this.race.phase !== 'idle' || this.simulation.mode !== 'roam') return false;
+    const entry = this.raceDir.find((r) => r.hostId === hostId);
+    if (!entry || entry.phase !== 'lobby' || entry.count >= 8) return false;
+    if ((entry.track ?? 'city') !== 'f1') return false;
+    this.joinRaceLobby(hostId, vehicleKind, 'f1');
     this.realtime?.requestRaceDir();
     return true;
   }
@@ -632,18 +682,19 @@ export class WorldEngine {
     this.playedFinalLapSound = false;
     if (this.race.rematch()) {
       if (this.race.isSolo) {
-        const slots = gridSlots();
+        const isF1 = this.race.track === 'f1';
+        const slots = isF1 ? f1GridSlots() : gridSlots();
         const racerOrder = [...this.race.racers.keys()];
         const now = Date.now();
         for (const cpu of this.cpuRacers) {
           const cpuIdx = racerOrder.indexOf(cpu.id);
           const cpuSlot = slots[Math.max(0, cpuIdx) % slots.length];
-          const startProg = trackProgress(cpuSlot.x, cpuSlot.z);
+          const startProg = isF1 ? f1Progress(cpuSlot.x, cpuSlot.z) : trackProgress(cpuSlot.x, cpuSlot.z);
           cpu.reset(startProg.dist, now + COUNTDOWN_MS);
           cpu.x = cpuSlot.x; cpu.z = cpuSlot.z; cpu.yaw = cpuSlot.yaw;
           const v = this.cpuVehicles.get(cpu.id);
           if (v) {
-            v.group.position.set(cpuSlot.x, 0.08, cpuSlot.z);
+            v.group.position.set(cpuSlot.x, this.gridSlotY(this.race.track, cpuSlot), cpuSlot.z);
             v.group.rotation.y = -cpuSlot.yaw;
           }
         }
@@ -669,7 +720,8 @@ export class WorldEngine {
     this.emit();
   }
   teleportToGrid(): void {
-    const slots = gridSlots();
+    const isF1 = this.race.track === 'f1';
+    const slots = isF1 ? f1GridSlots() : gridSlots();
     const order = [...this.race.racers.keys()];
     let idx = order.indexOf(this.localRaceId);
     if (idx < 0) idx = 0;
@@ -690,7 +742,7 @@ export class WorldEngine {
       const cpuSlot = slots[cpuIdx % slots.length];
       const v = this.cpuVehicles.get(cpu.id);
       if (v) {
-        v.group.position.set(cpuSlot.x, 0.08, cpuSlot.z);
+        v.group.position.set(cpuSlot.x, this.gridSlotY(this.race.track, cpuSlot), cpuSlot.z);
         v.group.rotation.y = -cpuSlot.yaw;
       }
     }
@@ -705,6 +757,16 @@ export class WorldEngine {
    * @param difficulty  AI difficulty: 'easy' | 'medium' | 'hard'.
    */
   startSoloRace(laps: number, vehicleKind: VehicleKind, cpuCount: number, difficulty: CpuDifficulty): boolean {
+    return this.startSoloOnTrack(laps, vehicleKind, cpuCount, difficulty, 'city');
+  }
+  /**
+   * Start a solo F1 race against CPU cars — same workflow, island circuit.
+   * No server or second player needed.
+   */
+  startSoloF1Race(laps: number, vehicleKind: VehicleKind, cpuCount: number, difficulty: CpuDifficulty): boolean {
+    return this.startSoloOnTrack(laps, vehicleKind, cpuCount, difficulty, 'f1');
+  }
+  private startSoloOnTrack(laps: number, vehicleKind: VehicleKind, cpuCount: number, difficulty: CpuDifficulty, track: RaceTrackId): boolean {
     if (this.race.phase !== 'idle' || this.simulation.mode !== 'roam') return false;
     this.playedFinalLapSound = false;
     const id = this.ensureRaceId();
@@ -723,12 +785,12 @@ export class WorldEngine {
       cpuNames.push(['Ghost', 'Neon', 'Vector', 'Apex', 'Blaze', 'Circuit'][i] ?? `CPU ${i + 1}`);
     }
 
-    this.race.createSolo(id, name, vehicleKind, laps, cpuIds, cpuNames, cpuKinds);
+    this.race.createSolo(id, name, vehicleKind, laps, cpuIds, cpuNames, cpuKinds, track);
     this.simulation.vehicleKind = vehicleKind;
 
     // Build CPU racers and their ghost vehicles.
     this.cleanupCpuRacers();
-    const slots = gridSlots();
+    const slots = track === 'f1' ? f1GridSlots() : gridSlots();
     const racerOrder = [...this.race.racers.keys()];
     for (let i = 0; i < count; i++) {
       const cpuId = cpuIds[i];
@@ -736,9 +798,9 @@ export class WorldEngine {
       const topSpeedKmh = VEHICLES[kind].topSpeed * 3.6;
       const cpuSlotIdx = racerOrder.indexOf(cpuId);
       const cpuSlot = slots[Math.max(0, cpuSlotIdx) % slots.length];
-      const startProg = trackProgress(cpuSlot.x, cpuSlot.z);
+      const startProg = track === 'f1' ? f1Progress(cpuSlot.x, cpuSlot.z) : trackProgress(cpuSlot.x, cpuSlot.z);
       const laneOffset = (cpuSlotIdx % 2 === 0 ? -1.8 : 1.8);
-      const cpu = new CpuRacer(i, kind, topSpeedKmh, laps, difficulty, startProg.dist, laneOffset);
+      const cpu = new CpuRacer(i, kind, topSpeedKmh, laps, difficulty, startProg.dist, laneOffset, track);
       cpu.x = cpuSlot.x; cpu.z = cpuSlot.z; cpu.yaw = cpuSlot.yaw;
       this.cpuRacers.push(cpu);
 
@@ -746,7 +808,7 @@ export class WorldEngine {
       const v = this.acquireGhostVehicle(kind);
       (v as any).__cpuKind = kind;
       v.group.visible = true;
-      v.group.position.set(cpuSlot.x, 0.08, cpuSlot.z);
+      v.group.position.set(cpuSlot.x, this.gridSlotY(track, cpuSlot), cpuSlot.z);
       v.group.rotation.y = -cpuSlot.yaw;
       this.cpuVehicles.set(cpuId, v);
       this.applyHeadlightMat(v);
@@ -759,7 +821,7 @@ export class WorldEngine {
       drawNameTag(tagCanvas, tagTexture, `${cpuNames[i]} [AI]`);
       const tag = new THREE.Sprite(new THREE.SpriteMaterial({ map: tagTexture, transparent: true, depthTest: false, opacity: 0.92 }));
       tag.scale.set(1.9, 0.53, 1); tag.renderOrder = 9;
-      tag.position.set(cpuSlot.x, 2.6, cpuSlot.z);
+      tag.position.set(cpuSlot.x, (this.gridSlotY(track, cpuSlot)) + 2.5, cpuSlot.z);
       this.scene.add(tag);
       this.cpuTags.set(cpuId, tag);
     }
@@ -1429,7 +1491,19 @@ export class WorldEngine {
   reloadGun(): void { this.simulation.startReload(); this.emit(); }
   selectGun(i: number): void { unlockAudio(); this.simulation.selectGun(i); this.emit(); }
   interact(): void { if (this.race.phase === 'countdown' || this.race.phase === 'racing') return; this.simulation.interact(); this.emit(); }
-  waypoint(id: string): void { if (PLACES.some(p => p.id === id)) { this.simulation.waypoint = id; this.emit(); } }
+  waypoint(id: string): void {
+    if (PLACES.some(p => p.id === id)) {
+      this.simulation.mapWaypoint = null;
+      this.simulation.waypoint = id;
+      this.emit();
+    }
+  }
+  mapWaypoint(point: { x: number; z: number } | null): void {
+    if (point && (!Number.isFinite(point.x) || !Number.isFinite(point.z))) return;
+    this.simulation.waypoint = null;
+    this.simulation.mapWaypoint = point ? { x: Math.max(-160, Math.min(F1_ORIGIN.x + 300, point.x)), z: Math.max(-180, Math.min(180, point.z)) } : null;
+    this.emit();
+  }
   input(action: WorldAction, down: boolean, source: string): void {
     if (action === 'horn') { if (down) this.honk(); return; }
     if (!this.suspended || !down) this.simulation.setInput(action, down, source);
@@ -1790,7 +1864,13 @@ export class WorldEngine {
       this.raceRoute = new RaceRoute();
       this.scene.add(this.raceRoute.group);
     }
-    if (this.raceRoute) this.raceRoute.group.visible = raceGuidance && sim.phase === 'playing' && sim.mode === 'roam';
+    const approachingF1 = sim.car.x > F1_ORIGIN.x - 450 || sim.x > F1_ORIGIN.x - 450;
+    if ((raceGuidance || approachingF1) && !this.f1Route) {
+      this.f1Route = new F1Route();
+      this.scene.add(this.f1Route.group);
+    }
+    if (this.raceRoute) this.raceRoute.group.visible = raceGuidance && this.race.track === 'city' && sim.phase === 'playing' && sim.mode === 'roam';
+    if (this.f1Route) this.f1Route.group.visible = (raceGuidance || approachingF1 || this.onF1IslandPos(sim)) && sim.phase === 'playing' && sim.mode === 'roam';
     const x = THREE.MathUtils.lerp(sim.previous.x, sim.x, alpha), z = THREE.MathUtils.lerp(sim.previous.z, sim.z, alpha), y = THREE.MathUtils.lerp(sim.previous.y, sim.y, alpha);
     this.avatar.group.position.set(x, y + 0.08, z); this.avatar.group.rotation.y = -sim.facing;
     // Model forward is -Z; a positive world yaw turns it toward +X.
@@ -1825,6 +1905,9 @@ export class WorldEngine {
     }
     if (this.raceRoute && this.raceRoute.group.visible) {
       this.raceRoute.update(dt, sim.time, this.isFinalLapActive);
+    }
+    if (this.f1Route && this.f1Route.group.visible) {
+      this.f1Route.update(dt, sim.time, this.isFinalLapActive);
     }
     // Night eases over ~2s (no popping); weather + night compose in applyLook.
     {
@@ -1982,13 +2065,15 @@ export class WorldEngine {
       for (const cpu of this.cpuRacers) {
         const v = this.cpuVehicles.get(cpu.id);
         if (v) {
-          v.group.position.set(cpu.x, 0.08, cpu.z);
+          const gy = groundHeight(cpu.x, cpu.z, cpu.y) + 0.08;
+          v.group.position.set(cpu.x, gy, cpu.z);
           v.group.rotation.y = -cpu.yaw;
-          v.update(cpu.speed, cpu.steer, dt, cpu.braking, undefined, 0, sim.time, 0);
+          const pitch = cpu.track === 'f1' ? Math.atan(f1Progress(cpu.x, cpu.z).grade) : 0;
+          v.update(cpu.speed, cpu.steer, dt, cpu.braking, { pitch, roll: 0 }, 0, sim.time, 0);
         }
         const tag = this.cpuTags.get(cpu.id);
         if (tag) {
-          tag.position.set(cpu.x, 2.6, cpu.z);
+          tag.position.set(cpu.x, groundHeight(cpu.x, cpu.z, cpu.y) + 2.6, cpu.z);
           tag.visible = sim.view === 'third';
         }
       }
@@ -2073,9 +2158,10 @@ export class WorldEngine {
       waypoint = found ? { x: found.x, z: found.z } : null;
       this.waypointCache = waypoint;
     }
+    waypoint = sim.mapWaypoint ?? waypoint;
     // Hide the waypoint ring during a match — it sits on the court otherwise.
     this.marker.visible = Boolean(waypoint) && !inTable && !inBasket && this.race.phase === 'idle';
-    if (waypoint && !inTable && !inBasket) this.marker.position.set(waypoint.x, 0.25, waypoint.z);
+    if (waypoint && !inTable && !inBasket) this.marker.position.set(waypoint.x, groundHeight(waypoint.x, waypoint.z) + 0.25, waypoint.z);
     if (inBasket) {
       // Shooter POV from the current random spot: stand behind the release point, eyes on the rim.
       const s = sim.basket.spot;

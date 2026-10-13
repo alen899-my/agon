@@ -1,48 +1,85 @@
-import { BRIDGE, BUILDINGS, CANAL, PLACES, PROMENADE, ROADS } from '../world/Map';
-import { startLine, TRACK_POINTS } from '../world/Track';
+import { useEffect, useRef, useState } from 'react';
+import './WorldMap.css';
+import { PLACES, type Point } from '../world/Map';
 import type { Theme } from '../game/State';
 import type { WorldSnapshot } from '../world/Simulation';
+import type { RaceTrackId } from '../world/F1Track';
+import { MapCanvas, isVisiblePlace, mapDestination, mapPlayer, type MapFilter, type MapView } from './MapCanvas';
 
-const BUILDING_COLORS = ['#e0b47c', '#c46a4a', '#7d94ad'];
-const TRACK_D = TRACK_POINTS.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.z}`).join(' ') + ' Z';
-const START = startLine();
-const ROUTE_ARROWS = TRACK_POINTS.map((p, i) => {
-  const q = TRACK_POINTS[(i + 1) % TRACK_POINTS.length];
-  return { x: (p.x + q.x) / 2, z: (p.z + q.z) / 2, yaw: Math.atan2(q.x - p.x, p.z - q.z) * 180 / Math.PI };
-});
-export function DistrictMap({ state, large = false, theme = 'light', raceActive = false }: { state: WorldSnapshot | null; large?: boolean; theme?: Theme; raceActive?: boolean }) {
-  const color = theme === 'color';
-  return <svg viewBox="-175 -175 350 350" className={large ? 'district-map large-map' : 'district-map'} role="img" aria-label="Neighborhood map: buildings, streets, landmarks, race track and your position">
-    <rect x="-175" y="-175" width="350" height="350" fill={color ? '#a9c795' : '#d1d1d1'} />
-    {ROADS.map(r => <g key={r} fill={color ? '#43484f' : '#fafafa'}><rect x={r - 8} y="-175" width="16" height="350" /><rect x="-175" y={r - 8} width="350" height="16" /></g>)}
-    {/* Grand Canal water + promenade + bridge deck (deck drawn over the water). */}
-    <rect x={CANAL.x0} y={CANAL.z0} width={CANAL.x1 - CANAL.x0} height={CANAL.z1 - CANAL.z0} fill={color ? '#3f7fbf' : '#7fa8c9'} />
-    <rect x={PROMENADE.x0} y={PROMENADE.z0} width={PROMENADE.x1 - PROMENADE.x0} height={PROMENADE.z1 - PROMENADE.z0} fill={color ? '#43484f' : '#fafafa'} />
-    <rect x={-BRIDGE.halfW} y={BRIDGE.zSGrade} width={BRIDGE.halfW * 2} height={BRIDGE.zNGrade - BRIDGE.zSGrade} fill={color ? '#43484f' : '#fafafa'} />
-    {BUILDINGS.map((b, i) => <rect key={i} x={b.x - b.w / 2} y={b.z - b.d / 2} width={b.w} height={b.d} fill={color ? BUILDING_COLORS[b.shade % 3] : '#888888'} />)}
-    {color && <rect x="25" y="-64" width="32" height="31" fill="#5da75d" />}
-    {raceActive && <g aria-label="Active race route">
-      <path d={TRACK_D} fill="none" stroke="#ffdc38" strokeWidth="9" opacity="0.2" strokeLinejoin="round" />
-      <path d={TRACK_D} fill="none" stroke="#141a22" strokeWidth="5.5" strokeLinejoin="round" />
-      <path d={TRACK_D} fill="none" stroke="#ffdc38" strokeWidth="3" strokeLinejoin="round" />
-      {ROUTE_ARROWS.map((p, i) => <path key={i} d="M -3 2 L 0 -2 L 3 2" fill="none" stroke="#141a22" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" transform={`translate(${p.x} ${p.z}) rotate(${p.yaw})`} />)}
-      <g transform={`translate(${START.x} ${START.z})`}>
-        <rect x="-4" y="-4" width="8" height="8" fill="#fff" stroke="#141a22" strokeWidth="1" />
-        <path d="M -4 -4 H 0 V 0 H -4 Z M 0 0 H 4 V 4 H 0 Z" fill="#141a22" />
-        {large && <text y="-8" textAnchor="middle" fontSize="4" fontFamily="Arial" fontWeight="bold" fill="#141a22">START / FINISH</text>}
-      </g>
-    </g>}
-    {PLACES.map(p => <g key={p.id}>
-      <circle cx={p.x} cy={p.z} r={!raceActive && p.id === state?.waypoint ? 5 : 3} fill={color ? (state?.discovered.includes(p.id) ? '#2e7d32' : '#ffffff') : (state?.discovered.includes(p.id) ? '#fff' : '#555')} stroke={color ? '#1b4d1b' : '#111'} strokeWidth="1" />
-      {large && <text x={p.x} y={p.z - 8} textAnchor="middle" fontSize="5" fontFamily="Arial" fontWeight="bold" fill="#111">{p.name.toUpperCase()}</text>}
-    </g>)}
-    <g transform={`translate(${state?.x ?? 12} ${state?.z ?? 34}) rotate(${(state?.yaw ?? 0) * 180 / Math.PI})`}>
-      <circle r="7" fill="#ffffff" /><path d="M0-6 4 4 0 2-4 4Z" fill="#000000" />
-    </g>
-    {(state?.dots ?? []).map(d => <circle key={d.id} cx={d.x} cy={d.z} r={2.4}
-      fill={d.driving ? '#111111' : '#ffffff'} stroke="#111111" strokeWidth="0.8" />)}
-    {(state?.buildSites ?? []).map(s => <rect key={s.id} x={s.x-s.w/2} y={s.z-s.d/2} width={s.w} height={s.d} fill={s.stage === 4 ? '#b39a7b' : '#f09b35'}><title>Construction {s.stage}/4</title></rect>)}
-    {(state?.agentWalkers ?? []).map(a => <circle key={a.id} cx={a.x} cy={a.z} r={1.8} fill={a.role === 'police' ? '#397be2' : a.role === 'builder' ? '#ed862f' : a.role === 'medic' ? '#f5f5f5' : '#5aab68'} stroke="#333" strokeWidth="0.5"><title>{a.name}: {a.task}</title></circle>)}
-    <text x="158" y="-158" fontSize="10" fontFamily="Arial" fontWeight="bold" fill="#111">N</text>
-  </svg>;
+interface MapProps { state: WorldSnapshot | null; theme?: Theme; raceActive?: boolean; raceTrack?: RaceTrackId }
+const distanceLabel = (distance: number) => distance >= 1000 ? `${(distance / 1000).toFixed(2)} km` : `${Math.round(distance)} m`;
+
+export function DistrictMap({ state, raceActive, raceTrack }: MapProps) {
+  const player = mapPlayer(state), target = mapDestination(state);
+  return <div className="atlas-radar">
+    <MapCanvas state={state} mini headingUp raceActive={raceActive} raceTrack={raceTrack} />
+    <div className="atlas-radar-status"><span>{state?.location ?? 'CITY'}</span>{target && <b>{distanceLabel(Math.hypot(target.x - player.x, target.z - player.z))}</b>}</div>
+    <div className="atlas-vitals"><i style={{ width: `${Math.max(0, Math.min(100, state?.hp ?? 100))}%` }} /></div>
+  </div>;
+}
+
+interface WorldMapProps extends MapProps {
+  onClose: () => void; onPlace: (id: string) => void; onWaypoint: (point: Point | null) => void;
+}
+
+export function WorldMap({ state, raceActive, raceTrack, onClose, onPlace, onWaypoint }: WorldMapProps) {
+  const player = mapPlayer(state);
+  const [view, setView] = useState<MapView>({ ...player, scale: 2 });
+  const [filter, setFilter] = useState<MapFilter>('all');
+  const [query, setQuery] = useState('');
+  const [selected, setSelected] = useState<string | null>(state?.waypoint ?? null);
+  const [custom, setCustom] = useState<Point | null>(state?.mapWaypoint ?? null);
+  const sheet = useRef<HTMLDivElement>(null);
+  const close = useRef<HTMLButtonElement>(null);
+  const canvasArea = useRef<HTMLDivElement>(null);
+  const place = PLACES.find(p => p.id === selected);
+  const destination = place ?? custom;
+  const active = mapDestination(state);
+  const places = PLACES.filter(p => isVisiblePlace(p.category, filter) && `${p.name} ${p.category}`.toLowerCase().includes(query.toLowerCase()));
+  useEffect(() => { const previous = document.activeElement as HTMLElement | null; close.current?.focus(); return () => previous?.focus(); }, []);
+  const changeView = (v: MapView) => setView({ x: Math.max(-250, Math.min(1050, v.x)), z: Math.max(-300, Math.min(300, v.z)), scale: Math.max(0.35, Math.min(8, v.scale)) });
+  const overview = () => {
+    const bounds = canvasArea.current?.getBoundingClientRect();
+    setView({ x: 382, z: 10, scale: Math.max(0.35, Math.min((bounds?.width ?? 800) / 1170, (bounds?.height ?? 500) / 440)) });
+  };
+  return <div className="atlas-overlay" ref={sheet} role="dialog" aria-modal="true" aria-labelledby="atlas-title" onKeyDown={event => {
+    event.stopPropagation();
+    if (event.key === 'Escape') { event.preventDefault(); onClose(); }
+    if (event.key === 'Tab') {
+      const elements = [...(sheet.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input, select, canvas[tabindex="0"]') ?? [])];
+      const first = elements[0], last = elements[elements.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    }
+  }}>
+    <header className="atlas-header"><div><span>AGON / WORLD</span><h2 id="atlas-title">MAP</h2></div><div className="atlas-location">{state?.location ?? 'City'}<small>{state?.driving ? 'DRIVING' : 'ON FOOT'}</small></div><button ref={close} className="atlas-icon" onClick={onClose} title="Close map" aria-label="Close map">×</button></header>
+    <div className="atlas-layout">
+      <div className="atlas-map-area" ref={canvasArea}>
+        <MapCanvas state={state} view={view} onView={changeView} filter={filter} selected={selected} preview={custom} raceActive={raceActive} raceTrack={raceTrack} onPick={(point, id) => { setSelected(id ?? null); setCustom(id ? null : point); }} />
+        <div className="atlas-crosshair" aria-hidden="true">+</div>
+        <div className="atlas-map-tools">
+          <button className="atlas-icon" title="Zoom in" aria-label="Zoom in" onClick={() => changeView({ ...view, scale: view.scale * 1.3 })}>+</button>
+          <button className="atlas-icon" title="Zoom out" aria-label="Zoom out" onClick={() => changeView({ ...view, scale: view.scale / 1.3 })}>−</button>
+          <button className="atlas-icon" title="Center on player" aria-label="Center on player" onClick={() => setView({ ...player, scale: 2 })}>⌖</button>
+          <button className="atlas-icon" title="Show entire map" aria-label="Show entire map" onClick={overview}>⊞</button>
+        </div>
+        {custom && <div className="atlas-coordinate">{Math.round(custom.x)}, {Math.round(custom.z)}</div>}
+        <div className="atlas-legend"><span><i className="player" />YOU</span><span><i className="racing" />RACING</span><span><i className="destination" />WAYPOINT</span></div>
+      </div>
+      <aside className="atlas-sidebar" aria-label="Map locations">
+        <div className="atlas-search"><input type="search" placeholder="Search locations" aria-label="Search locations" value={query} onChange={event => setQuery(event.target.value)} /><select value={filter} aria-label="Location category" onChange={event => setFilter(event.target.value as MapFilter)}><option value="all">All locations</option><option value="racing">Racing</option><option value="activities">Activities</option><option value="places">Districts & landmarks</option></select></div>
+        <div className="atlas-location-list">
+          {places.map(p => <button key={p.id} className={selected === p.id ? 'selected' : ''} aria-pressed={selected === p.id} onClick={() => { setSelected(p.id); setCustom(null); setView({ x: p.x, z: p.z, scale: p.id === 'f1-circuit' ? 1 : 2.5 }); }}><span className={p.category.includes('RACING') ? 'atlas-blip racing' : 'atlas-blip'}>{p.category.includes('RACING') ? '⚑' : '•'}</span><span><strong>{p.name}</strong><small>{p.category}</small></span><b>{distanceLabel(Math.hypot(p.x - player.x, p.z - player.z))}</b></button>)}
+          {!places.length && <p className="atlas-empty">No locations found.</p>}
+        </div>
+        <div className="atlas-destination">
+          <small>{destination ? 'DESTINATION' : 'WAYPOINT'}</small>
+          <strong>{place?.name ?? (custom ? 'Custom waypoint' : active ? 'Waypoint active' : 'No destination selected')}</strong>
+          {destination && <span>{distanceLabel(Math.hypot(destination.x - player.x, destination.z - player.z))} straight-line distance</span>}
+          <button className="atlas-set" disabled={!destination} onClick={() => { if (place) onPlace(place.id); else if (custom) onWaypoint(custom); }}>Set waypoint</button>
+          <button className="atlas-clear" disabled={!active} onClick={() => onWaypoint(null)}>Clear waypoint</button>
+        </div>
+      </aside>
+    </div>
+  </div>;
 }

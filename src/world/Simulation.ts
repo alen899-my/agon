@@ -1,10 +1,13 @@
 import type { BuiltBox, PedAgent, BuildSite } from '../../server/src/agents/livingWorld';
 import { dialogueLines, type DialogueGenerator } from '../../server/src/agents/dialogueTypes';
 import { bodyContact, boundaryContact, circleContact, vehicleBody, type Body, type Contact } from './Collision';
-import { VEHICLES, VEHICLE_KINDS, type VehicleKind } from './Vehicles';
+import { VEHICLES, VEHICLE_KINDS, vehicleSteeringAngle, type VehicleKind } from './Vehicles';
 import { WEATHER_GRIP, type Season, type Weather } from './Weather';
-import { GAME_CENTER, HOOP, PROMENADE, ROAD_HALF, groundHeight, inPromenade, inWater, intersects, LIMIT, onRoad, SOLIDS, PARKED_CARS, PLACES, PROPS, RACE_SHOW_CARS, TRAFFIC_ROUTE, circleHit, seeded, type Point } from './Map';
+import { GAME_CENTER, HOOP, PROMENADE, ROAD_HALF, groundHeight, inPromenade, inWater, intersects, LIMIT, onF1Island, onRoad, SOLIDS, PARKED_CARS, PLACES, PROPS, RACE_SHOW_CARS, TRAFFIC_ROUTE, circleHit, seeded, type Point } from './Map';
 import { TRACK_LENGTH, gridSlots, startLine } from './Track';
+import { F1_ORIGIN, F1_PORTAL_CITY } from './F1Track';
+import { F1_ACCESS_LENGTH, F1_ACCESS_RAIL_START, F1_ACCESS_RAIL_END, f1AccessProgress, onF1Access } from './F1Access';
+import { F1_HALF, F1_PIT, f1AtPitBox, f1HasPitWall, f1BarrierOffset, f1GridSlots, f1InDrs, f1IsPit, f1Progress, f1StartLine } from './F1Track';
 import { GUNS } from './Guns';
 import { TableTennisSim, type TTShot, type TTSnapshot } from './TableTennis';
 import { BasketballSim, type BBSnapshot } from './Basketball';
@@ -48,6 +51,7 @@ export interface WorldSnapshot {
   phase: 'ready' | 'playing'; paused: boolean; view: View; driving: boolean; weather: Weather; season: Season; wiperMode: WiperMode;
   x: number; z: number; yaw: number; speed: number; distance: number;
   location: string; discovered: string[]; waypoint: string | null; nearbyCar: boolean;
+  mapWaypoint?: { x: number; z: number } | null;
   nearbyVehicleKind: VehicleKind | null; nearbyVehicleLabel: string | null; enterHint: string | null;
   damage: number; impact: Impact | null; frontDistance: number; frontBlocked: boolean;
   vehicleKind: VehicleKind; acceleration: number; crashed: boolean; skidding: boolean; boosting: boolean; boost: number; boostEnabled: boolean; car: SnapshotCar;
@@ -63,7 +67,11 @@ export interface WorldSnapshot {
   tableFlags: { topspin: boolean; smash: boolean; netCord: boolean; edge: boolean };
   basket: BBSnapshot | null;
   basketFlags: { played: boolean; swish: boolean; streak3: boolean };
-  blinker: number; blinkerManual: boolean; nearArena: boolean;
+  blinker: number; blinkerManual: boolean; nearArena: boolean; nearF1Portal: boolean;
+  /** DRS open (F1 only): full throttle inside a DRS zone while racing. */
+  drsOpen: boolean;
+  /** True while inside the F1 pit-lane span (speed limit + box service apply). */
+  inPitLane: boolean;
   /** World time of last pedestrian blood hit, -999 if never. Used to trigger blood-splash FX. */
   pedBloodAt: number;
   /** Increments on every pedestrian hit — remounts the blood overlay even for same-tick hits. */
@@ -104,6 +112,8 @@ export const GRID_BUBBLE_RADIUS = 14;
 /** Cached grid geometry (deterministic): avoids per-tick allocations in the hot loop. */
 const GRID_SLOTS = gridSlots();
 const START_PT = startLine();
+const F1_GRID_SLOTS = f1GridSlots();
+const F1_START_PT = f1StartLine();
 /** True when (x,z) matches a paddock show-car display spot (RACE_SHOW_CARS row). */
 function isShowCarSpot(x: number, z: number): boolean {
   for (const s of RACE_SHOW_CARS) {
@@ -256,6 +266,7 @@ export class Simulation {
     ...RACE_SHOW_CARS.map((s): ParkedVehicle => ({ kind: s.kind, x: s.x, z: s.z, yaw: s.yaw })),
   ];
   waypoint: string | null = 'plaza';
+  mapWaypoint: { x: number; z: number } | null = null;
   readonly discovered = new Set<string>();
   // --- realistic-physics state (one by one) ---
   damage = 0;
@@ -457,6 +468,10 @@ export class Simulation {
     for (const slot of GRID_SLOTS) {
       if (Math.hypot(x - slot.x, z - slot.z) < radius) return true;
     }
+    if (Math.hypot(x - F1_START_PT.x, z - F1_START_PT.z) < radius) return true;
+    for (const slot of F1_GRID_SLOTS) {
+      if (Math.hypot(x - slot.x, z - slot.z) < radius) return true;
+    }
     return false;
   }
   /**
@@ -543,6 +558,14 @@ export class Simulation {
   get nearArena(): boolean {
     return Math.hypot(this.x - (-45), this.z - 82) < 20;
   }
+  get nearF1Portal(): boolean {
+    const p = this.driving ? this.car : this;
+    return onF1Island(p.x, p.z) || Math.hypot(p.x - F1_PORTAL_CITY.x, p.z - F1_PORTAL_CITY.z) < 24;
+  }
+  /** DRS flap open (F1 island, racing, full throttle inside a DRS zone). */
+  drsOpen = false;
+  /** Inside the F1 pit-lane span (limit + service). */
+  inPitLane = false;
   get snapshot(): WorldSnapshot {
     let location = 'Civic Avenue', best = 23;
     for (const place of PLACES) {
@@ -557,6 +580,7 @@ export class Simulation {
     return { phase: this.phase, paused: this.paused, view: this.view, driving: this.driving, weather: this.weather, season: this.season, wiperMode: this.wiperMode,
       x: this.x, z: this.z, yaw: this.yaw, speed: Math.round(Math.abs(this.driving ? this.car.speed : this.pace) * 3.6),
       distance: Math.floor(this.distance), location, discovered: [...this.discovered], waypoint: this.waypoint, nearbyCar: this.nearbyCar,
+      mapWaypoint: this.mapWaypoint,
       nearbyVehicleKind: near?.enterable ? near.kind : null,
       nearbyVehicleLabel: near ? `${VEHICLES[near.kind].name} · ${VEHICLES[near.kind].inspiredBy}` : null,
       enterHint,
@@ -595,7 +619,8 @@ export class Simulation {
       tableFlags: { ...this.table.flags },
       basket: this.mode === 'basket' ? this.basket.snapshot : null,
       basketFlags: { played: this.basket.attempts > 0, swish: this.basket.swishes > 0, streak3: this.basket.best >= 3 },
-      blinker: this.blinker, blinkerManual: this.blinkerManual, nearArena: this.nearArena,
+      blinker: this.blinker, blinkerManual: this.blinkerManual, nearArena: this.nearArena, nearF1Portal: this.nearF1Portal,
+      drsOpen: this.drsOpen, inPitLane: this.inPitLane,
       aimScreenX: 0.5, aimScreenY: 0.5 };
   }
   begin(): void { this.phase = 'playing'; this.clearInput(); }
@@ -979,6 +1004,63 @@ export class Simulation {
   }
 
   private contact(body: Body, ignore?: TrafficCar, includePlayer = false, y = 0, mired = false): (Contact & { label: string }) | null {
+    const access = f1AccessProgress(body.x, body.z);
+    const accessMouth = access.along < F1_ACCESS_RAIL_START;
+    if (body.x > 150 && access.distance < (accessMouth ? 20 : 16)) {
+      const join = access.along > F1_ACCESS_LENGTH - 35 && f1Progress(body.x, body.z).lateral < F1_HALF + 1;
+      const angle = body.yaw - access.yaw;
+      const extent = Math.abs(Math.cos(angle)) * body.halfWidth + Math.abs(Math.sin(angle)) * body.halfLength;
+      // The city junction and circuit merge have no guardrails. Applying the
+      // narrow corridor there creates an invisible wall across turning cars.
+      const besideRail = access.along >= F1_ACCESS_RAIL_START && access.along <= F1_ACCESS_RAIL_END;
+      if (besideRail && !join && Math.abs(access.signed) + extent > 9.35) {
+        const side = access.signed >= 0 ? -1 : 1;
+        return { nx: Math.cos(access.yaw) * side, nz: Math.sin(access.yaw) * side, depth: Math.min(1.2, Math.abs(access.signed) + extent - 9.35), label: 'access road barrier' };
+      }
+      if (includePlayer) {
+        const hit = bodyContact(body, vehicleBody(this.car.x, this.car.z, this.car.yaw, this.vehicleKind));
+        if (hit) return { ...hit, label: 'player car' };
+      }
+      for (const car of this.parked) {
+        const hit = bodyContact(body, vehicleBody(car.x, car.z, car.yaw, car.kind));
+        if (hit) return { ...hit, label: 'parked car' };
+      }
+      return null;
+    }
+    // Separate F1 island: city boundary/buildings/props do not apply there.
+    // Use the rendered barrier offsets, including runoff and pit access.
+    if (onF1Island(body.x, body.z)) {
+      const p = f1Progress(body.x, body.z);
+      const wallSide = p.signedLateral >= 0 ? 1 : -1;
+      const relativeYaw = body.yaw - p.tangentYaw;
+      const extent = Math.abs(Math.cos(relativeYaw)) * body.halfWidth + Math.abs(Math.sin(relativeYaw)) * body.halfLength;
+      const pitWallDelta = p.signedLateral - (F1_HALF + 2.1);
+      if (f1HasPitWall(p.dist) && Math.abs(pitWallDelta) < extent + 0.3) {
+        const normal = pitWallDelta >= 0 ? 1 : -1;
+        return { nx: Math.cos(p.tangentYaw) * normal, nz: Math.sin(p.tangentYaw) * normal, depth: extent + 0.3 - Math.abs(pitWallDelta), label: 'pit wall' };
+      }
+      const wallAt = Math.abs(f1BarrierOffset(p.dist, wallSide)) - 0.3 - extent;
+      if (p.lateral > wallAt) {
+        const rx = Math.cos(p.tangentYaw);
+        const rz = Math.sin(p.tangentYaw);
+        // Signed side via centreline lookup.
+        const side = wallSide;
+        return { nx: -rx * side, nz: -rz * side, depth: Math.min(1.2, p.lateral - wallAt + 0.4), label: 'f1 barrier' };
+      }
+      // Island edge (far runoff): keep cars on the island.
+      const dxI = body.x - F1_ORIGIN.x;
+      const dzI = body.z - 20;
+      const rI = Math.hypot(dxI, dzI);
+      if (rI > 400) {
+        return { nx: -dxI / (rI || 1), nz: -dzI / (rI || 1), depth: Math.min(2, rI - 400 + 0.5), label: 'island edge' };
+      }
+      // No city colliders on the island (no buildings/props/parked/traffic there).
+      if (includePlayer) {
+        const hit = bodyContact(body, vehicleBody(this.car.x, this.car.z, this.car.yaw, this.vehicleKind));
+        if (hit) return { ...hit, label: 'player car' };
+      }
+      return null;
+    }
     const boundary = boundaryContact(body, LIMIT);
     if (boundary) return { ...boundary, label: 'boundary' };
     // Bridge support: open water and deck edges are walls — unless the body
@@ -1051,8 +1133,18 @@ export class Simulation {
     return null;
   }
   private walkBlocked(x: number, z: number, y = this.y): boolean {
+    if (x > 150 && onF1Access(x, z, 8.9)) {
+      return !!circleContact(vehicleBody(this.car.x, this.car.z, this.car.yaw, this.vehicleKind), x, z, 0.48) ||
+        this.parked.some(p => !!circleContact(vehicleBody(p.x, p.z, p.yaw, p.kind), x, z, 0.48));
+    }
     // Open water blocks — but the bridge deck flying above it does not.
     if (groundHeight(x, z, y) < 0) return true;
+    if (onF1Island(x, z)) {
+      // Island: stay inside the island disc, out of parked cars only.
+      if (Math.hypot(x - F1_ORIGIN.x, z - 20) >= 400) return true;
+      const high = Math.abs(y) > 1.5;
+      return (!high && !!circleContact(vehicleBody(this.car.x, this.car.z, this.car.yaw, this.vehicleKind), x, z, 0.48));
+    }
     const high = Math.abs(y) > 1.5;
     return Math.abs(x) + 0.48 >= LIMIT || Math.abs(z) + 0.48 >= LIMIT || intersects(x, z, 0.48) || intersects(x, z, 0.48, this.builtBoxes) ||
       (!high && !!circleContact(vehicleBody(this.car.x, this.car.z, this.car.yaw, this.vehicleKind), x, z, 0.48)) ||
@@ -1359,9 +1451,29 @@ export class Simulation {
       const crashed = this.crashed;
       const oldSpeed = this.car.speed, oldYaw = this.car.yaw;
       const handbrake = this.held('handbrake') || this.held('jump');
-      // ── Nitro boost (RACING ONLY): Shift / BOOST while pushing forward.
+      // F1 island context (computed once per tick; cheap reject for the city).
+      const onF1 = onF1Island(this.car.x, this.car.z) && !onF1Access(this.car.x, this.car.z);
+      let f1Grade = 0;
+      let f1LapDist = 0;
+      let f1InPit = false;
+      let surfaceGrip = 1;
+      let f1Curve = 0;
+      if (onF1) {
+        const fp = f1Progress(this.car.x, this.car.z);
+        f1Grade = fp.grade * Math.cos(this.car.yaw - fp.tangentYaw);
+        f1LapDist = fp.lapDist;
+        f1InPit = f1IsPit(fp);
+        f1Curve = fp.curvature;
+        surfaceGrip = f1InPit || fp.lateral <= F1_HALF ? 1 : fp.lateral <= F1_HALF + 1.2 ? 0.8 : 0.42;
+      }
+      this.inPitLane = f1InPit;
+      // ── Nitro/ERS boost (RACING ONLY): Shift / BOOST while pushing forward.
+      // F1 (ERS): bigger store (150) + faster regen under braking.
       // Drains 32/s, auto-refills 14/s after a 0.9s delay. Needs >1% to kick in. ──
-      const wantBoost = this.boostEnabled && this.held('sprint') && forward > 0.1 && !crashed && this.boost > 1;
+      const boostCap = onF1 ? 150 : 100;
+      const boostRegen = onF1 ? 20 : 14;
+      if (this.boost > boostCap) this.boost = boostCap;
+      const wantBoost = this.boostEnabled && this.held('sprint') && forward > 0.1 && !crashed && !handbrake && !f1InPit && this.boost > 1;
       this.boosting = wantBoost && this.boost > 0;
       if (this.boosting) {
         this.boost = Math.max(0, this.boost - 32 * dt);
@@ -1369,28 +1481,54 @@ export class Simulation {
         if (this.boost <= 0) this.boosting = false;
       } else {
         this.boostDelay = Math.max(0, this.boostDelay - dt);
-        if (this.boostDelay <= 0) this.boost = Math.min(100, this.boost + 14 * dt);
+        if (this.boostDelay <= 0) this.boost = Math.min(boostCap, this.boost + boostRegen * dt);
       }
+      // DRS closes under braking, steering, low grip, or pit-lane operation.
+      this.drsOpen = onF1 && this.boostEnabled && this.weatherGrip >= 0.99 && forward > 0.5 && oldSpeed > 22 && !crashed && !handbrake && !f1InPit && surfaceGrip === 1 && Math.abs(side) < 0.15 && Math.abs(f1Curve) < 0.004 && f1InDrs(f1LapDist);
       const baseTop = spec.topSpeed * (1 - this.damage / 160);
-      const topSpeed = this.boosting ? baseTop * 1.45 : baseTop;
+      let topSpeed = this.boosting ? baseTop * 1.45 : baseTop;
+      if (this.drsOpen) topSpeed *= 1.12;
+      // Pit-lane speed limit (~80 km/h) while in the pit span on the island.
+      if (f1InPit) topSpeed = Math.min(topSpeed, F1_PIT.speedLimit);
       const opposing = forward !== 0 && forward * oldSpeed < -0.1;
-      const gripF = this.weatherGrip;
-      const drag = 0.65 + 0.008 * oldSpeed * oldSpeed;
+      const gripF = this.weatherGrip * surfaceGrip;
+      const aeroGrip = onF1 ? 1 + Math.min(1.4, oldSpeed * oldSpeed / 1800) * (this.drsOpen ? 0.65 : 1) : 1;
+      const drag = 0.65 + (onF1 ? 0.003 : 0.008) * oldSpeed * oldSpeed * (this.drsOpen ? 0.78 : 1) + (1 - surfaceGrip) * Math.abs(oldSpeed) * 0.3;
       let force = forward * spec.acceleration * (this.boosting ? 1.9 : 1) * Math.max(0.15, 1 - Math.abs(oldSpeed) / (forward < 0 ? 7 : topSpeed));
-      if (opposing) force = forward * 13 * gripF;
+      if (onF1) force *= Math.min(1, gripF * aeroGrip);
+      if (opposing) force = forward * (onF1 ? 22 * aeroGrip : 13) * gripF;
+      // Gentle hill pull: climbing scrubs accel, descents add a little.
+      const hillForce = onF1 ? -9.81 * Math.sin(Math.atan(f1Grade)) : 0;
+      force += hillForce;
       if (!forward || handbrake || crashed) {
         const decel = crashed ? 14 : handbrake ? 9 * gripF : drag;
         this.car.speed = Math.sign(oldSpeed) * Math.max(0, Math.abs(oldSpeed) - decel * dt);
-      } else this.car.speed = clamp(oldSpeed + (force - Math.sign(oldSpeed) * drag) * dt, -7, topSpeed);
+        if (!handbrake && !crashed) this.car.speed += hillForce * dt;
+      } else {
+        const limit = Math.max(topSpeed, oldSpeed - 22 * gripF * dt);
+        this.car.speed = clamp(oldSpeed + (force - Math.sign(oldSpeed) * drag) * dt, -7, limit);
+        if (opposing && oldSpeed * this.car.speed < 0) this.car.speed = 0;
+      }
+      if (f1InPit && this.car.speed > F1_PIT.speedLimit) {
+        this.car.speed = Math.max(F1_PIT.speedLimit, this.car.speed - 22 * gripF * dt);
+      }
+      // Service only while stationary in a marked pit box.
+      if (f1InPit && Math.abs(this.car.speed) < 0.5 && forward === 0 && f1AtPitBox(f1Progress(this.car.x, this.car.z))) {
+        this.damage = Math.max(0, this.damage - 25 * dt);
+        this.boost = Math.min(boostCap, this.boost + 40 * dt);
+      }
       this.acceleration = (this.car.speed - oldSpeed) / dt;
-      this.car.steer += ((crashed ? 0 : side) - this.car.steer) * (1 - Math.exp(-6 * dt));
-      const steeringAngle = this.car.steer * 0.55 / (1 + Math.abs(this.car.speed) / 24);
-      const yawRate = this.car.speed / (spec.length * 0.64) * Math.tan(steeringAngle) * (handbrake ? 1.5 : 1);
-      const wantedYaw = oldYaw + clamp(yawRate, -1.7, 1.7) * dt;
+      const formula = this.vehicleKind === 'f1';
+      this.car.steer += ((crashed ? 0 : side) - this.car.steer) * (1 - Math.exp(-(formula ? 11 : 6) * dt));
+      const steeringAngle = vehicleSteeringAngle(this.vehicleKind, this.car.steer, this.car.speed);
+      const wheelbase = formula ? 3.36 : spec.length * 0.64;
+      const yawRate = this.car.speed / wheelbase * Math.tan(steeringAngle) * (handbrake ? 1.5 : 1);
+      const maxYawRate = onF1 ? Math.min(1.7, (formula ? 16 : 12) * aeroGrip * gripF / Math.max(5, Math.abs(this.car.speed))) : 1.7;
+      const wantedYaw = oldYaw + clamp(yawRate, -maxYawRate, maxYawRate) * dt;
       const deltaYaw = wantedYaw - oldYaw;
       // Preserve momentum across a turning chassis; tire grip dissipates lateral slip.
       // Weather scales grip: rain 0.85x, snow 0.7x (longer slides, longer braking).
-      this.lateralSpeed = (this.lateralSpeed - oldSpeed * deltaYaw) * Math.exp(-(handbrake ? 0.65 : spec.grip * this.weatherGrip) * dt);
+      this.lateralSpeed = (this.lateralSpeed - oldSpeed * deltaYaw) * Math.exp(-(handbrake ? 0.65 : spec.grip * gripF * aeroGrip) * dt);
       this.skidding = Math.abs(this.lateralSpeed) > 1.2;
       this.car.braking = opposing || handbrake || crashed;
       this.car.wheelSpin += (this.car.speed * dt) / 0.4;
@@ -1466,7 +1604,7 @@ export class Simulation {
       if (dvm <= step) { this.pvx = wishX; this.pvz = wishZ; }
       else { this.pvx += dvx / dvm * step; this.pvz += dvz / dvm * step; }
       const dx = this.pvx * dt, dz = this.pvz * dt;
-      const x = clamp(this.x + dx, -LIMIT, LIMIT), z = clamp(this.z + dz, -LIMIT, LIMIT);
+      const x = this.x + dx, z = this.z + dz;
       // 4) On foot: player car + parked + traffic + props + peds all push back.
       const blocks = (px: number, pz: number) => footBlocked(px, pz);
       // Axis separation permits sliding along facades instead of sticking to corners.

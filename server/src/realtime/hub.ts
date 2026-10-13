@@ -37,7 +37,8 @@ const DOTS_INTERVAL_MS = 1000;
 const HELLO_TIMEOUT_MS = 15_000;
 const HELLO_PER_MINUTE_PER_IP = 12;
 const ROOM_TOUCH_THROTTLE_MS = 60_000;
-const WORLD_BOUND = 130;
+/** City lives within ±160; the separate F1 island sits near x=1500 (spans ~±350). */
+const WORLD_BOUND = 2000;
 const MAX_ABS_SPEED = 60;
 
 export interface MemberState {
@@ -81,7 +82,7 @@ export class RoomHub {
   private readonly helloStamps = new Map<string, number[]>();
   private readonly roomTouch = new Map<string, number>();
   /** Arena directory: joinable race lobbies per room, keyed by host player id. */
-  private readonly raceDir = new Map<string, Map<string, { hostId: string; hostName: string; laps: number; count: number; phase: 'lobby' | 'countdown' | 'racing' | 'finished' | 'idle' }>>();
+  private readonly raceDir = new Map<string, Map<string, { hostId: string; hostName: string; laps: number; count: number; track: 'city' | 'f1'; phase: 'lobby' | 'countdown' | 'racing' | 'finished' | 'idle' }>>();
   /** Server-authoritative role agents (police slice) — one director per room. */
   private readonly directors = new Map<string, { director: AgentDirector; timer: NodeJS.Timeout; lastPush: number }>();
 
@@ -228,8 +229,8 @@ export class RoomHub {
     return (
       typeof v.type === 'string' &&
       ['kill_ped', 'explosion', 'shooting', 'hit_and_run', 'reckless_driving'].includes(v.type) &&
-      Number.isFinite(v.x) && Math.abs(v.x as number) <= 160 &&
-      Number.isFinite(v.z) && Math.abs(v.z as number) <= 160
+      Number.isFinite(v.x) && Math.abs(v.x as number) <= WORLD_BOUND &&
+      Number.isFinite(v.z) && Math.abs(v.z as number) <= WORLD_BOUND
     );
   }
 
@@ -340,7 +341,7 @@ export class RoomHub {
       (v.leaving === undefined || typeof v.leaving === 'boolean') &&
       Number.isInteger(v.lap) && (v.lap as number) >= 1 && (v.lap as number) <= 11 &&
       Number.isInteger(v.cp) && (v.cp as number) >= 0 && (v.cp as number) < 8 &&
-      Number.isFinite(v.dist) && (v.dist as number) >= 0 && (v.dist as number) <= 7000 &&
+      Number.isFinite(v.dist) && (v.dist as number) >= 0 && (v.dist as number) <= 50000 &&
       typeof v.finished === 'boolean' &&
       Number.isFinite(v.finishMs) && (v.finishMs as number) >= 0 && (v.finishMs as number) <= 3600000 &&
       Number.isFinite(v.bestLapMs) && (v.bestLapMs as number) >= 0 && (v.bestLapMs as number) <= 3600000 &&
@@ -355,6 +356,7 @@ export class RoomHub {
     const v = s as Record<string, unknown>;
     if (!['idle', 'lobby', 'countdown', 'racing', 'finished'].includes(v.phase as string)) return false;
     if (!Number.isInteger(v.laps) || (v.laps as number) < 1 || (v.laps as number) > 10) return false;
+    if (v.track !== undefined && v.track !== 'city' && v.track !== 'f1') return false;
     if (!Array.isArray(v.racers) || (v.racers as unknown[]).length > 8) return false;
     if (!Number.isFinite(v.sentAt) || !Number.isFinite(v.countdownEndsAt) || !Number.isFinite(v.startedAt)) return false;
     const ids = new Set<string>();
@@ -422,6 +424,7 @@ export class RoomHub {
       dir.set(state.playerId, {
         hostId: state.playerId, hostName: state.name, laps: s.laps,
         count: Math.min(8, s.racers.length), phase: s.phase,
+        track: s.track === 'f1' ? 'f1' : 'city',
       });
     } else {
       dir.delete(state.playerId);

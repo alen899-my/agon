@@ -1,4 +1,16 @@
 import { CHECKPOINT_COUNT, MAX_RACERS, TRACK_LENGTH, trackProgress } from './Track';
+import { F1_CHECKPOINT_COUNT, F1_LENGTH, F1_HALF, f1IsPit, f1Progress, type RaceTrackId } from './F1Track';
+
+export { type RaceTrackId };
+export const RACE_TRACKS: RaceTrackId[] = ['city', 'f1'];
+
+export function raceTrackLength(track: RaceTrackId): number {
+  return track === 'f1' ? F1_LENGTH : TRACK_LENGTH;
+}
+
+export function raceCheckpointCount(track: RaceTrackId): number {
+  return track === 'f1' ? F1_CHECKPOINT_COUNT : CHECKPOINT_COUNT;
+}
 
 export type RacePhase = 'idle' | 'lobby' | 'countdown' | 'racing' | 'finished';
 export interface RacerState {
@@ -44,6 +56,8 @@ export function lightStage(msRemaining: number): { reds: number; amber: boolean;
 export class RaceSim {
   phase: RacePhase = 'idle';
   laps = 3;
+  /** Which circuit this lobby races on. Separate F1 portal uses 'f1'. */
+  track: RaceTrackId = 'city';
   racers = new Map<string, RacerState>();
   countdownEndsAt = 0;
   startedAt = 0;
@@ -77,11 +91,12 @@ export class RaceSim {
     return this.phase === 'lobby' && this.isHost && this.racers.size >= 2 && this.racers.size <= MAX_RACERS && this.allReady;
   }
 
-  create(localId: string, name: string, vehicleKind: string, laps: number): void {
+  create(localId: string, name: string, vehicleKind: string, laps: number, track: RaceTrackId = 'city'): void {
     this.reset();
     this.selectedHostId = localId;
     this.localId = localId;
     this.laps = Math.max(1, Math.min(10, Math.round(laps) || 3));
+    this.track = track;
     this.phase = 'lobby';
     this.finishedAt = 0;
     this.startedAt = 0;
@@ -99,12 +114,14 @@ export class RaceSim {
   createSolo(
     localId: string, name: string, vehicleKind: string, laps: number,
     cpuIds: string[], cpuNames: string[], cpuVehicleKinds: string[],
+    track: RaceTrackId = 'city',
   ): void {
     this.reset();
     this.isSolo = true;
     this.selectedHostId = localId;
     this.localId = localId;
     this.laps = Math.max(1, Math.min(10, Math.round(laps) || 3));
+    this.track = track;
     this.phase = 'lobby';
     this.finishedAt = 0;
     this.startedAt = 0;
@@ -138,10 +155,11 @@ export class RaceSim {
     }
   }
 
-  joinAs(localId: string, name: string, vehicleKind: string, hostId: string): void {
+  joinAs(localId: string, name: string, vehicleKind: string, hostId: string, track: RaceTrackId = 'city'): void {
     if (this.phase !== 'idle' || !hostId || hostId === localId) return;
     this.selectedHostId = hostId;
     this.localId = localId;
+    this.track = track;
     if (!this.racers.has(localId)) {
       this.racers.set(localId, {
         id: localId, name, ready: false, vehicleKind, lap: 1, checkpoint: 0,
@@ -152,16 +170,19 @@ export class RaceSim {
   }
 
   /** Merge host snapshot: keep local ready intent + local vehicle choice in lobby. */
-  applySnapshot(msg: { sentAt: number; phase: RacePhase; laps: number; racers: Omit<RacerState, 'isLocal'>[]; countdownEndsAt: number; startedAt: number }, nowMs = Date.now()): void {
+  applySnapshot(msg: { sentAt: number; phase: RacePhase; laps: number; track?: RaceTrackId; racers: Omit<RacerState, 'isLocal'>[]; countdownEndsAt: number; startedAt: number }, nowMs = Date.now()): void {
     if (this.phase === 'idle') return;
     const local = this.racers.get(this.localId);
     const wasPhase = this.phase;
     if (wasPhase === 'racing' && msg.phase === 'countdown') return;
     const sameLaps = msg.laps === this.laps;
+    const incomingTrack = msg.track ?? 'city';
+    if (incomingTrack !== this.track) this.resetLapTracking();
     if (msg.phase === 'countdown' && wasPhase !== 'countdown') this.resetLapTracking();
     if (msg.phase === 'lobby' && wasPhase !== 'lobby') this.resetLapTracking();
     this.phase = msg.phase;
     this.laps = msg.laps;
+    this.track = incomingTrack;
     // Translate the host clock once per start; browser uptime and device clocks differ.
     const offset = nowMs - msg.sentAt;
     if (msg.phase === 'countdown' && wasPhase !== 'countdown') this.countdownEndsAt = msg.countdownEndsAt + offset;
@@ -229,11 +250,12 @@ export class RaceSim {
     return this.racers.size >= MAX_RACERS;
   }
 
-  snapshot(nowMs = Date.now()): { sentAt: number; phase: RacePhase; laps: number; racers: RacerState[]; countdownEndsAt: number; startedAt: number } {
+  snapshot(nowMs = Date.now()): { sentAt: number; phase: RacePhase; laps: number; track: RaceTrackId; racers: RacerState[]; countdownEndsAt: number; startedAt: number } {
     return {
       sentAt: nowMs,
       phase: this.phase,
       laps: this.laps,
+      track: this.track,
       racers: [...this.racers.values()].map((r) => ({ ...r, isLocal: false })),
       countdownEndsAt: this.countdownEndsAt,
       startedAt: this.startedAt,
@@ -320,7 +342,9 @@ export class RaceSim {
   tickLocal(x: number, z: number, nowMs: number): { lapped: boolean; finished: boolean } {
     const me = this.racers.get(this.localId);
     if (!me || this.phase !== 'racing' || me.finished) return { lapped: false, finished: false };
-    const p = trackProgress(x, z);
+    const trackLen = raceTrackLength(this.track);
+    const cpCount = raceCheckpointCount(this.track);
+    const p = this.track === 'f1' ? f1Progress(x, z) : trackProgress(x, z);
     // Require every sector in order, relative to the start line.
     // Crossing the line itself may be wide (racing line / drift): the wrap
     // edge matters more than lateral on that exact tick, otherwise a legit
@@ -328,21 +352,23 @@ export class RaceSim {
     const previous = this.lastLapDist;
     // Within one tick of the line (35m) and now past it: a genuine crossing
     // even if the line itself was taken wide.
-    const wrappedWide = previous !== null && previous > TRACK_LENGTH - 35 && p.lapDist < TRACK_LENGTH * 0.1;
-    if (p.lateral >= 12 && !wrappedWide) { this.lastLapDist = null; return { lapped: false, finished: false }; }
-    const sector = Math.floor(p.lapDist / (TRACK_LENGTH / CHECKPOINT_COUNT));
+    const f1Legal = this.track !== 'f1' || p.lateral <= F1_HALF + 1.2 || f1IsPit(f1Progress(x, z));
+    const wrappedWide = f1Legal && previous !== null && previous > trackLen - 35 && p.lapDist < trackLen * 0.1;
+    if (!f1Legal) { this.lastLapDist = null; return { lapped: false, finished: false }; }
+    if (this.track !== 'f1' && p.lateral >= 12 && !wrappedWide) { this.lastLapDist = null; return { lapped: false, finished: false }; }
+    const sector = Math.floor(p.lapDist / (trackLen / cpCount));
     this.lastLapDist = p.lapDist;
     if (previous === null) return { lapped: false, finished: false };
     // A wide line crossing skips the sector-gate on this tick only — cutting
     // earlier sectors still blocks the lap via nextCheckpoint.
-    if (wrappedWide && this.nextCheckpoint === CHECKPOINT_COUNT - 1) this.nextCheckpoint = CHECKPOINT_COUNT;
-    const delta = ((p.lapDist - previous + TRACK_LENGTH * 1.5) % TRACK_LENGTH) - TRACK_LENGTH * 0.5;
+    if (this.track !== 'f1' && wrappedWide && this.nextCheckpoint === cpCount - 1) this.nextCheckpoint = cpCount;
+    const delta = ((p.lapDist - previous + trackLen * 1.5) % trackLen) - trackLen * 0.5;
     const forward = wrappedWide || (delta > 0 && delta <= 35);
-    const wrapped = forward && previous > TRACK_LENGTH * 0.9 && p.lapDist < TRACK_LENGTH * 0.1;
-    if (forward && sector === this.nextCheckpoint && Math.floor(previous / (TRACK_LENGTH / CHECKPOINT_COUNT)) === sector - 1) this.nextCheckpoint++;
+    const wrapped = forward && previous > trackLen * 0.9 && p.lapDist < trackLen * 0.1;
+    if (forward && sector === this.nextCheckpoint && Math.floor(previous / (trackLen / cpCount)) === sector - 1) this.nextCheckpoint++;
     me.checkpoint = this.nextCheckpoint - 1;
-    if (sector === this.nextCheckpoint - 1) me.dist = (me.lap - 1) * TRACK_LENGTH + p.lapDist;
-    if (wrapped && this.nextCheckpoint === CHECKPOINT_COUNT) {
+    if (sector === this.nextCheckpoint - 1) me.dist = (me.lap - 1) * trackLen + p.lapDist;
+    if (wrapped && this.nextCheckpoint === cpCount) {
       const lapMs = nowMs - this.lapStartTime;
       if (!me.bestLapMs || lapMs < me.bestLapMs) me.bestLapMs = lapMs;
       this.nextCheckpoint = 1;
@@ -351,11 +377,11 @@ export class RaceSim {
       if (me.lap >= this.laps) {
         me.finished = true;
         me.finishMs = nowMs - this.startedAt;
-        me.dist = this.laps * TRACK_LENGTH;
+        me.dist = this.laps * trackLen;
         return { lapped: true, finished: true };
       }
       me.lap += 1;
-      me.dist = (me.lap - 1) * TRACK_LENGTH + p.lapDist;
+      me.dist = (me.lap - 1) * trackLen + p.lapDist;
       return { lapped: true, finished: false };
     }
     return { lapped: false, finished: false };
@@ -429,6 +455,7 @@ export class RaceSim {
     this.isSolo = false;
     this.selectedHostId = '';
     this.localId = '';
+    this.track = 'city';
     this.racers.clear();
     this.countdownEndsAt = 0;
     this.startedAt = 0;

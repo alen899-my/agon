@@ -12,10 +12,9 @@ import { WindshieldRain } from './components/WindshieldRain';
 import { WorldControls } from './components/WorldControls';
 import { TableTennisControls } from './components/TableTennisControls';
 import { BasketballControls } from './components/BasketballControls';
-import { DistrictMap } from './components/DistrictMap';
+import { DistrictMap, WorldMap } from './components/DistrictMap';
 import { PhysicsChecklist } from './components/PhysicsChecklist';
-import { RaceCountdown, RaceDirectory, RaceFinishToast, RaceLeaderboard, RaceLobby, RaceResults, SoloRaceSetup } from './components/RaceUI';
-import { PLACES } from './world/Map';
+import { RaceCountdown, RaceDirectory, RaceFinishToast, RaceLeaderboard, RaceLobby, RaceResults, SoloRaceSetup, F1RaceDirectory, F1SoloSetup, F1Hud } from './components/RaceUI';
 import type { VehicleKind } from './world/Vehicles';
 import type { Theme } from './game/State';
 import type { WorldEngine, QualityLevel } from './world/WorldEngine';
@@ -74,6 +73,8 @@ export default function App() {
   const [linkCopied, setLinkCopied] = useState(false);
   const [raceOpen, setRaceOpen] = useState(false);
   const [raceTab, setRaceTab] = useState<'solo' | 'multi'>('solo');
+  const [f1RaceOpen, setF1RaceOpen] = useState(false);
+  const [f1RaceTab, setF1RaceTab] = useState<'solo' | 'multi'>('solo');
   const [raceLaps, setRaceLaps] = useState(3);
   const [raceCar, setRaceCar] = useState<VehicleKind>('super');
   const [gunHint, setGunHint] = useState('');
@@ -289,7 +290,7 @@ export default function App() {
     engine.current?.setAuthToken(session?.token ?? null);
     engine.current?.leaveRoomSession(); engine.current?.exitToIntro();
     if (session) saveSession({ token: session.token, name: session.name, id: session.id });
-    setRaceOpen(false); setCreated(null); setJoinedRoom(null); setCopied(false); setLinkCopied(false); setRoomCode(''); setMode('solo');
+    setRaceOpen(false); setF1RaceOpen(false); setCreated(null); setJoinedRoom(null); setCopied(false); setLinkCopied(false); setRoomCode(''); setMode('solo');
     pendingToken.current = null; setEnterNote('');
     try {
       if (session?.roomCode && session.token) await apiLeaveRoom(session.token, session.roomCode);
@@ -479,7 +480,7 @@ export default function App() {
           {state && <div className="hud-weather" role="status" aria-label={`${state.season}${state.weather === 'rain' ? ', raining — slippery roads' : state.weather === 'snow' ? ', snowing — very slippery roads' : ''}`}>{state.season === 'spring' ? '🌸 SPRING' : state.season === 'summer' ? '☀ SUMMER' : state.season === 'autumn' ? '🍂 AUTUMN' : '❄ WINTER'}{state.weather === 'rain' ? ' · 🌧 RAIN' : state.weather === 'snow' ? ' · ❄ SNOW' : ''}</div>}
           {state?.driving && <div className="hud-speed" aria-label="Speed"><b>{state?.speed ?? 0}<small>KM/H</small></b><span>{VEHICLES[state.vehicleKind].name} · {state.acceleration.toFixed(1)} m/s^2{(state?.damage ?? 0) > 0 ? ` · DMG ${state?.damage}%` : ''}</span><button className="hud-cycle" disabled={!active || Math.abs(state?.car.speed ?? 0) > 0.2} onClick={() => { engine.current?.cycleVehicle(); focus(); }} aria-label="Next vehicle">⇄</button></div>}
         </div>
-        <button className="hud-map-br" onClick={toggleMap} aria-label="Open district map"><DistrictMap state={state} theme={theme} raceActive={engine.current?.raceGuidanceActive ?? false} /></button>
+        {(engine.current?.race.track !== 'f1' || engine.current?.race.phase === 'idle') && <button className="hud-map-br" onClick={toggleMap} aria-label="Open district map"><DistrictMap state={state} theme={theme} raceActive={engine.current?.raceGuidanceActive ?? false} raceTrack={engine.current?.race.track} /></button>}
         {state?.mode === 'roam' && !state?.driving && (
           <div className={`hud-health${(state?.hp ?? 100) <= 30 ? ' low' : ''}`} role="status" aria-label={`Health ${state?.hp ?? 100} of 100`}>
             <span aria-hidden="true">♥</span><b>{state?.hp ?? 100}</b>
@@ -557,6 +558,9 @@ export default function App() {
             <button className="interact-button race-paddock" onClick={() => { setRaceTab('multi'); setRaceOpen(true); engine.current?.requestRaceDir(); }}>RACE PADDOCK</button>
           </>
         )}
+        {state?.mode === 'roam' && state?.nearF1Portal && engine.current?.race.phase === 'idle' && !raceOpen && !f1RaceOpen && (
+          <button className="interact-button race-paddock f1-paddock" onClick={() => { setF1RaceTab('multi'); setF1RaceOpen(true); engine.current?.requestRaceDir(); }}>HOST / JOIN F1 RACE</button>
+        )}
         {raceOpen && raceTab === 'solo' && (
           <SoloRaceSetup
             engine={engine.current}
@@ -582,12 +586,38 @@ export default function App() {
             onSwitchTab={() => setRaceTab('solo')}
           />
         )}
+        {f1RaceOpen && f1RaceTab === 'solo' && (
+          <F1SoloSetup
+            engine={engine.current}
+            raceCar={raceCar}
+            onCar={setRaceCar}
+            laps={raceLaps}
+            onLaps={setRaceLaps}
+            onStart={() => { setF1RaceOpen(false); focus(); }}
+            onClose={() => setF1RaceOpen(false)}
+            onSwitchTab={() => { setF1RaceTab('multi'); engine.current?.requestRaceDir(); }}
+          />
+        )}
+        {f1RaceOpen && f1RaceTab === 'multi' && (
+          <F1RaceDirectory
+            engine={engine.current}
+            inServer={!!state?.room}
+            raceCar={raceCar}
+            onCar={setRaceCar}
+            laps={raceLaps}
+            onLaps={setRaceLaps}
+            onClose={() => setF1RaceOpen(false)}
+            onJoined={() => { setF1RaceOpen(false); focus(); }}
+            onSwitchTab={() => setF1RaceTab('solo')}
+          />
+        )}
         {engine.current?.raceNotice && <div className="race-lobby" role="status">{engine.current.raceNotice}<button className="control" onClick={() => { if (engine.current) engine.current.raceNotice = ''; }}>DISMISS</button></div>}
-        <RaceLobby engine={engine.current} inServer={!!state?.room} onNeedServer={() => setRaceOpen(false)} />
+        <RaceLobby engine={engine.current} inServer={!!state?.room} onNeedServer={() => { setRaceOpen(false); setF1RaceOpen(false); }} />
         <RaceCountdown engine={engine.current} />
         <RaceLeaderboard engine={engine.current} />
+        <F1Hud engine={engine.current} state={state} drsOpen={!!state?.drsOpen} inPitLane={!!state?.inPitLane} racing={engine.current?.race.track === 'f1' && engine.current?.race.phase === 'racing'} />
         <RaceFinishToast engine={engine.current} />
-        <RaceResults engine={engine.current} onRematch={() => { const e = engine.current; if (!e || !e.race.isHost) return; e.rematchRace(); focus(); }} onExit={() => { engine.current?.leaveRace(); setRaceOpen(false); focus(); }} />
+        <RaceResults engine={engine.current} onRematch={() => { const e = engine.current; if (!e || !e.race.isHost) return; e.rematchRace(); focus(); }} onExit={() => { engine.current?.leaveRace(); setRaceOpen(false); setF1RaceOpen(false); focus(); }} />
         {state?.driving && state?.blinkerManual && (state?.blinker ?? 0) !== 0 && <div className="blinker-hud" role="status" aria-label="Turn signal">{state.blinker === 1 ? '◀ LEFT' : state.blinker === 2 ? 'RIGHT ▶' : '◀ HAZARD ▶'}</div>}
         {state?.driving && state?.wiperMode !== 'auto' && <div className="blinker-hud" role="status" aria-label={`Wipers ${state?.wiperMode}`}>💧 WIPERS {state?.wiperMode?.toUpperCase()}</div>}
         {state?.driving && state?.boostEnabled && (
@@ -604,13 +634,7 @@ export default function App() {
           : <WorldControls disabled={!active} driving={state?.driving ?? false} speed={state?.car.speed ?? 0} wiperMode={state?.wiperMode ?? 'auto'} boost={state?.boost ?? 100} boosting={state?.boosting ?? false} racing={state?.boostEnabled ?? false} armed={state?.armed ?? false} aiming={state?.aiming ?? false} onStick={(x, y) => engine.current?.joystick(x, y)} onInput={(action, down, source) => engine.current?.input(action, down, source)} onWipers={() => { engine.current?.cycleWipers(); focus(); }} onReload={() => { engine.current?.reloadGun(); focus(); }} onArm={() => { engine.current?.cycleGun(); focus(); }} />}
       </>}
       {state?.paused && !mapOpen && !physicsOpen && !menuOpen && <div className="pause-cover"><div><p className="eyebrow">THE CITY CAN WAIT</p><h2>A moment to yourself.</h2><button className="primary-button" onClick={() => { engine.current?.togglePause(); focus(); }}>KEEP EXPLORING <span>→</span></button></div></div>}
-      {mapOpen && <div className="map-cover"><div className="map-sheet" role="dialog" aria-labelledby="map-title">
-        <div className="map-heading"><div><p className="eyebrow">224 × 224 METERS / ONE CONNECTED NEIGHBORHOOD</p><h2 id="map-title">Make your own way.</h2></div><button className="control" onClick={toggleMap} aria-label="Close map">✕</button></div>
-        <div className="map-content"><DistrictMap state={state} large theme={theme} raceActive={engine.current?.raceGuidanceActive ?? false} /><div className="place-list">{PLACES.map((place, index) => <button key={place.id} onClick={() => { engine.current?.waypoint(place.id); toggleMap(); focus(); }}>
-          <span>{String(index + 1).padStart(2, '0')}</span><div><small>{place.category}</small><b>{place.name}</b><p>{place.description}</p></div><i>{state?.discovered.includes(place.id) ? '✓' : '↗'}</i>
-        </button>)}</div></div>
-        <p className="map-caption">Select a place to set a waypoint. Walk or drive there to discover it.</p>
-      </div></div>}
+      {mapOpen && <WorldMap state={state} raceActive={engine.current?.raceGuidanceActive ?? false} raceTrack={engine.current?.race.track} onClose={() => { toggleMap(); focus(); }} onPlace={id => engine.current?.waypoint(id)} onWaypoint={point => engine.current?.mapWaypoint(point)} />}
       {physicsOpen && !ready && <div className="physics-cover"><div className="physics-sheet" role="dialog" aria-label="Physics checklist"><div className="map-heading"><div><p className="eyebrow">REALISTIC PHYSICS · ONE BY ONE</p><h2>Systems online.</h2></div><button className="control" onClick={() => setPhysicsOpen(false)} aria-label="Close physics">✕</button></div><PhysicsChecklist state={state} /><p className="map-caption">Drive into walls, traffic and crowds to tick crash events. Repair at South Station.</p></div></div>}
       {portrait && !ready && <div className="rotate-cover"><span className="rotate-symbol">↻</span><p className="eyebrow">MORE ROOM TO EXPLORE</p><h2>Turn your world.</h2><p>Rotate your phone to landscape.<br />Your neighborhood will be waiting.</p><button className="primary-button" onClick={enterFullscreen}>GO FULLSCREEN <span>⛶</span></button></div>}
     </section>

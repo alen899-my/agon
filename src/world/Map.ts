@@ -1,5 +1,23 @@
 export { BUILD_LOTS } from '../../server/src/agents/livingWorld';
 import type { VehicleKind } from './Vehicles';
+import { F1_HALF, F1_ORIGIN, F1_PORTAL_CITY, f1HeightAt, f1OnTrack } from './F1Track';
+import { f1AccessProgress, onF1Access } from './F1Access';
+
+/** F1 island boundary (generous circle around the circuit + paddock). */
+export const F1_LIMIT = { x: F1_ORIGIN.x, z: 20, r: 420 };
+/** True when (x,z) is on the separate F1 island (not the city). */
+export function onF1Island(x: number, z: number): boolean {
+  return Math.hypot(x - F1_LIMIT.x, z - F1_LIMIT.z) < F1_LIMIT.r;
+}
+function f1IslandHeight(x: number, z: number): number {
+  if (!onF1Island(x, z)) return 0;
+  return f1HeightAt(x, z);
+}
+/** F1 asphalt check (for physics/road queries on the island). */
+export function onF1Track(x: number, z: number): boolean {
+  if (!onF1Island(x, z)) return false;
+  return f1OnTrack(x, z, F1_HALF + 1.5);
+}
 
 export interface Point { x: number; z: number }
 export interface Box extends Point { w: number; d: number; h: number }
@@ -12,6 +30,8 @@ export const ROAD_HALF = 8.5;
 export const RACE_CLEARANCE = 11;
 /** True when (x,z) sits on any road band (centerlines ROADS, half-width half). */
 export function onRoad(x: number, z: number, half = ROAD_HALF): boolean {
+  if (onF1Access(x, z, half)) return true;
+  if (x > LIMIT) return onF1Track(x, z);
   return ROADS.some((line) => Math.abs(x - line) < half || Math.abs(z - line) < half);
 }
 export const PLACES: Place[] = [
@@ -27,6 +47,8 @@ export const PLACES: Place[] = [
   { id: 'heights', name: 'North Heights', category: 'NEIGHBORHOOD', x: -48, z: 105, description: 'New shops and homes above the old blocks.' },
   { id: 'falls', name: 'Harbor Falls', category: 'LANDMARK', x: 104, z: -122, description: 'A roaring cascade where the docks meet the rocks.' },
   { id: 'garden', name: 'Heights Garden', category: 'PARK', x: 30, z: 99, description: 'A quiet statue garden between the new shops.' },
+  { id: 'f1-portal', name: 'F1 Circuit Entrance', category: 'RACING ARENA', ...F1_PORTAL_CITY, description: 'Circuit reception on the east access road. Entry to the circuit and return lanes to the city.' },
+  { id: 'f1-circuit', name: 'F1 Circuit', category: 'RACING CIRCUIT', x: F1_ORIGIN.x, z: -110, description: 'Start/finish straight, pit lane and hillside circuit. Host or join a race anywhere at the track.' },
 ];
 
 /** Neon Paddock race arena anchor (north edge, off the racing line). */
@@ -161,8 +183,17 @@ function bridgeHeightAt(x: number, z: number): number | null {
 }
 /** Walkable/drivable surface height at (x,z) for a body currently at height
  *  y: the deck only counts when you are already up on it (within 1.2m), so
- *  feet strolling the promenade below never snap up onto the span. */
+ *  feet strolling the promenade below never snap up onto the span.
+ *  The F1 circuit east of the city reports its own spline elevation. */
 export function groundHeight(x: number, z: number, y = 0): number {
+  const access = f1AccessProgress(x, z);
+  if (access.distance <= 10.5) return access.height;
+  // Separate F1 island: spline elevation when far east of the city.
+  if (x > LIMIT) {
+    // Lazy import target lives in F1Track (no cycle: F1Track never imports Map).
+    // Inlined island check first so city hot-loop cost stays zero.
+    return f1IslandHeight(x, z);
+  }
   const b = bridgeHeightAt(x, z);
   if (b !== null && Math.abs(b - y) <= 1.2) return b;
   if (inPromenade(x, z)) return 0;

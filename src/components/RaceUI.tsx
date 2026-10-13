@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import type { WorldEngine } from '../world/WorldEngine';
 import { formatRaceTime } from '../world/Track';
 import { lightStage } from '../world/RaceSim';
+import { F1_LENGTH, F1_ORIGIN, F1_HALF, f1AtPitBox, f1PathAt, f1Progress, f1InDrs } from '../world/F1Track';
+import type { WorldSnapshot } from '../world/Simulation';
 import { VEHICLES, VEHICLE_KINDS, type VehicleKind } from '../world/Vehicles';
 
 /** Live standings panel (top-right, mobile-first, theme via CSS vars). */
@@ -9,9 +11,10 @@ export function RaceLeaderboard({ engine }: { engine: WorldEngine | null }) {
   if (!engine || engine.race.phase === 'idle' || engine.race.phase === 'lobby') return null;
   const order = engine.race.standings();
   const laps = engine.race.laps;
+  const trackLabel = engine.race.track === 'f1' ? 'F1 CIRCUIT' : 'CITY LOOP';
   return (
     <div className="race-board" role="status" aria-label="Live race leaderboard">
-      <b>RACE · {laps} LAP{laps > 1 ? 'S' : ''}</b>
+      <b>RACE · {trackLabel} · {laps} LAP{laps > 1 ? 'S' : ''}</b>
       <ol>
         {order.map((r, i) => (
           <li key={r.id} className={r.id === engine.raceId ? 'me' : ''}>
@@ -60,7 +63,7 @@ export function RaceDirectory({ engine, inServer, raceCar, onCar, laps, onLaps, 
     return () => window.clearInterval(t);
   }, [engine]);
   if (!engine || engine.race.phase !== 'idle') return null;
-  const races = engine.raceDir;
+  const races = engine.raceDir.filter((r) => (r.track ?? 'city') === 'city');
   const canHost = inServer;
   return (
     <div className="race-setup" role="dialog" aria-label="Neon paddock race directory">
@@ -228,7 +231,7 @@ export function RaceResults({ engine, onRematch, onExit }: { engine: WorldEngine
         </h2>
         {winner && !winner.dnf && (
           <p className="race-win-sub">
-            {engine.race.laps} LAP{engine.race.laps > 1 ? 'S' : ''} · WON IN {formatRaceTime(winner.totalMs)} · {finishedCount}/{results.length} FINISHED
+            {engine.race.track === 'f1' ? 'F1 CIRCUIT · ' : ''}{engine.race.laps} LAP{engine.race.laps > 1 ? 'S' : ''} · WON IN {formatRaceTime(winner.totalMs)} · {finishedCount}/{results.length} FINISHED
           </p>
         )}
         {podium.length > 1 && (
@@ -264,7 +267,7 @@ export function RaceResults({ engine, onRematch, onExit }: { engine: WorldEngine
         </ol>
         <div className="race-actions">
           {engine.race.isHost && final && <button className="primary-button" onClick={onRematch}>REMATCH <span>→</span></button>}
-          <button className="control" onClick={onExit}>{final ? 'BACK TO CITY' : 'EXIT RACE'}</button>
+          <button className="control" onClick={onExit}>{final ? (engine.race.track === 'f1' ? 'BACK TO PADDOCK' : 'BACK TO CITY') : 'EXIT RACE'}</button>
         </div>
       </div>
     </div>
@@ -283,12 +286,13 @@ export function RaceLobby({ engine, inServer, onNeedServer }: LobbyProps) {
   if (engine.race.phase !== 'lobby') return null;
   const racers = [...engine.race.racers.values()];
   const isHost = engine.race.isHost;
+  const isF1 = engine.race.track === 'f1';
   return (
     <div className="race-lobby" role="dialog" aria-label="Race lobby">
       <div className="race-lobby-head">
         <div>
-          <p className="eyebrow">NEON PADDOCK · RACE LOBBY</p>
-          <b>{racers.length}/8 RACERS · MIN 2 · ALL READY TO START</b>
+          <p className="eyebrow">{isF1 ? 'F1 CIRCUIT · RACE LOBBY' : 'NEON PADDOCK · RACE LOBBY'}</p>
+          <b>{isF1 ? 'F1 · ' : ''}{racers.length}/8 RACERS · MIN 2 · ALL READY TO START</b>
         </div>
         <button className="control" onClick={() => engine.leaveRace()} aria-label="Leave race">✕</button>
       </div>
@@ -374,6 +378,166 @@ export function RaceFinalLapBanner({ engine }: { engine: WorldEngine | null }) {
 export function RaceTurnNavigator({ engine }: { engine: WorldEngine | null }) {
   void engine;
   return null;
+}
+
+/** F1 portal directory: separate arena, same lobby workflow, island circuit. */
+export function F1RaceDirectory({ engine, inServer, raceCar, onCar, laps, onLaps, onClose, onJoined, onSwitchTab }: {
+  engine: WorldEngine | null; inServer: boolean; raceCar: VehicleKind; onCar: (k: VehicleKind) => void;
+  laps: number; onLaps: (n: number) => void; onClose: () => void; onJoined: () => void;
+  onSwitchTab?: () => void;
+}) {
+  useEffect(() => {
+    engine?.requestRaceDir();
+    const t = window.setInterval(() => engine?.requestRaceDir(), 3000);
+    return () => window.clearInterval(t);
+  }, [engine]);
+  if (!engine || engine.race.phase !== 'idle') return null;
+  const races = engine.raceDir.filter((r) => (r.track ?? 'city') === 'f1');
+  const canHost = inServer;
+  return (
+    <div className="race-setup" role="dialog" aria-label="F1 circuit race directory">
+      <div className="race-setup-head">
+        <div><p className="eyebrow">F1 CIRCUIT · HILLSIDE ARENA</p><h2>Curvy, hilly, DRS.</h2></div>
+        <button className="control" onClick={onClose} aria-label="Close F1 race directory">✕</button>
+      </div>
+      <div className="race-mode-tabs">
+        {onSwitchTab && <button onClick={onSwitchTab}>SOLO (vs AI)</button>}
+        <button className="on" disabled>MULTIPLAYER</button>
+      </div>
+      <p>F1 circuit · hills + DRS + pit lane · min 2 racers · host sets laps · all ready starts.</p>
+      {!inServer && <p className="race-warn">Join a server first — F1 lobbies live inside your server code.</p>}
+      {races.length > 0 ? (
+        <div className="race-dir-list">
+          <b>F1 RACES · {races.length}</b>
+          <ul>
+            {races.map((r) => (
+              <li key={r.hostId}>
+                <div><b>{r.hostName}</b><small>F1 · {r.laps} LAP{r.laps > 1 ? 'S' : ''} · {r.count}/8 · {r.phase === 'countdown' ? 'STARTING' : 'LOBBY'}</small></div>
+                <button className="control" disabled={!inServer || r.count >= 8 || r.phase !== 'lobby'} onClick={() => {
+                  if (engine.joinF1RaceByHost(r.hostId, raceCar)) onJoined();
+                }}>
+                  {r.count >= 8 ? 'FULL' : r.phase !== 'lobby' ? 'LIVE' : 'JOIN'}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        <p className="race-hint">{inServer ? 'No F1 races yet — host the first one below.' : 'No directory offline. Join a server to see F1 races.'}</p>
+      )}
+      <RaceCarPicker value={raceCar} onChange={onCar} />
+      <div className="race-laps"><span>LAPS (HOST)</span>
+        <button className="control" disabled={laps <= 1} onClick={() => onLaps(laps - 1)} aria-label="Fewer laps">−</button>
+        <b>{laps}</b>
+        <button className="control" disabled={laps >= 10} onClick={() => onLaps(laps + 1)} aria-label="More laps">+</button>
+      </div>
+      <div className="race-actions">
+        <button className="primary-button" disabled={!canHost} onClick={() => {
+          if (engine.createF1Race(laps, raceCar)) onJoined();
+        }}>HOST F1 RACE <span>→</span></button>
+      </div>
+      {!canHost && <small className="race-hint">Hosting needs a server — create or join one from the intro.</small>}
+    </div>
+  );
+}
+
+/** F1 solo setup: same options, island circuit, ERS + DRS. No server needed. */
+export function F1SoloSetup({ engine, raceCar, onCar, laps, onLaps, onStart, onClose, onSwitchTab }: {
+  engine: WorldEngine | null;
+  raceCar: VehicleKind; onCar: (k: VehicleKind) => void;
+  laps: number; onLaps: (n: number) => void;
+  onStart: () => void; onClose: () => void;
+  onSwitchTab?: () => void;
+}) {
+  const [cpuCount, setCpuCount] = useState(1);
+  const [difficulty, setDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium');
+  if (!engine || engine.race.phase !== 'idle') return null;
+  return (
+    <div className="race-setup" role="dialog" aria-label="F1 solo race setup">
+      <div className="race-setup-head">
+        <div>
+          <p className="eyebrow">F1 CIRCUIT · SOLO RACE</p>
+          <h2>Hills, DRS, pit lane.</h2>
+        </div>
+        <button className="control" onClick={onClose} aria-label="Close F1 solo race setup">✕</button>
+      </div>
+      <div className="race-mode-tabs">
+        <button className="on" disabled>SOLO (vs AI)</button>
+        {onSwitchTab && <button onClick={onSwitchTab}>MULTIPLAYER</button>}
+      </div>
+      <p>F1 circuit · race CPU opponents offline · ERS boost + DRS on straights · pit lane repairs.</p>
+      <RaceCarPicker value={raceCar} onChange={onCar} />
+      <div className="race-option-row">
+        <span>OPPONENTS</span>
+        <div className="race-pill-group">
+          {([1, 2, 3] as const).map((n) => (
+            <button key={n} className={`control${cpuCount === n ? ' on' : ''}`} onClick={() => setCpuCount(n)} aria-pressed={cpuCount === n}>
+              {n} CPU
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="race-option-row">
+        <span>DIFFICULTY</span>
+        <div className="race-pill-group">
+          {(['easy', 'medium', 'hard'] as const).map((d) => (
+            <button key={d} className={`control${difficulty === d ? ' on' : ''}`} onClick={() => setDifficulty(d)} aria-pressed={difficulty === d}>
+              {d === 'easy' ? '🟢 EASY' : d === 'medium' ? '🟡 MEDIUM' : '🔴 HARD'}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="race-laps"><span>LAPS</span>
+        <button className="control" disabled={laps <= 1} onClick={() => onLaps(laps - 1)} aria-label="Fewer laps">−</button>
+        <b>{laps}</b>
+        <button className="control" disabled={laps >= 10} onClick={() => onLaps(laps + 1)} aria-label="More laps">+</button>
+      </div>
+      <div className="race-actions">
+        <button className="primary-button" onClick={() => {
+          if (engine.startSoloF1Race(laps, raceCar, cpuCount, difficulty)) onStart();
+        }}>
+          RACE F1 <span>→</span>
+        </button>
+      </div>
+      <small className="race-hint">DRS opens on straights at full throttle. Pit lane caps speed and repairs when you stop.</small>
+    </div>
+  );
+}
+
+/** Circuit geometry is shared with the in-world road and race progress. */
+const F1_MAP_POINTS = Array.from({ length: 241 }, (_, i) => {
+  const p = f1PathAt(i / 240 * F1_LENGTH);
+  return `${p.x - F1_ORIGIN.x},${p.z}`;
+}).join(' ');
+
+export function F1Hud({ drsOpen, inPitLane, racing, state, engine }: { drsOpen: boolean; inPitLane: boolean; racing: boolean; state: WorldSnapshot | null; engine: WorldEngine | null }) {
+  if (!racing || !state) return null;
+  const progress = f1Progress(state.car.x, state.car.z);
+  const offTrack = !inPitLane && progress.lateral > F1_HALF + 1.2;
+  const drsAvailable = f1InDrs(progress.lapDist) && !inPitLane && !offTrack;
+  return (
+    <aside className="f1-hud" aria-label="Circuit telemetry">
+      <svg className="f1-map" viewBox="-285 -145 575 325" role="img" aria-label="Circuit map: you in red, opponents in cyan">
+        <polyline points={F1_MAP_POINTS} fill="none" stroke="#60656a" strokeWidth="12" strokeLinejoin="round" />
+        <polyline points={F1_MAP_POINTS} fill="none" stroke="#e3e7ea" strokeWidth="3" />
+        <path d="M 0 -122 V -98" stroke="#ffffff" strokeWidth="5" />
+        {engine?.raceMapOpponents.map(opponent => (
+          <circle key={opponent.id} cx={opponent.x - F1_ORIGIN.x} cy={opponent.z} r="8" fill="#36d9ee" stroke="#152126" strokeWidth="3">
+            <title>{opponent.name}</title>
+          </circle>
+        ))}
+        <circle cx={state.car.x - F1_ORIGIN.x} cy={state.car.z} r="9" fill="#ff354f" stroke="#fff" strokeWidth="3"><title>You</title></circle>
+      </svg>
+      <div className="f1-telemetry"><strong>{Math.round(Math.abs(state.car.speed) * 3.6)}<small>KM/H</small></strong><span>{(F1_LENGTH / 1000).toFixed(2)} KM<br />{Math.round(progress.lapDist / F1_LENGTH * 100)}% LAP</span></div>
+      <div className="f1-status" role="status">
+        <span className={drsOpen ? 'f1-drs' : ''}>{drsOpen ? 'DRS OPEN' : drsAvailable ? 'DRS ZONE' : 'DRS CLOSED'}</span>
+        {inPitLane && <span className="f1-pit">PIT LIMIT 80 KM/H</span>}
+        {inPitLane && f1AtPitBox(progress) && Math.abs(state.car.speed) < 0.5 && <span className="f1-pit">PIT BOX</span>}
+        {offTrack && <span className="f1-warning">OFF TRACK</span>}
+      </div>
+      <label className="f1-energy">ERS <meter min={0} max={150} value={state.boost} aria-label="ERS charge" />{Math.round(Math.min(150, state.boost) / 1.5)}%</label>
+    </aside>
+  );
 }
 
 

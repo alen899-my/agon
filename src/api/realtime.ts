@@ -34,6 +34,7 @@ export interface RaceSnapshotMsg {
   sentAt: number;
   phase: 'idle' | 'lobby' | 'countdown' | 'racing' | 'finished';
   laps: number;
+  track?: 'city' | 'f1';
   countdownEndsAt: number;
   startedAt: number;
   racers: { id: string; name: string; ready: boolean; vehicleKind: string; lap: number; checkpoint: number; dist: number; finished: boolean; finishMs: number; bestLapMs: number }[];
@@ -59,6 +60,7 @@ export interface RaceDirEntry {
   laps: number;
   count: number;
   phase: RaceSnapshotMsg['phase'];
+  track: 'city' | 'f1';
 }
 
 /** Client-observed crime attributed to the sender (server validates + scores). */

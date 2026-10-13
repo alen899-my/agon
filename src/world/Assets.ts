@@ -1,6 +1,8 @@
 import type { Appearance, BuildSite } from '../../server/src/agents/livingWorld';
 import { type VehicleKind } from './Vehicles';
 import { buildVehicle } from './VehicleFactory';
+import { F1_PORTAL_CITY } from './F1Track';
+import { F1_ACCESS_HALF, F1_ACCESS_LENGTH, F1_ACCESS_RAIL_START, F1_ACCESS_RAIL_END, F1_ACCESS_SAMPLES, f1AccessProgress } from './F1Access';
 import * as THREE from 'three';
 import { BENCHES, BRIDGE, BUILDINGS, CANAL, FALLS, FREE_THROW_DIST, GAME_CENTER, GARDEN_STATUE, HARBOR_STATUE, HOOP, LAMPS, PROMENADE, RACE_ARENA, RACE_SHOW_CARS, RACE_SLAB, RIM, ROADS, ROAD_GAP, TABLE, TREES, WATER_Y, groundHeight, seeded } from './Map';
 
@@ -329,15 +331,74 @@ export function buildMap(scene: THREE.Scene, kit: AssetKit): void {
   for (const [x, z] of [[-30, 68], [-44, 68], [-60, 68]]) {
     box('wall1', x, 1.5, z, 10, 3, 4); box('white', x, 3.05, z, 10.1, 0.1, 4.1);
   }
-  for (const x of [-166, 166]) box('metal', x, 0.55, 0, 0.3, 1.1, 332);
+  box('metal', -166, 0.55, 0, 0.3, 1.1, 332);
+  // Leave both access lanes and their shoulders clear of the old city fence.
+  const entranceZ = F1_ACCESS_SAMPLES[0].z;
+  const openingHalf = F1_ACCESS_HALF + 3;
+  for (const [start, end] of [[-166, entranceZ - openingHalf], [entranceZ + openingHalf, 166]]) {
+    box('metal', 166, 0.55, (start + end) / 2, 0.3, 1.1, end - start);
+  }
   for (const z of [-166, 166]) box('metal', 0, 0.55, z, 332, 1.1, 0.3);
   buildGameCenter(scene, kit, box);
   buildBasketballCourt(scene, kit, box);
   buildRaceArena(scene, kit, box);
+  buildF1Portal(scene, kit);
   buildHarbor(scene, kit, box);
   buildGarden(scene, kit, box);
   buildCanalBridge(scene, kit);
   kit.flush(scene);
+}
+
+/** Two-way circuit access: black asphalt, directional lanes and a reception gantry. */
+export function buildF1Portal(scene: THREE.Scene, kit: AssetKit): void {
+  const asphalt = new THREE.MeshStandardMaterial({ color: 0x171819, roughness: 0.97 });
+  kit.extra.push(asphalt);
+  const strip = (left: number, right: number, lift: number, material: THREE.Material, trimmed = false) => {
+    const vertices: number[] = [], indices: number[] = [];
+    F1_ACCESS_SAMPLES.forEach((p, i) => {
+      for (const lane of [left, right]) vertices.push(p.x + Math.cos(p.yaw) * lane, p.y + lift, p.z + Math.sin(p.yaw) * lane);
+      if (i < F1_ACCESS_SAMPLES.length - 1 && (!trimmed || p.dist > 28 && p.dist < F1_ACCESS_LENGTH - 30)) {
+        const a = i * 2;
+        indices.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+      }
+    });
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+    geo.setIndex(indices); geo.computeVertexNormals(); kit.extra.push(geo);
+    const mesh = new THREE.Mesh(geo, material); mesh.receiveShadow = true; scene.add(mesh);
+  };
+  strip(-15, 15, -0.14, kit.materials.leaf);
+  strip(-10.5, 10.5, -0.025, kit.materials.pavement);
+  strip(-8.5, 8.5, 0.026, asphalt);
+  strip(-8.1, -7.95, 0.035, kit.materials.white, true);
+  strip(7.95, 8.1, 0.035, kit.materials.white, true);
+  strip(-0.22, -0.08, 0.037, kit.materials.white, true);
+  strip(0.08, 0.22, 0.037, kit.materials.white, true);
+  for (let i = 0; i + 3 < F1_ACCESS_SAMPLES.length; i += 3) {
+    const p = F1_ACCESS_SAMPLES[i], next = F1_ACCESS_SAMPLES[i + 3];
+    if (p.dist < F1_ACCESS_RAIL_START || next.dist > F1_ACCESS_RAIL_END) continue;
+    const length = Math.hypot(next.x - p.x, next.z - p.z);
+    for (const side of [-1, 1]) {
+      const x = (p.x + next.x) / 2 + Math.cos(p.yaw) * side * 9.5;
+      const z = (p.z + next.z) / 2 + Math.sin(p.yaw) * side * 9.5;
+      kit.stamp('box', 'metal', x, p.y + 0.65, z, 0.22, 0.30, length + 0.1, -p.yaw);
+      kit.stamp('box', 'ink', x, p.y + 0.34, z, 0.13, 0.68, 0.13);
+    }
+    if (i % 30 !== 12) continue;
+    for (const side of [-1, 1]) {
+      const yaw = p.yaw + (side < 0 ? Math.PI : 0);
+      const x = p.x + Math.cos(p.yaw) * side * 4.2, z = p.z + Math.sin(p.yaw) * side * 4.2;
+      kit.stamp('box', 'white', x, p.y + 0.04, z, 0.18, 0.012, 2.5, -yaw);
+      for (const arm of [-1, 1]) kit.stamp('box', 'white', x + Math.sin(yaw) * 1.1 + Math.cos(yaw) * arm * 0.35, p.y + 0.04, z - Math.cos(yaw) * 1.1 + Math.sin(yaw) * arm * 0.35, 0.15, 0.012, 1, -yaw + arm * Math.PI / 4);
+    }
+  }
+  const { x: px, z: pz } = F1_PORTAL_CITY;
+  const gate = f1AccessProgress(px, pz);
+  for (const side of [-1, 1]) kit.stamp('box', 'ink', px + Math.cos(gate.yaw) * side * 10, gate.height + 3.2, pz + Math.sin(gate.yaw) * side * 10, 0.5, 6.4, 0.5);
+  kit.stamp('box', 'ink', px, gate.height + 6.2, pz, 20.5, 0.45, 0.5, -gate.yaw);
+  kit.sign(scene, 'F1 CIRCUIT / ENTRY', px + Math.cos(gate.yaw) * 4.2 - Math.sin(gate.yaw) * 0.3, gate.height + 5.3, pz + Math.sin(gate.yaw) * 4.2 + Math.cos(gate.yaw) * 0.3, 7.5, -gate.yaw);
+  kit.sign(scene, 'CITY / EXIT', px - Math.cos(gate.yaw) * 4.2 + Math.sin(gate.yaw) * 0.3, gate.height + 5.3, pz - Math.sin(gate.yaw) * 4.2 - Math.cos(gate.yaw) * 0.3, 7.5, -gate.yaw + Math.PI);
+  kit.sign(scene, 'F1 CIRCUIT  >', 152, 3.2, 92, 8, 0);
 }
 
 /** Grand Canal + Canal Bridge: sunken water basin under an elevated two-lane

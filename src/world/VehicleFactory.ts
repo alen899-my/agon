@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { VEHICLES, VEHICLE_WHEELS, pickVehiclePaint, type VehicleKind, type VehicleSpec, type WheelStyle } from './Vehicles';
+import { VEHICLES, VEHICLE_WHEELS, pickVehiclePaint, vehicleSteeringAngle, type VehicleKind, type VehicleSpec, type WheelStyle } from './Vehicles';
 
 /**
  * Procedural, low-poly-budget vehicle factory (no GLB / image files).
@@ -61,6 +61,7 @@ const SIL = {
 type SilName = keyof typeof SIL;
 
 const STYLE: Record<VehicleKind, SilName> = {
+  f1: 'mid',
   car: 'sedan', hatch: 'hatch', taxi: 'sedan', police: 'sedan', sport: 'fast', muscle: 'muscle', super: 'mid', convertible: 'roadster',
   suv: 'suv', pickup: 'pickup', van: 'van', minivan: 'minivan', ambulance: 'rig', fire: 'rig', boxTruck: 'rig', bus: 'bus',
   hyper: 'mid', track: 'fast', rally: 'sedan', drift: 'fast', classic: 'classic', egt: 'fast', coupe: 'coupe', wagon: 'wagon',
@@ -161,6 +162,7 @@ function wheelRadius(kind: VehicleKind, spec: VehicleSpec): number {
  * razor-thin — worst at full steering lock). Exported for unit tests.
  */
 export function wheelDims(kind: VehicleKind, spec: VehicleSpec): { WR: number; tireW: number; rimR: number } {
+  if (kind === 'f1') return { WR: 0.36, tireW: 0.305, rimR: 0.229 };
   const WR = wheelRadius(kind, spec);
   const style = VEHICLE_WHEELS[kind];
   const factor = style === 'sport' ? 0.8 : style === 'offroad' ? 0.8 : style === 'dually' ? 0.75 : 0.7;
@@ -175,7 +177,7 @@ export interface WiperAnchor { x: number; y: number; z: number; tilt: number; re
 interface Model {
   parts: Map<string, THREE.BufferGeometry>;
   wheels: Record<'-1' | '1', Map<string, THREE.BufferGeometry>>;
-  wheelPos: { x: number; z: number; front: boolean }[];
+  wheelPos: { x: number; z: number; front: boolean; widthScale?: number }[];
   WR: number; style: WheelStyle;
   eye: THREE.Vector3; steerPos: THREE.Vector3; steerTilt: number;
   doors: { x: number; y: number; z: number; dl: number; dh: number }[];
@@ -209,7 +211,133 @@ function cached<T extends { dispose: () => void }>(kit: KitLike, key: string, ma
 // ------------------------------------------------------------------------------------------------
 // Build the shared model for one kind (runs once per kind per kit).
 // ------------------------------------------------------------------------------------------------
+/** Formula chassis in metres; forward is -Z, matching the vehicle controller. */
+function buildFormulaModel(kit: KitLike): Model {
+  const P = new Parts();
+  const box = (role: string, x: number, y: number, z: number, w: number, h: number, d: number, pitch = 0) =>
+    P.add(role, kit.geometry.box, x, y, z, w, h, d, pitch);
+  const add = (role: string, geometry: THREE.BufferGeometry) => {
+    P.add(role, geometry, 0, 0, 0, 1, 1, 1);
+    geometry.dispose();
+  };
+  // Closed elliptical cross sections give the nose and cooling bodywork a smooth silhouette.
+  const loft = (role: string, cx: number, sections: number[][]) => {
+    const positions: number[] = [], uv: number[] = [], indices: number[] = [];
+    const sides = 16;
+    sections.forEach(([z, y, width, height], station) => {
+      for (let j = 0; j <= sides; j++) {
+        const a = j / sides * Math.PI * 2;
+        positions.push(cx + Math.cos(a) * width, y + Math.sin(a) * height, z);
+        uv.push(j / sides, station / (sections.length - 1));
+        if (station < sections.length - 1 && j < sides) {
+          const n = station * (sides + 1) + j;
+          indices.push(n, n + 1, n + sides + 1, n + 1, n + sides + 2, n + sides + 1);
+        }
+      }
+    });
+    for (let j = 1; j < sides - 1; j++) {
+      indices.push(0, j + 1, j);
+      const end = (sections.length - 1) * (sides + 1);
+      indices.push(end, end + j, end + j + 1);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
+    add(role, geo);
+  };
+  const tube = (role: string, points: number[][], radius: number, curved = false) => {
+    const vertices = points.map(p => new THREE.Vector3(p[0], p[1], p[2]));
+    const path = curved ? new THREE.CatmullRomCurve3(vertices) : new THREE.LineCurve3(vertices[0], vertices[1]);
+    add(role, new THREE.TubeGeometry(path, curved ? 28 : 1, radius, 8, false));
+  };
+
+  box('carbon', 0, 0.16, 0.55, 1.48, 0.07, 3.15);
+  box('carbon', 0, 0.115, 0.2, 0.28, 0.035, 3.7);
+  loft('paint', 0, [[-2.55, 0.34, 0.09, 0.055], [-2.1, 0.43, 0.14, 0.10], [-1.35, 0.57, 0.23, 0.18], [-0.7, 0.61, 0.34, 0.22]]);
+  box('accent', 0, 0.757, -1.12, 0.065, 0.014, 0.65, 0.075);
+  // The cockpit is hollow: a low tub, two padded sides and a rear bulkhead.
+  box('carbon', 0, 0.29, -0.12, 0.67, 0.16, 1.35);
+  box('seat', 0, 0.43, 0.10, 0.36, 0.14, 0.54);
+  box('carbon', 0, 0.64, 0.44, 0.48, 0.53, 0.12, -0.23);
+  for (const side of [-1, 1]) {
+    loft('paint', side * 0.32, [[-0.76, 0.6, 0.08, 0.2], [-0.4, 0.59, 0.085, 0.17], [0.24, 0.64, 0.085, 0.2], [0.59, 0.67, 0.10, 0.22]]);
+    box('carbon', side * 0.265, 0.77, 0.28, 0.09, 0.08, 0.36);
+    loft('paint', side * 0.56, [[-0.36, 0.48, 0.16, 0.13], [-0.06, 0.49, 0.24, 0.19], [0.5, 0.43, 0.25, 0.2], [1.15, 0.32, 0.18, 0.13], [1.63, 0.25, 0.07, 0.055]]);
+    box('carbon', side * 0.56, 0.51, -0.375, 0.28, 0.15, 0.035);
+    box('accent', side * 0.77, 0.44, 0.40, 0.012, 0.055, 0.73);
+    box('carbon', side * 0.78, 0.2, 0.45, 0.045, 0.075, 2.5);
+    for (let k = 0; k < 6; k++) box('carbon', side * 0.47, 0.652 - k * 0.018, 0.16 + k * 0.11, 0.23, 0.016, 0.032, -0.12);
+    tube('carbon', [[side * 0.31, 0.68, -0.6], [side * 0.61, 0.79, -0.54]], 0.018);
+    box('paint', side * 0.64, 0.8, -0.54, 0.18, 0.09, 0.13);
+    box('metal', side * 0.64, 0.8, -0.468, 0.14, 0.06, 0.01);
+  }
+  loft('paint', 0, [[0.48, 0.74, 0.24, 0.28], [0.86, 0.67, 0.27, 0.29], [1.33, 0.51, 0.21, 0.22], [1.95, 0.37, 0.10, 0.1]]);
+  loft('paint', 0, [[0.47, 1.02, 0.14, 0.17], [0.74, 1.02, 0.12, 0.18], [1.22, 0.79, 0.065, 0.12]]);
+  box('carbon', 0, 1.07, 0.455, 0.19, 0.14, 0.023);
+  box('paint', 0, 0.83, 1.1, 0.027, 0.30, 0.70, 0.3);
+  // Halo hoop and its central titanium support leave both sightlines open.
+  tube('carbon', [[-0.31, 0.83, 0.43], [-0.37, 1.06, 0.16], [-0.29, 1.1, -0.42], [0, 1.07, -0.68], [0.29, 1.1, -0.42], [0.37, 1.06, 0.16], [0.31, 0.83, 0.43]], 0.034, true);
+  tube('carbon', [[0, 0.74, -0.65], [0, 1.07, -0.68]], 0.029);
+
+  // Separate wing elements retain visible slots between the aero surfaces.
+  for (let element = 0; element < 4; element++) {
+    box(element === 0 ? 'carbon' : 'paint', 0, 0.22 + element * 0.039, -2.59 + element * 0.135, 1.88 - element * 0.075, 0.028, 0.115, -0.13);
+  }
+  for (const side of [-1, 1]) {
+    box('paint', side * 0.94, 0.32, -2.37, 0.045, 0.24, 0.55);
+    tube('carbon', [[side * 0.13, 0.36, -2.22], [side * 0.17, 0.22, -2.5]], 0.022);
+    box('carbon', side * 0.72, 0.84, 2.35, 0.04, 0.54, 0.53);
+    tube('carbon', [[side * 0.17, 0.35, 1.94], [side * 0.2, 0.98, 2.26]], 0.025);
+  }
+  box('carbon', 0, 0.96, 2.27, 1.45, 0.045, 0.31, -0.13);
+  box('paint', 0, 1.08, 2.49, 1.40, 0.045, 0.21, -0.24);
+  box('accent', 0, 1.108, 2.49, 0.62, 0.009, 0.12, -0.24);
+  box('carbon', 0, 0.45, 2.28, 1.18, 0.028, 0.25, -0.15);
+  box('carbon', 0, 0.23, 2.05, 1.2, 0.05, 0.7, -0.19);
+  for (let i = -3; i <= 3; i++) box('carbon', i * 0.17, 0.22, 2.13, 0.022, 0.20, 0.56, -0.12);
+  box('carbon', 0, 0.42, 2.36, 0.18, 0.17, 0.19);
+  box('brake', 0, 0.43, 2.465, 0.105, 0.105, 0.012);
+  tube('metal', [[0, 0.52, 1.75], [0, 0.52, 2.2]], 0.055);
+
+  const wheelPos: Model['wheelPos'] = [];
+  for (const front of [true, false]) for (const side of [-1, 1]) {
+    const z = front ? -1.64 : 1.72;
+    const width = front ? 0.305 : 0.405;
+    const x = side * (1 - width / 2);
+    wheelPos.push({ x, z, front, widthScale: width / 0.305 });
+    for (const y of [0.30, 0.52]) for (const offset of [-0.30, 0.30]) {
+      tube('carbon', [[side * 0.22, y + 0.06, z + offset], [x, y, z]], 0.016);
+    }
+    tube('metal', [[side * 0.27, 0.65, z + 0.12], [x, 0.30, z]], 0.012);
+    box('carbon', side * 0.65, 0.43, z - 0.02, 0.10, 0.17, 0.15);
+  }
+  const wheels = {} as Model['wheels'];
+  const cylinder = new THREE.CylinderGeometry(1, 1, 1, 48);
+  const ring = new THREE.TorusGeometry(0.294, 0.006, 6, 48);
+  for (const side of [-1, 1] as const) {
+    const W = new Parts();
+    W.add('tyre', cylinder, 0, 0, 0, 0.36, 0.277, 0.36, 0, 0, Math.PI / 2);
+    for (const edge of [-1, 1]) W.add('tyre', cylinder, edge * 0.135, 0, 0, 0.351, 0.035, 0.351, 0, 0, Math.PI / 2);
+    W.add('rim', cylinder, 0, 0, 0, 0.229, 0.30, 0.229, 0, 0, Math.PI / 2);
+    W.add('carbon', cylinder, side * 0.155, 0, 0, 0.221, 0.009, 0.221, 0, 0, Math.PI / 2);
+    W.add('tyreMark', ring, side * 0.154, 0, 0, 1, 1, 1, 0, Math.PI / 2);
+    W.add('metal', cylinder, side * 0.164, 0, 0, 0.045, 0.026, 0.045, 0, 0, Math.PI / 2);
+    W.add('tyreMark', kit.geometry.box, side * 0.164, 0.17, 0, 0.008, 0.035, 0.016);
+    wheels[side === -1 ? '-1' : '1'] = W.build();
+  }
+  cylinder.dispose(); ring.dispose();
+  const parts = P.build();
+  return {
+    parts, wheels, wheelPos, WR: 0.36, style: 'sport', eye: new THREE.Vector3(0, 1.02, 0.12),
+    steerPos: new THREE.Vector3(0, 0.71, -0.39), steerTilt: -0.18, doors: [], wiperAnchors: [],
+    dispose: () => { parts.forEach(g => g.dispose()); Object.values(wheels).forEach(w => w.forEach(g => g.dispose())); },
+  };
+}
+
 function buildModel(kit: KitLike, kind: VehicleKind): Model {
+  if (kind === 'f1') return buildFormulaModel(kit);
   const spec = VEHICLES[kind] as VehicleSpec;
   const sil = SIL[STYLE[kind]] as Sil;
   const L = spec.length, W = spec.width, H = spec.height, hl = L / 2;
@@ -643,6 +771,8 @@ export function buildVehicle(kit: KitLike, kind: VehicleKind = 'car', variant = 
   kit.extra.push(brakeMat, headMat, blinkerMat);
 
   const roleMat: Record<string, THREE.Material> = {
+    carbon: cached(kit, 'formula-carbon', () => new THREE.MeshStandardMaterial({ color: 0x121518, roughness: 0.64, metalness: 0.18 })),
+    tyreMark: cached(kit, 'formula-tyre-mark', () => new THREE.MeshStandardMaterial({ color: 0xf3cf35, roughness: 0.85 })),
     paint: paintMat, ink: M.ink, metal: M.metal, white: M.white, glass: glassMat, windshield: shieldMat, seat: M.wall2,
     accent: lum > 0.55 ? M.ink : M.white,
     red: lamp('red', 0xff2020, 0xff0000), blue: lamp('blue', 0x2040ff, 0x0022ff), amber: lamp('amber', 0xffa500, 0xff8800),
@@ -664,10 +794,29 @@ export function buildVehicle(kit: KitLike, kind: VehicleKind = 'car', variant = 
 
   // steering wheel
   const steeringWheel = new THREE.Group(); steeringWheel.position.copy(model.steerPos); steeringWheel.scale.setScalar(0.65); steeringWheel.rotation.x = model.steerTilt; body.add(steeringWheel);
-  const rimGeometry = cached(kit, 'steer-rim', () => new THREE.TorusGeometry(0.22, 0.027, 6, 16));
-  steeringWheel.add(new THREE.Mesh(rimGeometry, M.ink));
-  for (const [x, y, sx, sy] of [[0, 0, 0.4, 0.035], [0, -0.1, 0.035, 0.2]] as const) {
-    const m = new THREE.Mesh(kit.geometry.box, M.metal); m.position.set(x, y, 0); m.scale.set(sx, sy, 0.035); steeringWheel.add(m);
+  if (kind === 'f1') {
+    const panel = new THREE.Mesh(kit.geometry.box, roleMat.carbon);
+    panel.scale.set(0.38, 0.20, 0.045); steeringWheel.add(panel);
+    for (const side of [-1, 1]) {
+      const grip = new THREE.Mesh(kit.geometry.sphere, M.ink);
+      grip.position.x = side * 0.21; grip.scale.set(0.055, 0.14, 0.045); steeringWheel.add(grip);
+      for (let i = 0; i < 3; i++) {
+        const button = new THREE.Mesh(kit.geometry.sphere, i === 0 ? roleMat.red : i === 1 ? roleMat.tyreMark : roleMat.blue);
+        button.position.set(side * (0.10 + (i % 2) * 0.045), 0.05 - i * 0.044, 0.031);
+        button.scale.setScalar(0.014); steeringWheel.add(button);
+      }
+      const paddle = new THREE.Mesh(kit.geometry.box, M.metal);
+      paddle.position.set(side * 0.16, 0, -0.04); paddle.scale.set(0.05, 0.16, 0.012); steeringWheel.add(paddle);
+    }
+    const displayMat = cached(kit, 'formula-display', () => new THREE.MeshStandardMaterial({ color: 0x071a18, emissive: 0x164f40, emissiveIntensity: 0.4, roughness: 0.2 }));
+    const display = new THREE.Mesh(kit.geometry.box, displayMat);
+    display.position.set(0, 0.027, 0.028); display.scale.set(0.12, 0.074, 0.01); steeringWheel.add(display);
+  } else {
+    const rimGeometry = cached(kit, 'steer-rim', () => new THREE.TorusGeometry(0.22, 0.027, 6, 16));
+    steeringWheel.add(new THREE.Mesh(rimGeometry, M.ink));
+    for (const [x, y, sx, sy] of [[0, 0, 0.4, 0.035], [0, -0.1, 0.035, 0.2]] as const) {
+      const m = new THREE.Mesh(kit.geometry.box, M.metal); m.position.set(x, y, 0); m.scale.set(sx, sy, 0.035); steeringWheel.add(m);
+    }
   }
 
   // doors (WorldEngine swings these on enter / exit)
@@ -701,9 +850,9 @@ export function buildVehicle(kit: KitLike, kind: VehicleKind = 'car', variant = 
     const side = w.x < 0 ? '-1' : '1';
     const geos = model.wheels[side];
     const steer = new THREE.Group(); steer.position.set(w.x, model.WR + 0.08, w.z); group.add(steer);
-    const spin = new THREE.Group(); steer.add(spin);
+    const spin = new THREE.Group(); spin.scale.x = w.widthScale ?? 1; steer.add(spin);
     geos.forEach((geo, role) => {
-      const mesh = new THREE.Mesh(geo, role === 'tyre' ? M.ink : role === 'rim' ? rimMat(dark) : M.metal);
+      const mesh = new THREE.Mesh(geo, role === 'tyre' ? M.ink : role === 'rim' ? rimMat(dark) : roleMat[role] ?? M.metal);
       mesh.castShadow = role === 'tyre'; spin.add(mesh);
     });
     spins.push(spin);
@@ -715,11 +864,11 @@ export function buildVehicle(kit: KitLike, kind: VehicleKind = 'car', variant = 
     update: (speed, steer, dt, braking, bodyTilt, blinker = 0, time = 0, wiper = 0) => {
       vehicle.spin += (speed * dt) / WR;
       for (const s of spins) s.rotation.x = vehicle.spin;
-      for (const f of frontSteer) f.rotation.y = -steer * 0.55 / (1 + Math.abs(speed) / 24);
-      steeringWheel.rotation.z = -steer * 2.4;
+      for (const f of frontSteer) f.rotation.y = -vehicleSteeringAngle(kind, steer, speed);
+      steeringWheel.rotation.z = -steer * (kind === 'f1' ? 1.2 : 2.4);
       const sweep = wiper ?? 0;
       for (const w of wipers) w.rotation.y = (w.userData.rest as number) + sweep * (w.userData.dir as number);
-      brakeMat.emissiveIntensity = braking ? 2.2 : 0.25;
+      brakeMat.emissiveIntensity = kind === 'f1' ? (Math.abs(speed) > 2 && time % 0.3 < 0.15 ? 2.5 : 0.3) : braking ? 2.2 : 0.25;
       const on = blinker !== 0 && (time % 0.62) < 0.31; // 0 off, 1 left, 2 right, 3 hazard
       blinkerMat.emissiveIntensity = on ? 2.4 : 0.15;
       if (bodyTilt) { body.rotation.x = bodyTilt.pitch; body.rotation.z = bodyTilt.roll; body.position.y = 0; }
