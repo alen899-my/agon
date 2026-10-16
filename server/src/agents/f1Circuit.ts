@@ -103,6 +103,41 @@ export const F1_LENGTH: number = (() => {
   return last.dist + Math.hypot(SAMPLES[0].x - last.x, SAMPLES[0].z - last.z);
 })();
 
+// Expanded segment cells guarantee exact nearest-segment queries within the racing corridor.
+const PROJECTION_CELL = 32;
+const PROJECTION_REACH = 32;
+const projectionCells = new Map<string, number[]>();
+for (let i = 0; i < SAMPLES.length; i++) {
+  const a = SAMPLES[i], b = SAMPLES[(i + 1) % SAMPLES.length];
+  for (let cx = Math.floor((Math.min(a.x, b.x) - PROJECTION_REACH) / PROJECTION_CELL); cx <= Math.floor((Math.max(a.x, b.x) + PROJECTION_REACH) / PROJECTION_CELL); cx++) {
+    for (let cz = Math.floor((Math.min(a.z, b.z) - PROJECTION_REACH) / PROJECTION_CELL); cz <= Math.floor((Math.max(a.z, b.z) + PROJECTION_REACH) / PROJECTION_CELL); cz++) {
+      const key = cx + ':' + cz;
+      const cell = projectionCells.get(key);
+      if (cell) cell.push(i); else projectionCells.set(key, [i]);
+    }
+  }
+}
+
+// Bounds hierarchy for exact off-track/terrain projection without a full circuit scan.
+interface ProjectionNode { minX: number; maxX: number; minZ: number; maxZ: number; indices?: number[]; left?: ProjectionNode; right?: ProjectionNode }
+function buildProjectionNode(indices: number[]): ProjectionNode {
+  const node: ProjectionNode = { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity };
+  for (const i of indices) {
+    const a = SAMPLES[i], b = SAMPLES[(i + 1) % SAMPLES.length];
+    node.minX = Math.min(node.minX, a.x, b.x); node.maxX = Math.max(node.maxX, a.x, b.x);
+    node.minZ = Math.min(node.minZ, a.z, b.z); node.maxZ = Math.max(node.maxZ, a.z, b.z);
+  }
+  if (indices.length <= 12) node.indices = indices;
+  else {
+    const axis = node.maxX - node.minX > node.maxZ - node.minZ ? 'x' : 'z';
+    indices.sort((a, b) => SAMPLES[a][axis] - SAMPLES[b][axis]);
+    const mid = indices.length >> 1;
+    node.left = buildProjectionNode(indices.slice(0, mid)); node.right = buildProjectionNode(indices.slice(mid));
+  }
+  return node;
+}
+const projectionTree = buildProjectionNode(SAMPLES.map((_, i) => i));
+
 function sampleAtDist(dist: number): Sample {
   const d = ((dist % F1_LENGTH) + F1_LENGTH) % F1_LENGTH;
   // Binary search over dist.
@@ -157,58 +192,46 @@ export interface F1Progress {
   curvature: number;
 }
 
-/** Project (x,z) onto the spline. O(N) over ~360 samples — fine at 10Hz + per-frame for player. */
+/** Exact local segment projection, with a full-search fallback away from the circuit. */
 export function f1Progress(x: number, z: number): F1Progress {
-  let best = 0;
-  let bestLat = Infinity;
-  let bestYaw = 0;
-  let bestY = 0;
-  let bestCurve = 0;
-  // Coarse stride then refine around best (cheap + accurate).
-  let bestIdx = 0;
-  for (let i = 0; i < SAMPLES.length; i += 2) {
-    const s = SAMPLES[i];
-    const dx = x - s.x;
-    const dz = z - s.z;
-    const d2 = dx * dx + dz * dz;
-    if (d2 < bestLat * bestLat || bestLat === Infinity) {
-      // True lateral via closest sample is enough for coarse pass.
-      if (d2 < (bestLat === Infinity ? Infinity : bestLat * bestLat)) {
-        bestLat = Math.sqrt(d2);
-        bestIdx = i;
-      }
-    }
-  }
-  // Refine: project onto segments around bestIdx ±3.
-  bestLat = Infinity;
-  for (let k = -4; k < 4; k++) {
-    const a = SAMPLES[(bestIdx + k + SAMPLES.length) % SAMPLES.length];
-    const b = SAMPLES[(bestIdx + k + 1 + SAMPLES.length) % SAMPLES.length];
-    const dx = b.x - a.x;
-    const dz = b.z - a.z;
-    const len2 = dx * dx + dz * dz || 1;
+  let best2 = Infinity, best = 0, bestYaw = 0, bestY = 0, bestCurve = 0, centerX = 0, centerZ = 0;
+  const project = (i: number): void => {
+    const a = SAMPLES[i], b = SAMPLES[(i + 1) % SAMPLES.length];
+    const dx = b.x - a.x, dz = b.z - a.z;
+    const len2 = dx * dx + dz * dz;
+    if (len2 < 1e-12) return;
     const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (z - a.z) * dz) / len2));
-    const px = a.x + dx * t;
-    const pz = a.z + dz * t;
-    const lat = Math.hypot(x - px, z - pz);
-    if (lat < bestLat) {
-      bestLat = lat;
-      const segLen = Math.sqrt(len2);
-      best = a.dist + segLen * t;
-      bestYaw = Math.atan2(dx, -dz);
-      bestY = a.y + (b.y - a.y) * t;
-      bestCurve = a.curvature;
-    }
+    const px = a.x + dx * t, pz = a.z + dz * t;
+    const d2 = (x - px) ** 2 + (z - pz) ** 2;
+    if (d2 >= best2) return;
+    best2 = d2; best = a.dist + Math.sqrt(len2) * t;
+    // Smooth spline tangents avoid normal/steering jumps at sample boundaries.
+    bestYaw = a.yaw + Math.atan2(Math.sin(b.yaw - a.yaw), Math.cos(b.yaw - a.yaw)) * t;
+    bestY = a.y + (b.y - a.y) * t;
+    bestCurve = a.curvature + (b.curvature - a.curvature) * t;
+    centerX = px; centerZ = pz;
+  };
+  const candidates = projectionCells.get(Math.floor(x / PROJECTION_CELL) + ':' + Math.floor(z / PROJECTION_CELL));
+  if (candidates) for (const i of candidates) project(i);
+  if (best2 > PROJECTION_REACH * PROJECTION_REACH) {
+    const distanceTo = (node: ProjectionNode): number => {
+      const dx = Math.max(node.minX - x, 0, x - node.maxX), dz = Math.max(node.minZ - z, 0, z - node.maxZ);
+      return dx * dx + dz * dz;
+    };
+    const search = (node: ProjectionNode): void => {
+      if (distanceTo(node) > best2) return;
+      if (node.indices) { for (const i of node.indices) project(i); return; }
+      const left = node.left!, right = node.right!;
+      if (distanceTo(left) < distanceTo(right)) { search(left); search(right); }
+      else { search(right); search(left); }
+    };
+    search(projectionTree);
   }
   const lapDist = ((best - F1_START_OFFSET) % F1_LENGTH + F1_LENGTH) % F1_LENGTH;
-  const checkpoint = Math.floor((lapDist / F1_LENGTH) * F1_CHECKPOINT_COUNT) % F1_CHECKPOINT_COUNT;
-  // Grade: sample ±8m for gentle slope factor.
-  const ahead = sampleAtDist(best + 8);
-  const behind = sampleAtDist(best - 8);
-  const grade = (ahead.y - behind.y) / 16;
-  const center = sampleAtDist(best);
-  const signedLateral = (x - center.x) * Math.cos(bestYaw) + (z - center.z) * Math.sin(bestYaw);
-  return { dist: best % F1_LENGTH, lapDist, checkpoint, lateral: bestLat, signedLateral, tangentYaw: bestYaw, height: bestY, grade, curvature: bestCurve };
+  const checkpoint = Math.floor(lapDist / F1_LENGTH * F1_CHECKPOINT_COUNT) % F1_CHECKPOINT_COUNT;
+  const grade = (sampleAtDist(best + 8).y - sampleAtDist(best - 8).y) / 16;
+  const signedLateral = (x - centerX) * Math.cos(bestYaw) + (z - centerZ) * Math.sin(bestYaw);
+  return { dist: best % F1_LENGTH, lapDist, checkpoint, lateral: Math.sqrt(best2), signedLateral, tangentYaw: bestYaw, height: bestY, grade, curvature: bestCurve };
 }
 
 /** True when (x,z) is on F1 asphalt. */
@@ -232,8 +255,7 @@ export function f1BaseNoise(x: number, z: number): number {
  * base by ~110m. The road visuals (terrain mesh + skirts) and physics
  * (Map.groundHeight) share this so cars never float or sink on grass.
  */
-export function f1TerrainHeightAt(x: number, z: number): number {
-  const p = f1Progress(x, z);
+export function f1TerrainHeightAt(x: number, z: number, p = f1Progress(x, z)): number {
   const base = f1BaseNoise(x, z);
   const shoulder = p.signedLateral > 0 && f1InPitSpan(p.lapDist) ? F1_PIT.laneOffset + 12 : F1_HALF + 12;
   if (p.lateral <= shoulder) return p.height;
@@ -247,7 +269,7 @@ export function f1HeightAt(x: number, z: number): number {
   if (Math.abs(x - F1_ORIGIN.x) > 340 || Math.abs(z) > 240) return 0;
   const p = f1Progress(x, z);
   if (p.lateral <= F1_HALF + 2) return p.height;
-  return f1TerrainHeightAt(x, z);
+  return f1TerrainHeightAt(x, z, p);
 }
 
 /**

@@ -1,5 +1,6 @@
 import type { BuiltBox, PedAgent, BuildSite } from '../../server/src/agents/livingWorld';
 import { dialogueLines, type DialogueGenerator } from '../../server/src/agents/dialogueTypes';
+import { f1WallContact } from './F1Barriers';
 import { bodyContact, boundaryContact, circleContact, vehicleBody, type Body, type Contact } from './Collision';
 import { VEHICLES, VEHICLE_KINDS, vehicleSteeringAngle, type VehicleKind } from './Vehicles';
 import { WEATHER_GRIP, type Season, type Weather } from './Weather';
@@ -269,6 +270,7 @@ export class Simulation {
   // --- realistic-physics state (one by one) ---
   damage = 0;
   impact: Impact | null = null;
+  private nextFrontProbeAt = 0;
   frontDistance = 999;
   frontBlocked = false;
   crashUntil = 0;
@@ -547,6 +549,7 @@ export class Simulation {
     this.car.speed = 0; this.car.steer = 0; this.car.braking = false;
     this.x = x; this.z = z; this.yaw = yaw; this.facing = yaw;
     this.lateralSpeed = 0; this.acceleration = 0;
+    this.crashUntil = 0; this.impact = null; this.drsOpen = false; this.inPitLane = false; this.nextFrontProbeAt = 0;
     this.carY = Math.max(0, groundHeight(x, z)); this.carPitch = 0;
     this.y = this.carY; this.vy = 0;
     this.boost = 100; this.boosting = false; this.boostDelay = 0;
@@ -972,6 +975,11 @@ export class Simulation {
   }
 
   private contact(body: Body, ignore?: TrafficCar, includePlayer = false, y = 0, mired = false): (Contact & { label: string }) | null {
+    // Query the same finite wall segments used by the renderer, including real pit ends.
+    if (body.x > F1_ORIGIN.x - 350) {
+      const wall = f1WallContact(body);
+      if (wall) return wall;
+    }
     const access = f1AccessProgress(body.x, body.z);
     const accessMouth = access.along < F1_ACCESS_RAIL_START;
     if (body.x > 150 && access.distance < (accessMouth ? 20 : 16)) {
@@ -998,23 +1006,6 @@ export class Simulation {
     // Separate F1 island: city boundary/buildings/props do not apply there.
     // Use the rendered barrier offsets, including runoff and pit access.
     if (onF1Island(body.x, body.z)) {
-      const p = f1Progress(body.x, body.z);
-      const wallSide = p.signedLateral >= 0 ? 1 : -1;
-      const relativeYaw = body.yaw - p.tangentYaw;
-      const extent = Math.abs(Math.cos(relativeYaw)) * body.halfWidth + Math.abs(Math.sin(relativeYaw)) * body.halfLength;
-      const pitWallDelta = p.signedLateral - (F1_HALF + 2.1);
-      if (f1HasPitWall(p.dist) && Math.abs(pitWallDelta) < extent + 0.3) {
-        const normal = pitWallDelta >= 0 ? 1 : -1;
-        return { nx: Math.cos(p.tangentYaw) * normal, nz: Math.sin(p.tangentYaw) * normal, depth: extent + 0.3 - Math.abs(pitWallDelta), label: 'pit wall' };
-      }
-      const wallAt = Math.abs(f1BarrierOffset(p.dist, wallSide)) - 0.3 - extent;
-      if (p.lateral > wallAt) {
-        const rx = Math.cos(p.tangentYaw);
-        const rz = Math.sin(p.tangentYaw);
-        // Signed side via centreline lookup.
-        const side = wallSide;
-        return { nx: -rx * side, nz: -rz * side, depth: Math.min(1.2, p.lateral - wallAt + 0.4), label: 'f1 barrier' };
-      }
       // Island edge (far runoff): keep cars on the island.
       const dxI = body.x - F1_ORIGIN.x;
       const dzI = body.z - 20;
@@ -1133,6 +1124,18 @@ export class Simulation {
     // Raw water test on purpose: a car beached ON the promenade reads dry
     // ground but still needs the escape hatch.
     const mired = inWater(this.car.x, this.car.z);
+    // Recover shallow initial penetration before sweeping. A last-safe-pose search alone
+    // cannot escape a car that already overlaps a wall after a reset or a turn.
+    if (this.car.x > F1_ORIGIN.x - 350) {
+      for (let recovery = 0; recovery < 8; recovery++) {
+        const overlap = this.contact(vehicleBody(this.car.x, this.car.z, this.car.yaw, this.vehicleKind), undefined, false, this.carY, mired);
+        if (!overlap || !['f1 barrier', 'pit wall', 'access road barrier', 'island edge'].includes(overlap.label)) break;
+        const separation = Math.min(0.5, overlap.depth + 0.003);
+        this.car.x += overlap.nx * separation; this.car.z += overlap.nz * separation;
+        const inward = vx * overlap.nx + vz * overlap.nz;
+        if (inward < 0) { vx -= inward * overlap.nx; vz -= inward * overlap.nz; }
+      }
+    }
     for (let i = 0; i < steps; i++) {
       const x = this.car.x, z = this.car.z, yaw = this.car.yaw;
       const nx = x + vx * h, nz = z + vz * h, nyaw = yaw + yawStep;
@@ -1150,11 +1153,17 @@ export class Simulation {
         const inward = vx * hit.nx + vz * hit.nz;
         if (inward < 0) {
           this.registerImpact(-inward, hit.label);
-          const restitution = -inward > 5 ? 0.12 : 0;
+          const circuitWall = hit.label === 'f1 barrier' || hit.label === 'pit wall' || hit.label === 'access road barrier';
+          const restitution = !circuitWall && -inward > 5 ? 0.12 : 0;
           vx -= (1 + restitution) * inward * hit.nx;
           vz -= (1 + restitution) * inward * hit.nz;
         }
         yawStep = 0;
+        // A millimetre-scale contact skin leaves room to travel along a wall next frame.
+        const skinX = this.car.x + hit.nx * 0.003, skinZ = this.car.z + hit.nz * 0.003;
+        if (!this.contact(vehicleBody(skinX, skinZ, this.car.yaw, this.vehicleKind), undefined, false, this.carY, mired)) {
+          this.car.x = skinX; this.car.z = skinZ;
+        }
         // Preserve tangential travel instead of bouncing the entire car backwards.
         const sx = this.car.x + vx * h * (1 - lo), sz = this.car.z + vz * h * (1 - lo);
         if (!this.contact(vehicleBody(sx, sz, this.car.yaw, this.vehicleKind), undefined, false, this.carY, mired)) { this.car.x = sx; this.car.z = sz; }
@@ -1204,14 +1213,15 @@ export class Simulation {
   }
   private registerImpact(speed: number, withWhat: string, minor = false): void {
     const s = Math.abs(speed);
-    if (s < 2.5 || this.crashed) return; // soft taps never flash; lockout prevents multi-trigger
+    if (s < 2.5 || this.crashed || (this.impact && this.time - this.impact.at < 0.25)) return; // soft taps never flash; lockout prevents multi-trigger
     this.impact = { speed: Math.round(s * 3.6), with: withWhat, at: this.time };
     if (s > 5) {
       const gain = (s - 5) * (minor ? 0.7 : 2.0);
       this.damage = clamp(this.damage + gain, 0, 100);
     }
-    // The driver feels big hits too (seatbelts off, GTA rules).
-    this.crashUntil = this.time + (minor ? 0.25 : s > 8 ? 0.8 : 0.45);
+    // Track barriers remove normal velocity; never lock steering/throttle during a scrape.
+    const rail = withWhat === 'f1 barrier' || withWhat === 'pit wall' || withWhat === 'access road barrier';
+    this.crashUntil = rail ? this.time : this.time + (minor ? 0.25 : s > 8 ? 0.8 : 0.45);
   }
   /** True when an obstacle sits in the lane ahead (0..10m forward, <3m lateral). */
   private aheadBlocked(fx: number, fz: number, tx: number, tz: number, ox: number, oz: number, orad: number): boolean {
@@ -1501,8 +1511,12 @@ export class Simulation {
       this.car.wheelSpin += (this.car.speed * dt) / 0.4;
       this.jumpPressed = false;
       this.moveCar(dt, wantedYaw);
-      const probe = this.probeFront(this.car.x, this.car.z, this.car.yaw);
-      this.frontDistance = probe.distance; this.frontBlocked = probe.blocked;
+      // This is a HUD sensor, not collision physics. Keep the physical sweep at full rate.
+      if (this.time >= this.nextFrontProbeAt) {
+        const probe = this.probeFront(this.car.x, this.car.z, this.car.yaw);
+        this.frontDistance = probe.distance; this.frontBlocked = probe.blocked;
+        this.nextFrontProbeAt = this.time + 0.08;
+      }
       this.acceleration = (this.car.speed - oldSpeed) / dt;
       this.skidding = Math.abs(this.lateralSpeed) > 1.2;
       this.facing = this.car.yaw;

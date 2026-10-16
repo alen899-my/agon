@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { F1_WALLS } from './F1Barriers';
 import { f1AccessOpening, f1AccessProgress, onF1Access } from './F1Access';
 import {
   F1_DRS_ZONES,
@@ -345,34 +346,22 @@ export class F1Route {
 
   // ── TecPro-style barriers + rails + posts ────────────────────────
   private buildBarriers(): void {
-    const step = 2;
-    const count = Math.floor(F1_LENGTH / step);
-    const total = count * 2;
-    const geo = new THREE.BoxGeometry(0.6, 0.9, F1_LENGTH / count + 0.08);
+    const geo = new THREE.BoxGeometry(0.6, 1, 1);
     this.geometries.push(geo);
-    const mat = new THREE.MeshStandardMaterial({ roughness: 0.6 });
+    const mat = new THREE.MeshStandardMaterial({ roughness: 0.7 });
     this.materials.push(mat);
-    const inst = new THREE.InstancedMesh(geo, mat, total);
-    let i = 0;
-    for (let k = 0; k < count; k++) {
-      const d = (k / count) * F1_LENGTH;
-      for (const side of [-1, 1] as const) {
-        const p = f1PathAt(d, f1BarrierOffset(d, side));
-        if (f1AccessOpening(p.x, p.z)) continue;
-        this.dummy.position.set(p.x, p.y + 0.45, p.z);
-        this.dummy.rotation.set(Math.atan(f1Progress(p.x, p.z).grade), -p.yaw, 0, 'YXZ');
-        this.dummy.scale.set(1, 1, 1);
-        this.dummy.updateMatrix();
-        inst.setMatrixAt(i, this.dummy.matrix);
-        inst.setColorAt(i, this.tmpColor.setHex(Math.floor(k / 2) % 2 === 0 ? 0xd91438 : 0xf4f4f4));
-        i++;
-      }
-    }
-    inst.count = i;
+    const inst = new THREE.InstancedMesh(geo, mat, F1_WALLS.length);
+    F1_WALLS.forEach((wall, i) => {
+      this.dummy.position.set(wall.x, wall.y, wall.z);
+      this.dummy.rotation.set(wall.pitch, -wall.yaw, 0, 'YXZ');
+      this.dummy.scale.set(1, wall.height, wall.length / Math.cos(wall.pitch));
+      this.dummy.updateMatrix(); inst.setMatrixAt(i, this.dummy.matrix);
+      inst.setColorAt(i, this.tmpColor.setHex(wall.label === 'pit wall' ? 0xd9dcdd : Math.floor(i / 4) % 2 === 0 ? 0xd91438 : 0xf4f4f4));
+    });
     inst.instanceMatrix.needsUpdate = true;
     if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
-    inst.computeBoundingSphere();
-    this.group.add(inst);
+    inst.receiveShadow = true;
+    inst.computeBoundingSphere(); this.group.add(inst);
     // Dark cap rail along the top of both walls.
     for (const side of [-1, 1] as const) {
       const samples = this.trackSamples(8);
@@ -744,19 +733,6 @@ export class F1Route {
 
   // ── pit building, boxes, stands, trees ────────────────────────────
   private buildPit(): void {
-    const dividerGeo = new THREE.BoxGeometry(0.6, 1.1, 2.05);
-    const dividerMat = new THREE.MeshStandardMaterial({ color: 0xd9dcdd, roughness: 0.85 });
-    this.geometries.push(dividerGeo);
-    this.materials.push(dividerMat);
-    for (let d = F1_LENGTH - 90; d < F1_LENGTH + 90; d += 2) {
-      if (!f1HasPitWall(d + 1)) continue;
-      const p = f1PathAt(d + 1, F1_HALF + 2.1);
-      const wall = new THREE.Mesh(dividerGeo, dividerMat);
-      wall.position.set(p.x, p.y + 0.55, p.z);
-      wall.rotation.y = -p.yaw;
-      wall.castShadow = true;
-      this.group.add(wall);
-    }
     const wallMat = new THREE.MeshStandardMaterial({ color: 0xdfe2e7, roughness: 0.85 });
     const bandMat = new THREE.MeshStandardMaterial({ color: 0xd91438, roughness: 0.6 });
     const glassMat = new THREE.MeshStandardMaterial({ color: 0x2b3542, roughness: 0.2, metalness: 0.5 });

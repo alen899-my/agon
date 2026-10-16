@@ -111,7 +111,7 @@ export class WorldEngine {
   readonly simulation = new Simulation();
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene = new THREE.Scene();
-  private readonly camera = new THREE.PerspectiveCamera(60, 1, 0.12, 340);
+  private readonly camera = new THREE.PerspectiveCamera(55, 1, 0.12, 340);
   private readonly kit: AssetKit;
   private readonly avatar: Stickman;
   private playerName = '';
@@ -229,7 +229,7 @@ export class WorldEngine {
   private ghostSeed = 0;
   private shake = 0; private lastImpactAt = -10; private prevSimTime = 0;
   /** Speed feel: smoothed chase FOV that widens with velocity (free-roam + race). */
-  private speedFov = 60;
+  private speedFov = 55;
   /** 0 = centered chase, 1 = over-the-shoulder aim (eased). */
   private aimBlend = 0;
   /** Projected screen-space position (0..1) of the aiming point — updated every render frame. */
@@ -746,7 +746,7 @@ export class WorldEngine {
           const cpuSlot = slots[Math.max(0, cpuIdx) % slots.length];
           const startProg = isF1 ? f1Progress(cpuSlot.x, cpuSlot.z) : trackProgress(cpuSlot.x, cpuSlot.z);
           cpu.reset(startProg.dist, now + COUNTDOWN_MS);
-          cpu.x = cpuSlot.x; cpu.z = cpuSlot.z; cpu.yaw = cpuSlot.yaw;
+          cpu.x = cpuSlot.x; cpu.z = cpuSlot.z; cpu.y = this.gridSlotY(this.race.track, cpuSlot) - 0.08; cpu.yaw = cpuSlot.yaw;
           const v = this.cpuVehicles.get(cpu.id);
           if (v) {
             v.group.position.set(cpuSlot.x, this.gridSlotY(this.race.track, cpuSlot), cpuSlot.z);
@@ -775,6 +775,7 @@ export class WorldEngine {
     this.emit();
   }
   teleportToGrid(): void {
+    this.previousCpu.clear(); this.previousCar.valid = false;
     const isF1 = this.race.track === 'f1';
     const slots = isF1 ? f1GridSlots() : gridSlots();
     const order = [...this.race.racers.keys()];
@@ -828,8 +829,8 @@ export class WorldEngine {
     const name = this.playerName || 'YOU';
     this.raceNotice = '';
 
-    // Pick CPU vehicle kinds: rotate through sport/muscle/super/track/rally.
-    const cpuKindPool: VehicleKind[] = ['sport', 'muscle', 'super', 'track', 'rally', 'hyper', 'egt', 'drift'];
+    // Formula grids use formula cars for both simulation and rendering.
+    const cpuKindPool: VehicleKind[] = track === 'f1' ? ['f1'] : ['sport', 'muscle', 'super', 'track', 'rally', 'hyper', 'egt', 'drift'];
     const count = Math.max(1, Math.min(3, cpuCount));
     const cpuIds: string[] = [];
     const cpuNames: string[] = [];
@@ -854,9 +855,9 @@ export class WorldEngine {
       const cpuSlotIdx = racerOrder.indexOf(cpuId);
       const cpuSlot = slots[Math.max(0, cpuSlotIdx) % slots.length];
       const startProg = track === 'f1' ? f1Progress(cpuSlot.x, cpuSlot.z) : trackProgress(cpuSlot.x, cpuSlot.z);
-      const laneOffset = (cpuSlotIdx % 2 === 0 ? -1.8 : 1.8);
+      const laneOffset = (cpuSlotIdx % 2 === 0 ? -1 : 1) * (track === 'f1' ? 2.4 : 1.8);
       const cpu = new CpuRacer(i, kind, topSpeedKmh, laps, difficulty, startProg.dist, laneOffset, track);
-      cpu.x = cpuSlot.x; cpu.z = cpuSlot.z; cpu.yaw = cpuSlot.yaw;
+      cpu.x = cpuSlot.x; cpu.z = cpuSlot.z; cpu.y = this.gridSlotY(this.race.track, cpuSlot) - 0.08; cpu.yaw = cpuSlot.yaw;
       this.cpuRacers.push(cpu);
 
       // Acquire a ghost vehicle for rendering.
@@ -903,6 +904,7 @@ export class WorldEngine {
       void id;
     }
     this.cpuVehicles.clear();
+    this.previousCpu.clear();
     for (const [, tag] of this.cpuTags) {
       this.scene.remove(tag);
       const mat = tag.material as THREE.SpriteMaterial;
@@ -1974,7 +1976,11 @@ export class WorldEngine {
       const spd = sim.driving ? Math.abs(sim.car.speed) : 0;
       const raw = spec.topSpeed > 0 ? spd / spec.topSpeed : 0;
       const ads = !sim.driving && sim.armed && sim.aiming && sim.mode === 'roam' ? GUNS[sim.gunIndex] : null;
-      const wantFov = sim.driving ? 60 + Math.min(1.2, raw) * 15 : ads ? ads.zoomFov : 60;
+      // A restrained lens keeps cars and nearby people substantial even at racing speed.
+      const thirdPerson = sim.view === 'third';
+      const wantFov = sim.mode !== 'roam' || sim.phase === 'ready' ? 60
+        : sim.driving ? (thirdPerson ? 56 : 60) + Math.min(1, raw) * 7
+        : ads ? ads.zoomFov : thirdPerson ? 55 : 60;
       this.speedFov += (wantFov - this.speedFov) * (1 - Math.exp(-dt * (ads ? 8 : 3)));
       if (Math.abs(this.camera.fov - this.speedFov) > 0.05) {
         this.camera.fov = this.speedFov;
@@ -2315,15 +2321,23 @@ export class WorldEngine {
       const wantShoulder = sim.armed && sim.aiming && !sim.driving && sim.mode === 'roam' ? 1 : 0;
       this.aimBlend += (wantShoulder - this.aimBlend) * Math.min(1, dt * 7);
       const shoulder = this.aimBlend;
-      this.target.set(x, y + 1.35 + rideY, z);
-      // Chase pulls back and trembles a touch as speed climbs — top speed reads fast.
+      this.target.set(x, y + (sim.driving ? 1.1 : 1.35) + rideY, z);
+      // Close chase framing preserves vehicle scale as speed climbs — top speed reads fast.
       const spec = VEHICLES[sim.vehicleKind];
       const ratio = sim.driving && spec.topSpeed > 0
         ? Math.min(1.2, Math.abs(sim.car.speed) / spec.topSpeed) : 0;
       const vib = ratio * ratio * 0.012;
-      const distance = (sim.driving ? spec.length + 6 + ratio * 2.2 : 6.5) * (1 - shoulder * 0.45);
+      // Measure from the rear of the vehicle, accommodating long buses as well as F1 cars.
+      const distance = (sim.driving ? spec.length * 0.5 + 4.1 + ratio * 0.65 : 4.4) * (1 - shoulder * 0.32);
       const chaseYaw = sim.driving ? cameraYaw : sim.yaw;
-      this.desired.set(x - Math.sin(chaseYaw) * distance, y + 3.4 + sim.pitch * 5 + rideY - shoulder * 0.5, z + Math.cos(chaseYaw) * distance);
+      const cameraHeight = sim.driving ? Math.max(2.1, spec.height + 1.45) : 2.55;
+      this.desired.set(x - Math.sin(chaseYaw) * distance, y + cameraHeight + sim.pitch * 3 + rideY - shoulder * 0.3, z + Math.cos(chaseYaw) * distance);
+      // Look slightly down the road so the larger car sits below the driving line.
+      if (sim.driving) {
+        const lookAhead = 0.8 + ratio * 1.2;
+        this.target.x += Math.sin(chaseYaw) * lookAhead;
+        this.target.z -= Math.cos(chaseYaw) * lookAhead;
+      }
       // Right-shoulder offset: right of facing = (cos yaw, sin yaw) in XZ.
       this.desired.x += Math.cos(sim.yaw) * 1.15 * shoulder;
       this.desired.z += Math.sin(sim.yaw) * 1.15 * shoulder;

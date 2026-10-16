@@ -18,17 +18,23 @@ function extent(b: Body, x: number, z: number): number {
 }
 /** Separating-axis contact, with the normal pointing out of obstacle b toward a. */
 export function bodyContact(a: Body, b: Body): Contact | null {
-  let best: Contact | null = null;
-  for (const axis of [...axes(a), ...axes(b)]) {
-    const distance = (a.x - b.x) * axis.x + (a.z - b.z) * axis.z;
-    const depth = extent(a, axis.x, axis.z) + extent(b, axis.x, axis.z) - Math.abs(distance);
+  const dx = a.x - b.x, dz = a.z - b.z;
+  // Cheap broad-phase before four SAT axes; no temporary arrays/vectors per query.
+  const radius = Math.hypot(a.halfWidth, a.halfLength) + Math.hypot(b.halfWidth, b.halfLength);
+  if (Math.abs(dx) > radius || Math.abs(dz) > radius) return null;
+  const ac = Math.cos(a.yaw), sinA = Math.sin(a.yaw), bc = Math.cos(b.yaw), bs = Math.sin(b.yaw);
+  let bestDepth = Infinity, nx = 0, nz = 0;
+  for (let i = 0; i < 4; i++) {
+    const ax = i === 0 ? ac : i === 1 ? sinA : i === 2 ? bc : bs;
+    const az = i === 0 ? sinA : i === 1 ? -ac : i === 2 ? bs : -bc;
+    const distance = dx * ax + dz * az;
+    const extentA = Math.abs(ac * ax + sinA * az) * a.halfWidth + Math.abs(sinA * ax - ac * az) * a.halfLength;
+    const extentB = Math.abs(bc * ax + bs * az) * b.halfWidth + Math.abs(bs * ax - bc * az) * b.halfLength;
+    const depth = extentA + extentB - Math.abs(distance);
     if (depth <= 0) return null;
-    if (!best || depth < best.depth) {
-      const sign = distance < 0 ? -1 : 1;
-      best = { nx: axis.x * sign, nz: axis.z * sign, depth };
-    }
+    if (depth < bestDepth) { bestDepth = depth; const side = distance < 0 ? -1 : 1; nx = ax * side; nz = az * side; }
   }
-  return best;
+  return { nx, nz, depth: bestDepth };
 }
 export function circleContact(b: Body, x: number, z: number, radius: number): Contact | null {
   const [r, f] = axes(b), dx = x - b.x, dz = z - b.z;
