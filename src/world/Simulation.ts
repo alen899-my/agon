@@ -215,8 +215,6 @@ export class Simulation {
   hp = 100;
   dead = false;
   private wastedAt = -999;
-  private lastHurtAt = -999;
-  private lastBloodFxAt = -999;
   /** Arsenal: armed toggle, selected gun, magazine per gun (reserve infinite). */
   armed = false;
   gunIndex = 0;
@@ -692,36 +690,8 @@ export class Simulation {
     this.reloadSeq++;
   }
   private cancelReload(): void { this.reloading = false; this.reloadT = 0; }
-  /** Wound the player (crashes, falls, fire, blasts). Blood flashes at most 2×/s. */
-  hurtPlayer(amount: number, _cause: string, blood = true): void {
-    if (!this.active || this.dead || !(amount > 0)) return;
-    this.hp = Math.max(0, this.hp - amount);
-    this.lastHurtAt = this.time;
-    if (blood && this.time - this.lastBloodFxAt > 0.5) {
-      this.lastBloodFxAt = this.time;
-      this.pedBloodAt = this.time; this.pedBloodSeq += 1;
-    }
-    this.hurtSeq++;
-    if (this.hp <= 0) this.die();
-  }
-  private die(): void {
-    this.dead = true; this.wastedAt = this.time; this.deathSeq++;
-    this.aiming = false; this.cancelReload();
-    if (this.driving) {
-      this.driving = false; this.car.speed = 0;
-      this.x = this.car.x; this.z = this.car.z; this.y = this.carY; this.vy = 0;
-    }
-    this.clearInput();
-  }
-  /** GTA rules: keep your guns, wake up at the spawn with full health. */
-  private respawn(): void {
-    this.x = 12; this.z = 34; this.yaw = -0.25; this.facing = -0.25;
-    const g = Math.max(0, groundHeight(this.x, this.z, 0));
-    this.y = g; this.vy = 0;
-    this.hp = 100; this.dead = false;
-    this.clearInput();
-    this.previous = { x: this.x, z: this.z, y: this.y };
-  }
+  /** Player damage is disabled; retained for hazard callers. */
+  hurtPlayer(_amount: number, _cause: string, _blood = true): void {}
   /** One trigger pull (semi) or interval tick (auto): pellets, falloff, FX. */
   private fireBullet(): void {
     const gun = GUNS[this.gunIndex];
@@ -871,7 +841,6 @@ export class Simulation {
   private explodePlayerCar(): void {
     this.explodeAt(this.car.x, this.carY + 1, this.car.z);
     if (this.driving) {
-      this.hurtPlayer(70, 'blast');
       if (!this.dead) {
         this.driving = false; this.car.speed = 0;
         this.x = this.car.x + 2.5; this.z = this.car.z; this.y = this.carY; this.vy = 0;
@@ -885,7 +854,6 @@ export class Simulation {
     this.explodeSeq++;
     const pd = Math.hypot(this.x - x, this.z - z);
     if (pd < 9 && Math.abs((this.driving ? this.carY : this.y) - y) < 4) {
-      this.hurtPlayer(85 * (1 - pd / 9), 'blast');
     }
     for (const ped of this.peds) {
       if (ped.dead) continue;
@@ -1243,7 +1211,6 @@ export class Simulation {
       this.damage = clamp(this.damage + gain, 0, 100);
     }
     // The driver feels big hits too (seatbelts off, GTA rules).
-    if (this.driving && s > 4) this.hurtPlayer((s - 4) * 2.2, 'crash', s > 8);
     this.crashUntil = this.time + (minor ? 0.25 : s > 8 ? 0.8 : 0.45);
   }
   /** True when an obstacle sits in the lane ahead (0..10m forward, <3m lateral). */
@@ -1561,7 +1528,6 @@ export class Simulation {
       // --- GTA combat (on foot, roam only): aim, fire, reload, regen ---
       this.aiming = this.armed && this.held('aim');
       if (this.armed && this.aiming) this.facing = this.yaw;
-      if (this.hp < 50 && this.time - this.lastHurtAt > 6) this.hp = Math.min(50, this.hp + 10 * dt);
       if (this.reloading) {
         this.reloadT -= dt;
         if (this.reloadT <= 0) {
@@ -1640,7 +1606,6 @@ export class Simulation {
       this.vy -= 17 * dt; this.y = Math.max(ground, this.y + this.vy * dt);
       if (this.y === ground) {
         if (fallVy < -4) this.landDip = 1;
-        if (fallVy < -9) this.hurtPlayer((-fallVy - 9) * 5, 'fall');
         this.vy = 0;
       }
       this.landDip = Math.max(0, this.landDip - 5 * dt);
@@ -1654,12 +1619,6 @@ export class Simulation {
     if (this.shots.length > 40) this.shots.splice(0, this.shots.length - 40);
     this.shots = this.shots.filter(s => this.time - s.born < 0.25);
     this.booms = this.booms.filter(b => this.time - b.born < 0.9);
-    for (const f of this.burners) {
-      if (Math.hypot(this.x - f.x, this.z - f.z) >= 3) continue;
-      if (Math.abs((this.driving ? this.carY : this.y) - f.y) >= 3) continue;
-      this.hurtPlayer(9 * dt, 'fire');
-    }
-    if (this.dead && this.time - this.wastedAt > 4) this.respawn();
     this.noticeCrimes();
     // Repair slowly at South Station (on foot or behind the wheel).
     if (Math.hypot(this.x - 42, this.z - 27) < 14 && this.damage > 0) this.damage = Math.max(0, this.damage - 12 * dt);

@@ -104,39 +104,21 @@ describe('gunfire', () => {
   });
 });
 
-describe('player health', () => {
-  it('crashing hard wounds the driver as well as the car', () => {
+describe('player invulnerability', () => {
+  it('keeps the driver healthy through a hard crash', () => {
     const sim = gunman();
-    sim.interact(); // nearby own car
-    sim.transition = 0;
-    sim.placeAt(-26, -30, 0); // facing the apartment block to the south
-    sim.driving = true;
-    sim.setInput('forward', true, 'w');
-    tick(sim, 240);
+    sim.interact(); sim.transition = 0;
+    sim.placeAt(-26, -30, 0); sim.driving = true;
+    sim.setInput('forward', true, 'w'); tick(sim, 240);
     expect(sim.damage).toBeGreaterThan(0);
-    expect(sim.hp).toBeLessThan(100);
+    expect(sim.hp).toBe(100); expect(sim.dead).toBe(false);
+    expect(sim.hurtSeq).toBe(0);
   });
-  it('dies at zero and respawns GTA-style with guns kept', () => {
-    const sim = gunman();
-    sim.selectGun(3);
-    sim.hurtPlayer(200, 'blast');
-    expect(sim.dead).toBe(true);
-    expect(sim.hp).toBe(0);
-    const seq = sim.deathSeq;
-    expect(seq).toBe(1);
-    tick(sim, 300);
-    expect(sim.dead).toBe(false);
-    expect(sim.hp).toBe(100);
-    expect(sim.armed).toBe(true); // arsenal kept
-    expect(sim.x).toBeCloseTo(12, 0);
-    expect(sim.z).toBeCloseTo(34, 0);
-  });
-  it('regenerates toward half health after six calm seconds', () => {
-    const sim = gunman();
-    sim.hurtPlayer(80, 'fall', false);
-    expect(sim.hp).toBe(20);
-    tick(sim, 500);
-    expect(sim.hp).toBeGreaterThan(20);
-    expect(sim.hp).toBeLessThanOrEqual(50);
+  it.each(['blast', 'crash', 'fall', 'fire'])('ignores lethal %s damage', cause => {
+    const sim = gunman(); sim.selectGun(3);
+    sim.hurtPlayer(200, cause); tick(sim, 300);
+    expect(sim.hp).toBe(100); expect(sim.dead).toBe(false);
+    expect(sim.deathSeq).toBe(0); expect(sim.hurtSeq).toBe(0);
+    expect(sim.armed).toBe(true); expect(sim.gunIndex).toBe(3);
   });
 });

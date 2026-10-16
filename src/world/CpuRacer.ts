@@ -70,6 +70,10 @@ export class CpuRacer {
   /** RacerState (shared reference — mutated each tick). */
   readonly state: RacerState;
 
+  /** Braking plans run at 10 Hz; movement and checkpoint timing remain at 60 Hz. */
+  private planRemaining = 0;
+  private plannedSpeed = 0;
+  pitch = 0;
   private lapStartTime = 0;
   private lastLapDist: number | null = null;
   private nextCheckpoint = 1;
@@ -148,13 +152,20 @@ export class CpuRacer {
 
     // Look ahead far enough to brake within the available straight.
     const isF1 = this.track === 'f1';
+    this.planRemaining -= dt;
+    if (this.planRemaining <= 0) {
+      this.planRemaining = 0.1;
     const drs = isF1 && f1InDrs(this.trackDist);
-    let targetSpeed = Math.min(isF1 ? 65 : 45, this.baseTopSpeed * (drs ? 1.12 : 1));
+    let planned = Math.min(isF1 ? 65 : 45, this.baseTopSpeed * (drs ? 1.12 : 1));
     for (let look = 0; look <= 145; look += 2) {
       const curvature = Math.abs(this.sampleAt(this.trackDist + look, this.laneOffset).curvature);
       const cornerSpeed = Math.sqrt((isF1 ? 13 - this.cornerBrake * 5 : 6 - this.cornerBrake * 3) / Math.max(0.001, curvature));
-      targetSpeed = Math.min(targetSpeed, Math.sqrt(cornerSpeed * cornerSpeed + 2 * (isF1 ? 20 : 8) * look));
+      planned = Math.min(planned, Math.sqrt(cornerSpeed * cornerSpeed + 2 * (isF1 ? 20 : 8) * look));
     }
+
+      this.plannedSpeed = planned;
+    }
+    const targetSpeed = this.plannedSpeed;
     // Simple speed lerp toward target (gentle acceleration / hard braking).
     const accelRate = 13.5 * this.speedFactor;
     const brakeRate = isF1 ? 20 : 8;
@@ -171,6 +182,7 @@ export class CpuRacer {
 
     // Update RacerState via progress (city vs F1 spline).
     const p = this.track === 'f1' ? f1Progress(this.x, this.z) : trackProgress(this.x, this.z);
+    this.pitch = 'grade' in p && typeof p.grade === 'number' ? Math.atan(p.grade) : 0;
 
     const previous = this.lastLapDist;
     this.lastLapDist = p.lapDist;
@@ -217,6 +229,7 @@ export class CpuRacer {
     this.yaw = pos.yaw;
     this.trackDist = this.distanceAt(this.x, this.z, this.laneOffset);
     this.speed = 0;
+    this.planRemaining = 0; this.plannedSpeed = 0; this.pitch = 0;
     this.steer = 0; this.braking = false;
     this.lapStartTime = startedAt;
     this.lastLapDist = null;

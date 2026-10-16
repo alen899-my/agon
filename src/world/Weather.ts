@@ -237,7 +237,7 @@ export class WeatherParticles {
       this.rainPos[i * 6 + 3] = x; this.rainPos[i * 6 + 4] = y + 0.7; this.rainPos[i * 6 + 5] = z;
       this.rainVel[i] = 22 + Math.random() * 8;
     }
-    this.rainGeo.setAttribute('position', new THREE.BufferAttribute(this.rainPos, 3));
+    this.rainGeo.setAttribute('position', new THREE.BufferAttribute(this.rainPos, 3).setUsage(THREE.DynamicDrawUsage));
     const mat = new THREE.LineBasicMaterial({ color: 0xaac4dd, transparent: true, opacity: 0.55 });
     this.rainLines = new THREE.LineSegments(this.rainGeo, mat);
     this.rainLines.frustumCulled = false;
@@ -256,7 +256,7 @@ export class WeatherParticles {
       this.snowVel[i] = 1.2 + Math.random() * 1.8;
       this.snowPhase[i] = Math.random() * Math.PI * 2;
     }
-    this.snowGeo.setAttribute('position', new THREE.BufferAttribute(this.snowPos, 3));
+    this.snowGeo.setAttribute('position', new THREE.BufferAttribute(this.snowPos, 3).setUsage(THREE.DynamicDrawUsage));
     const mat = new THREE.PointsMaterial({ color: 0xffffff, size: 0.14, transparent: true, opacity: 0.9, sizeAttenuation: true, depthWrite: false });
     this.snowPoints = new THREE.Points(this.snowGeo, mat);
     this.snowPoints.frustumCulled = false;
@@ -275,7 +275,7 @@ export class WeatherParticles {
       this.driftVel[i] = 0.5 + Math.random() * 0.9;
       this.driftPhase[i] = Math.random() * Math.PI * 2;
     }
-    this.driftGeo.setAttribute('position', new THREE.BufferAttribute(this.driftPos, 3));
+    this.driftGeo.setAttribute('position', new THREE.BufferAttribute(this.driftPos, 3).setUsage(THREE.DynamicDrawUsage));
     const mat = new THREE.PointsMaterial({ color: SEASON_PRESETS[this.season].driftColor, size: 0.11, transparent: true, opacity: 0.85, sizeAttenuation: true, depthWrite: false });
     this.driftPoints = new THREE.Points(this.driftGeo, mat);
     this.driftPoints.frustumCulled = false;
@@ -325,7 +325,9 @@ export class WeatherParticles {
         p[i * 6 + 1] = y;
         p[i * 6 + 4] = y + 0.7;
       }
-      this.rainGeo.attributes.position.needsUpdate = true;
+      const attribute = this.rainGeo.getAttribute('position') as THREE.BufferAttribute;
+      attribute.clearUpdateRanges(); attribute.addUpdateRange(0, this.activeN * 6);
+      attribute.needsUpdate = true;
     } else if (this.weather === 'snow' && this.snowPoints) {
       const p = this.snowPos, n = this.activeN, spd = INTENSITY_SPEED[this.intensity];
       for (let i = 0; i < n; i++) {
@@ -337,7 +339,9 @@ export class WeatherParticles {
         // Wrap x/z locally so drift never escapes the box.
         if (p[i * 3] < 0) p[i * 3] += this.boxW; else if (p[i * 3] >= this.boxW) p[i * 3] -= this.boxW;
       }
-      this.snowGeo.attributes.position.needsUpdate = true;
+      const attribute = this.snowGeo.getAttribute('position') as THREE.BufferAttribute;
+      attribute.clearUpdateRanges(); attribute.addUpdateRange(0, this.activeN * 3);
+      attribute.needsUpdate = true;
     }
     if (this.driftKind !== 'none' && this.driftPoints) {
       // Petals/leaves: slow fall, wide sway, full-box wrap.
@@ -352,7 +356,9 @@ export class WeatherParticles {
         if (p[i * 3] < 0) p[i * 3] += this.boxW; else if (p[i * 3] >= this.boxW) p[i * 3] -= this.boxW;
         if (p[i * 3 + 2] < 0) p[i * 3 + 2] += this.boxD; else if (p[i * 3 + 2] >= this.boxD) p[i * 3 + 2] -= this.boxD;
       }
-      this.driftGeo.attributes.position.needsUpdate = true;
+      const attribute = this.driftGeo.getAttribute('position') as THREE.BufferAttribute;
+      attribute.clearUpdateRanges(); attribute.addUpdateRange(0, this.activeN * 3);
+      attribute.needsUpdate = true;
     }
   }
 

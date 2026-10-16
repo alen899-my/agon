@@ -71,6 +71,7 @@ export class SkidMarks {
   readonly group = new THREE.Group();
   private readonly trails: [Trail, Trail];
   private readonly material: THREE.ShaderMaterial;
+  private rebuildPending = false;
   private lastRebuild = -1;
 
   constructor() {
@@ -112,7 +113,9 @@ export class SkidMarks {
     const changed = this.trails[0].pts.length !== before0 || this.trails[1].pts.length !== before1 ||
       this.trails[0].start !== start0 || this.trails[1].start !== start1;
     const idleDue = Math.floor(s.time * 2) !== Math.floor(this.lastRebuild * 2);
-    if (changed || idleDue || s.active) {
+    this.rebuildPending ||= changed;
+    if ((this.rebuildPending && s.time - this.lastRebuild >= 1 / 30) || idleDue) {
+      this.rebuildPending = false;
       this.lastRebuild = s.time;
       this.rebuild(this.trails[0], s.time);
       this.rebuild(this.trails[1], s.time);

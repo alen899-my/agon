@@ -1,404 +1,132 @@
 import { useEffect, useRef, useState, type PointerEvent } from 'react';
 import type { WiperMode, WorldAction } from '../world/Simulation';
-
+import { ControlIcon, type ControlIconName } from './ControlIcon';
 interface Props {
-  disabled: boolean;
-  driving: boolean;
-  speed: number;
-  wiperMode: WiperMode;
-  boost: number;
-  boosting: boolean;
-  racing: boolean;
-  armed: boolean;
-  aiming: boolean;
+  disabled: boolean; driving: boolean; speed: number; wiperMode: WiperMode;
+  boost: number; boosting: boolean; racing: boolean; armed: boolean; aiming: boolean;
   onStick: (x: number, y: number) => void;
   onInput: (action: WorldAction, down: boolean, source: string) => void;
-  onWipers: () => void;
-  onReload: () => void;
-  onArm?: () => void;
+  onWipers: () => void; onReload: () => void; onArm?: () => void; onCamera?: () => void;
 }
 
-export function WorldControls({
-  disabled,
-  driving,
-  speed,
-  wiperMode,
-  boost,
-  boosting,
-  racing,
-  armed,
-  aiming,
-  onStick,
-  onInput,
-  onWipers,
-  onReload,
-  onArm,
-}: Props) {
+/** Thumb zones share one input lifecycle, including capture loss and interruptions. */
+export function WorldControls(props: Props) {
+  const { disabled, driving, speed, wiperMode, boost, boosting, racing, armed, aiming, onWipers, onReload, onArm, onCamera } = props;
+  const callbacks = useRef(props); callbacks.current = props;
+  const held = useRef(new Map<string, WorldAction>());
   const pointer = useRef<number | null>(null);
+  const bounds = useRef({ x: 0, y: 0, radius: 1 });
+  const [pressed, setPressed] = useState<Set<WorldAction>>(new Set());
   const [stick, setStick] = useState({ x: 0, y: 0 });
-  const callbacks = useRef({ onStick, onInput });
-  callbacks.current = { onStick, onInput };
-  const sources = useRef(new Map<string, WorldAction>());
-  const speedRef = useRef(speed);
-  speedRef.current = speed;
-  const driftSources = useRef(new Set<string>());
-
+  const refreshPressed = () => setPressed(new Set(held.current.values()));
+  const releaseSource = (source: string) => {
+    const action = held.current.get(source);
+    if (!action) return;
+    callbacks.current.onInput(action, false, source); held.current.delete(source); refreshPressed();
+  };
   useEffect(() => {
     const reset = () => {
-      callbacks.current.onStick(0, 0);
-      pointer.current = null;
-      setStick({ x: 0, y: 0 });
-      for (const [source, action] of sources.current) callbacks.current.onInput(action, false, source);
-      sources.current.clear();
-      for (const drift of driftSources.current) callbacks.current.onInput('handbrake', false, drift);
-      driftSources.current.clear();
+      for (const [source, action] of held.current) callbacks.current.onInput(action, false, source);
+      held.current.clear(); setPressed(new Set());
+      pointer.current = null; callbacks.current.onStick(0, 0); setStick({ x: 0, y: 0 });
+      callbacks.current.onInput('aim', false, 'aim-toggle');
     };
-    const media = matchMedia('(hover: hover) and (pointer: fine)');
-    reset();
-    media.addEventListener('change', reset);
-    window.addEventListener('blur', reset);
-    return () => {
-      reset();
-      media.removeEventListener('change', reset);
-      window.removeEventListener('blur', reset);
-    };
-  }, [driving, disabled]);
-
-  const releaseDrive = (event: PointerEvent<HTMLButtonElement>) => {
-    const source = 'drive:' + event.pointerId;
-    const action = sources.current.get(source);
-    if (action) callbacks.current.onInput(action, false, source);
-    sources.current.delete(source);
-    const drift = source + ':drift';
-    if (driftSources.current.has(drift)) {
-      callbacks.current.onInput('handbrake', false, drift);
-      driftSources.current.delete(drift);
-    }
-  };
-
-  const pressDrive = (event: PointerEvent<HTMLButtonElement>, action: WorldAction) => {
-    if (disabled) return;
-    event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
-    const source = 'drive:' + event.pointerId;
-    sources.current.set(source, action);
-    callbacks.current.onInput(action, true, source);
-    if (action === 'back' && Math.abs(speedRef.current) > 2) {
-      const drift = source + ':drift';
-      driftSources.current.add(drift);
-      callbacks.current.onInput('handbrake', true, drift);
-    }
-  };
-
+    const visibility = () => { if (document.hidden) reset(); };
+    reset(); window.addEventListener('blur', reset); document.addEventListener('visibilitychange', visibility);
+    return () => { reset(); window.removeEventListener('blur', reset); document.removeEventListener('visibilitychange', visibility); };
+  }, [disabled, driving, armed]);
   useEffect(() => {
-    if (Math.abs(speed) < 1 && driftSources.current.size > 0) {
-      for (const drift of [...driftSources.current]) {
-        callbacks.current.onInput('handbrake', false, drift);
-        driftSources.current.delete(drift);
-      }
-    }
-  }, [speed]);
-
-  const driveButton = (action: WorldAction, arrow: string, sub: string, aria: string) => (
-    <button
-      key={action}
-      className={`drive-pad drive-${action}`}
-      disabled={disabled}
-      aria-label={aria}
+    if (!driving || (racing && boost > 1)) return;
+    for (const [source, action] of held.current) if (action === 'sprint') releaseSource(source);
+  }, [driving, racing, boost]);
+  const release = (event: PointerEvent<HTMLButtonElement>) => releaseSource('touch:' + event.pointerId);
+  const hold = (action: WorldAction, icon: ControlIconName, label: string, extra = '', unavailable = false) => (
+    <button type="button" className={'touch-button ' + extra + (pressed.has(action) ? ' is-held' : '')}
+      aria-label={label + ' (hold)'} disabled={disabled || unavailable}
       onContextMenu={event => event.preventDefault()}
-      onPointerDown={event => pressDrive(event, action)}
-      onPointerUp={releaseDrive}
-      onPointerCancel={releaseDrive}
-      onLostPointerCapture={releaseDrive}
-    >
-      <span className="drive-arrow" aria-hidden="true">{arrow}</span>
-      <small>{sub}</small>
+      onPointerDown={event => {
+        if (disabled || unavailable) return;
+        event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId);
+        const source = 'touch:' + event.pointerId;
+        held.current.set(source, action); callbacks.current.onInput(action, true, source); refreshPressed();
+      }}
+      onPointerUp={release} onPointerCancel={release} onLostPointerCapture={release}
+      onKeyDown={event => {
+        if ((event.key === ' ' || event.key === 'Enter') && !event.repeat) {
+          event.preventDefault(); const source = 'touch-key:' + action;
+          held.current.set(source, action); callbacks.current.onInput(action, true, source); refreshPressed();
+        }
+      }}
+      onKeyUp={event => { if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); releaseSource('touch-key:' + action); } }}
+      onBlur={() => releaseSource('touch-key:' + action)}>
+      <ControlIcon name={icon} /><span>{label}</span>
     </button>
   );
-
-  const move = (event: PointerEvent<HTMLDivElement>) => {
-    if (pointer.current !== event.pointerId || disabled) return;
-    const rect = event.currentTarget.getBoundingClientRect();
-    const radius = rect.width * 0.32;
-    let x = (event.clientX - rect.left - rect.width / 2) / radius;
-    let y = (event.clientY - rect.top - rect.height / 2) / radius;
-    const length = Math.max(1, Math.hypot(x, y));
-    x /= length;
-    y /= length;
-    setStick({ x: x * radius, y: y * radius });
-    onStick(x, y);
+  const tap = (icon: ControlIconName, label: string, onClick: () => void, selected = false, extra = '') => (
+    <button type="button" className={'touch-button ' + extra + (selected ? ' is-selected' : '')} disabled={disabled}
+      aria-label={label} aria-pressed={icon === 'aim' || icon === 'wiper' ? selected : undefined}
+      onContextMenu={event => event.preventDefault()} onClick={onClick}>
+      <ControlIcon name={icon} /><span>{label}</span>
+    </button>
+  );
+  const moveStick = (event: PointerEvent<HTMLDivElement>) => {
+    if (disabled || pointer.current !== event.pointerId) return;
+    const b = bounds.current;
+    const dx = (event.clientX - b.x) / b.radius, dy = (event.clientY - b.y) / b.radius;
+    const length = Math.hypot(dx, dy), clamp = Math.max(1, length);
+    setStick({ x: dx / clamp * b.radius, y: dy / clamp * b.radius });
+    const strength = length <= 0.12 ? 0 : Math.min(1, (length - 0.12) / 0.88);
+    callbacks.current.onStick(length ? dx / length * strength : 0, length ? dy / length * strength : 0);
   };
-
-  const release = (event: PointerEvent<HTMLDivElement>) => {
+  const releaseStick = (event: PointerEvent<HTMLDivElement>) => {
     if (pointer.current !== event.pointerId) return;
-    pointer.current = null;
-    setStick({ x: 0, y: 0 });
-    onStick(0, 0);
+    pointer.current = null; setStick({ x: 0, y: 0 }); callbacks.current.onStick(0, 0);
   };
-
-  /* ── Driving layout: Steering Left, Pedals & Controls Right ── */
-  if (driving) {
-    return (
-      <div className={`world-controls driving-controls ${disabled ? 'inactive' : ''}`}>
-        {/* LEFT: Steering buttons */}
-        <div className="drive-steering" role="group" aria-label="Steering">
-          {driveButton('left', '◀', 'LEFT', 'Steer left')}
-          {driveButton('right', '▶', 'RIGHT', 'Steer right')}
-        </div>
-
-        {/* RIGHT: Pedals cluster */}
-        <div className="drive-pedals" role="group" aria-label="Vehicle pedals">
-          {/* Utility row: HORN, WIPER, BOOST */}
-          <div className="drive-aux-row">
-            {racing && (
-              <div className="boost-wrap">
-                <div
-                  className="boost-meter"
-                  role="progressbar"
-                  aria-label={`Boost ${Math.round(boost)} percent`}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={Math.round(boost)}
-                >
-                  <i style={{ width: `${Math.round(boost)}%` }} className={boosting ? 'hot' : ''} />
-                </div>
-                <button
-                  className={`drive-pad boost-pad${boosting ? ' on' : ''}`}
-                  disabled={disabled || boost <= 1}
-                  aria-label="Nitro boost (hold)"
-                  onContextMenu={event => event.preventDefault()}
-                  onPointerDown={event => pressDrive(event, 'sprint')}
-                  onPointerUp={releaseDrive}
-                  onPointerCancel={releaseDrive}
-                  onLostPointerCapture={releaseDrive}
-                >
-                  <span className="drive-arrow" aria-hidden="true">⚡</span>
-                  <small>{boosting ? 'BOOST!' : 'BOOST'}</small>
-                </button>
-              </div>
-            )}
-            <button
-              className="drive-pad drive-aux-pad"
-              disabled={disabled}
-              aria-label="Honk horn"
-              onContextMenu={event => event.preventDefault()}
-              onPointerDown={event => {
-                if (!disabled) {
-                  event.preventDefault();
-                  onInput('horn', true, `pad:${event.pointerId}`);
-                }
-              }}
-              onPointerUp={event => onInput('horn', false, `pad:${event.pointerId}`)}
-              onPointerCancel={event => onInput('horn', false, `pad:${event.pointerId}`)}
-            >
-              <span className="drive-arrow" aria-hidden="true">🔊</span>
-              <small>HORN</small>
-            </button>
-            <button
-              className={`drive-pad drive-aux-pad${wiperMode !== 'auto' ? ' on' : ''}`}
-              disabled={disabled}
-              aria-label={`Wipers ${wiperMode}`}
-              onContextMenu={event => event.preventDefault()}
-              onPointerDown={event => {
-                if (!disabled) {
-                  event.preventDefault();
-                  onWipers();
-                }
-              }}
-            >
-              <span className="drive-arrow" aria-hidden="true">{wiperMode === 'off' ? '🚫' : '💧'}</span>
-              <small>WIPER</small>
-            </button>
-          </div>
-
-          {/* Primary row: BRAKE & GAS */}
-          <div className="drive-main-row">
-            {driveButton('back', '▼', 'BRAKE', 'Brake and reverse')}
-            {driveButton('forward', '▲', 'GAS', 'Accelerate')}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  /* ── On-foot layout: joystick left, action cluster right ── */
-  return (
-    <>
-      {/* LEFT: Joystick anchored bottom-left */}
-      <div className={`mobile-stick-zone ${disabled ? 'inactive' : ''}`}>
-        <div
-          className="joystick"
-          aria-label="Movement joystick"
-          role="group"
+  return <div className={'phone-controls ' + (driving ? 'phone-driving' : armed ? 'phone-combat' : 'phone-walking') + (disabled ? ' inactive' : '')}
+    aria-label={driving ? 'Touch driving controls' : 'Touch character controls'}>
+    <div className="phone-left-zone">
+      {driving ? <div className="phone-steering" role="group" aria-label="Steering">
+        {hold('left', 'left', 'Left', 'touch-steer')}{hold('right', 'right', 'Right', 'touch-steer')}
+      </div> : <>
+        {hold('sprint', 'sprint', 'Sprint', 'touch-sprint')}
+        <div className="phone-joystick" role="group" aria-label="Drag to move" onContextMenu={event => event.preventDefault()}
           onPointerDown={event => {
             if (disabled || pointer.current !== null) return;
-            event.preventDefault();
-            pointer.current = event.pointerId;
-            event.currentTarget.setPointerCapture(event.pointerId);
-            move(event);
-          }}
-          onPointerMove={move}
-          onPointerUp={release}
-          onPointerCancel={release}
-          onLostPointerCapture={release}
-        >
-          <span className="stick-guides">＋</span>
-          <span
-            className="stick-knob"
-            style={{ transform: `translate(${disabled ? 0 : stick.x}px, ${disabled ? 0 : stick.y}px)` }}
-          />
+            event.preventDefault(); pointer.current = event.pointerId;
+            const rect = event.currentTarget.getBoundingClientRect();
+            bounds.current = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, radius: rect.width * 0.3 };
+            event.currentTarget.setPointerCapture(event.pointerId); moveStick(event);
+          }} onPointerMove={moveStick} onPointerUp={releaseStick} onPointerCancel={releaseStick} onLostPointerCapture={releaseStick}>
+          <i className="phone-stick-ring" /><i className="phone-stick-knob" style={{ transform: 'translate(' + stick.x + 'px, ' + stick.y + 'px)' }} />
         </div>
-        <span className="control-caption">MOVE</span>
+      </>}
+    </div>
+    {driving ? <>
+      <div className="phone-vehicle-tools" role="group" aria-label="Vehicle utilities">
+        {hold('horn', 'horn', 'Horn', 'touch-utility')}
+        {tap('wiper', 'Wipers', onWipers, wiperMode === 'on', 'touch-utility')}
+        {onCamera && tap('camera', 'View', onCamera, false, 'touch-utility')}
       </div>
-
-      {/* RIGHT: Action + combat buttons anchored bottom-right */}
-      <div className={`mobile-action-zone ${disabled ? 'inactive' : ''}`} role="group" aria-label="Action controls">
-        {armed ? (
-          <>
-            {/* Top row: SPRINT, JUMP, AIM (PUBG style ADS) */}
-            <div className="mobile-action-row mobile-top-row">
-              <button
-                aria-label="Sprint"
-                className="round-pad"
-                disabled={disabled}
-                onContextMenu={event => event.preventDefault()}
-                onPointerDown={event => {
-                  event.preventDefault();
-                  event.currentTarget.setPointerCapture(event.pointerId);
-                  onInput('sprint', true, `pad:${event.pointerId}`);
-                }}
-                onPointerUp={event => onInput('sprint', false, `pad:${event.pointerId}`)}
-                onPointerCancel={event => onInput('sprint', false, `pad:${event.pointerId}`)}
-                onLostPointerCapture={event => onInput('sprint', false, `pad:${event.pointerId}`)}
-              >
-                <span>»</span>
-                <small>SPRINT</small>
-              </button>
-              <button
-                aria-label="Jump"
-                className="round-pad"
-                disabled={disabled}
-                onContextMenu={event => event.preventDefault()}
-                onPointerDown={event => {
-                  event.preventDefault();
-                  event.currentTarget.setPointerCapture(event.pointerId);
-                  onInput('jump', true, `pad:${event.pointerId}`);
-                }}
-                onPointerUp={event => onInput('jump', false, `pad:${event.pointerId}`)}
-                onPointerCancel={event => onInput('jump', false, `pad:${event.pointerId}`)}
-                onLostPointerCapture={event => onInput('jump', false, `pad:${event.pointerId}`)}
-              >
-                <span>↑</span>
-                <small>JUMP</small>
-              </button>
-              <button
-                className={`round-pad aim-pad${aiming ? ' on' : ''}`}
-                disabled={disabled}
-                aria-label="Toggle aim / scope"
-                onContextMenu={event => event.preventDefault()}
-                onPointerDown={event => {
-                  event.preventDefault();
-                  onInput('aim', !aiming, 'aim-toggle');
-                }}
-              >
-                <span>◎</span>
-                <small>{aiming ? 'AIM ON' : 'AIM'}</small>
-              </button>
-            </div>
-
-            {/* Bottom row: RELOAD and big prominent FIRE button */}
-            <div className="mobile-action-row mobile-bottom-row">
-              <button
-                className="round-pad reload-pad"
-                disabled={disabled}
-                aria-label="Reload weapon"
-                onContextMenu={event => event.preventDefault()}
-                onPointerDown={event => {
-                  event.preventDefault();
-                  onReload();
-                }}
-              >
-                <span>⟳</span>
-                <small>RELOAD</small>
-              </button>
-              <button
-                className="round-pad fire-pad"
-                disabled={disabled}
-                aria-label="Fire weapon"
-                onContextMenu={event => event.preventDefault()}
-                onPointerDown={event => {
-                  event.preventDefault();
-                  event.currentTarget.setPointerCapture(event.pointerId);
-                  onInput('fire', true, `pad:${event.pointerId}`);
-                }}
-                onPointerUp={event => onInput('fire', false, `pad:${event.pointerId}`)}
-                onPointerCancel={event => onInput('fire', false, `pad:${event.pointerId}`)}
-                onLostPointerCapture={event => onInput('fire', false, `pad:${event.pointerId}`)}
-              >
-                <span>✸</span>
-                <small>FIRE</small>
-              </button>
-            </div>
-          </>
-        ) : (
-          <>
-            {/* Unarmed: SPRINT and JUMP */}
-            <div className="mobile-action-row mobile-top-row">
-              <button
-                aria-label="Sprint"
-                className="round-pad"
-                disabled={disabled}
-                onContextMenu={event => event.preventDefault()}
-                onPointerDown={event => {
-                  event.preventDefault();
-                  event.currentTarget.setPointerCapture(event.pointerId);
-                  onInput('sprint', true, `pad:${event.pointerId}`);
-                }}
-                onPointerUp={event => onInput('sprint', false, `pad:${event.pointerId}`)}
-                onPointerCancel={event => onInput('sprint', false, `pad:${event.pointerId}`)}
-                onLostPointerCapture={event => onInput('sprint', false, `pad:${event.pointerId}`)}
-              >
-                <span>»</span>
-                <small>SPRINT</small>
-              </button>
-              <button
-                aria-label="Jump"
-                className="round-pad"
-                disabled={disabled}
-                onContextMenu={event => event.preventDefault()}
-                onPointerDown={event => {
-                  event.preventDefault();
-                  event.currentTarget.setPointerCapture(event.pointerId);
-                  onInput('jump', true, `pad:${event.pointerId}`);
-                }}
-                onPointerUp={event => onInput('jump', false, `pad:${event.pointerId}`)}
-                onPointerCancel={event => onInput('jump', false, `pad:${event.pointerId}`)}
-                onLostPointerCapture={event => onInput('jump', false, `pad:${event.pointerId}`)}
-              >
-                <span>↑</span>
-                <small>JUMP</small>
-              </button>
-            </div>
-            {onArm && (
-              <div className="mobile-action-row mobile-bottom-row">
-                <button
-                  className="round-pad arm-pad"
-                  disabled={disabled}
-                  aria-label="Arm weapon"
-                  onContextMenu={event => event.preventDefault()}
-                  onPointerDown={event => {
-                    event.preventDefault();
-                    onArm();
-                  }}
-                >
-                  <span>🔫</span>
-                  <small>ARM</small>
-                </button>
-              </div>
-            )}
-          </>
-        )}
+      <div className="phone-right-zone">
+        <div className="phone-driving-actions">
+          {hold('handbrake', 'drift', 'Drift', 'touch-drift')}
+          {racing && <div className={'phone-boost' + (boosting ? ' boosting' : '')}>
+            {hold('sprint', 'boost', 'Boost', 'touch-boost', boost <= 1)}
+            <div className="phone-boost-track" role="progressbar" aria-label="Boost available" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(boost)}><i style={{ width: Math.max(0, Math.min(100, boost)) + '%' }} /></div>
+          </div>}
+        </div>
+        <div className="phone-pedals" role="group" aria-label="Pedals">
+          {hold('back', 'brake', speed < -0.5 ? 'Reverse' : 'Brake', 'touch-brake')}
+          {hold('forward', 'gas', 'Gas', 'touch-gas')}
+        </div>
       </div>
-    </>
-  );
+    </> : <div className="phone-right-zone phone-actions" role="group" aria-label="Character actions">
+      {armed && tap('aim', aiming ? 'Aim on' : 'Aim', () => callbacks.current.onInput('aim', !aiming, 'aim-toggle'), aiming, 'touch-aim')}
+      {hold('jump', 'jump', 'Jump', 'touch-jump')}
+      {armed ? <>
+        {tap('reload', 'Reload', onReload, false, 'touch-reload')}
+        {hold('fire', 'fire', 'Fire', 'touch-fire')}
+      </> : onArm && tap('weapon', 'Equip', onArm, false, 'touch-equip')}
+    </div>}
+  </div>;
 }

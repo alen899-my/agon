@@ -22,6 +22,7 @@ import { VehicleAudio } from '../game/VehicleAudio';
 import type { TTShot } from './TableTennis';
 import { CpuRacer, CPU_RACER_ID_PREFIX, type CpuDifficulty } from './CpuRacer';
 import { AgentSim } from './AgentSim';
+import { partitionScenery } from './StaticScenery';
 import { CharacterFactory } from './characters/CharacterFactory';
 
 export type { RacerState };
@@ -236,6 +237,34 @@ export class WorldEngine {
   private readonly _aimScreenVec = new THREE.Vector3();
   private quality: QualityLevel = 'balanced'; private pixelCap = QUALITY_PIXEL.balanced;
   private lastW = 1; private lastH = 1;
+  private visualTime = -1;
+  private previousCar = { x: 0, y: 0, z: 0, yaw: 0, cameraYaw: 0, valid: false };
+  private previousCpu = new Map<string, { x: number; y: number; z: number; yaw: number }>();
+  private textureQuality = new Set<THREE.Texture>();
+  private bodyPitch = 0; private bodyRoll = 0;
+  private lastShadowAt = -1;
+  /** Cache static transforms and improve oblique road texture clarity without postprocessing. */
+  private prepareScenery(root: THREE.Object3D, partition = false): void {
+    if (partition) partitionScenery(root);
+    root.traverse(object => {
+      object.updateMatrix();
+      object.matrixAutoUpdate = false;
+      const mesh = object as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const material of materials) {
+        const map = (material as THREE.MeshStandardMaterial).map;
+        if (map) this.textureQuality.add(map);
+      }
+    });
+    this.updateTextureQuality();
+  }
+  private updateTextureQuality(): void {
+    const cap = Math.min(this.renderer.capabilities.getMaxAnisotropy(), this.quality === 'low' ? 2 : this.quality === 'balanced' ? 4 : 8);
+    for (const map of this.textureQuality) if (map.anisotropy !== cap) {
+      map.anisotropy = cap; map.needsUpdate = true;
+    }
+  }
   /** Dynamic resolution: 1 = full pixelCap, scales down under load, recovers when fast. */
   private dynScale = 1; private frameEMA = 16; private slowFrames = 0; private fastFrames = 0;
   private lastDynAdjust = 0; private renderCount = 0; private lastRenderMs = 0;
@@ -311,18 +340,23 @@ export class WorldEngine {
       canvas, antialias: useAA, stencil: false,
       powerPreference: this.lowPower ? 'low-power' : 'high-performance',
     });
+    this.scene.matrixAutoUpdate = false;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.05;
-    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.enabled = !this.lowPower;
+    this.renderer.shadowMap.autoUpdate = false;
     this.renderer.shadowMap.type = this.lowPower ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
     this.kit = new AssetKit(); buildMap(this.scene, this.kit);
+    partitionScenery(this.scene, 96);
+    for (const root of this.scene.children) this.prepareScenery(root);
     this.scene.traverse((obj) => {
       if ((obj as THREE.Mesh).userData?.showCarGlow) this.showCarGlows.push(obj as THREE.Mesh);
     });
     this.scene.add(this.ambient, this.sun, this.sun.target);
     const initial: QualityLevel = this.lowPower ? 'low' : 'balanced';
     this.quality = initial; this.pixelCap = QUALITY_PIXEL[initial];
+    this.updateTextureQuality();
     this.sun.castShadow = initial !== 'low'; this.sun.shadow.mapSize.set(QUALITY_SHADOW[initial], QUALITY_SHADOW[initial]);
     const ext0 = QUALITY_SHADOW_EXTENT[initial];
     Object.assign(this.sun.shadow.camera, { left: -ext0, right: ext0, top: ext0, bottom: -ext0, near: 1, far: 120 });
@@ -435,7 +469,10 @@ export class WorldEngine {
 
       // Nitro boost lives only while racing — free-roam driving never drains it.
       this.simulation.boostEnabled = this.race.phase === 'racing';
+      const car = this.simulation.car;
+      Object.assign(this.previousCar, { x: car.x, y: this.simulation.carY, z: car.z, yaw: car.yaw, cameraYaw: this.simulation.yaw, valid: true });
       if (this.race.phase !== 'countdown') this.simulation.update(dt);
+      if (this.simulation.active && this.race.phase !== 'countdown') this.updateBarrels(dt);
       // Drift rubber: lay twin skid marks while sliding, fade out over a minute.
       // Engine voices: player car + nearest traffic, skid screech while sliding.
       {
@@ -465,6 +502,9 @@ export class WorldEngine {
         const nowMs2 = Date.now();
         let anyFinished = false;
         for (const cpu of this.cpuRacers) {
+          let previous = this.previousCpu.get(cpu.id);
+          if (!previous) { previous = { x: cpu.x, y: cpu.y, z: cpu.z, yaw: cpu.yaw }; this.previousCpu.set(cpu.id, previous); }
+          previous.x = cpu.x; previous.y = cpu.y; previous.z = cpu.z; previous.yaw = cpu.yaw;
           const finished = cpu.tick(dt, nowMs2, this.race.startedAt, this.race.laps);
           this.race.syncCpuState(cpu.id, cpu.state);
           if (finished && !anyFinished) { anyFinished = true; crowdCheerSound(); }
@@ -472,14 +512,29 @@ export class WorldEngine {
         if (this.isFinalLapActive && !this.playedFinalLapSound) {
           this.playedFinalLapSound = true;
           finalLapSound();
+          this.notifyRace();
         }
-        if (anyFinished || this.playedFinalLapSound) this.notifyRace();
+        if (anyFinished) this.notifyRace();
       }
       // React snapshot at 10Hz desktop, 5Hz on low (halves setState/GC pressure on weak SoCs).
       const emitEvery = this.quality === 'low' ? 0.2 : 0.1;
       if (this.hudTime >= emitEvery) { this.hudTime = 0; this.emit(); }
     }, this.render);
     this.emit();
+  }
+  private updateBarrels(dt: number): void {
+    const sim = this.simulation;
+    // Fixed-step barrel contacts and integration.
+    if (sim.driving) {
+      this.barrelSim.checkVehicleHit(sim.car.x, sim.car.z, sim.car.yaw, sim.car.speed, sim.vehicleKind, sim.lateralSpeed);
+    } else {
+      this.barrelSim.checkPlayerHit(sim.x, sim.z, sim.pvx, sim.pvz);
+    }
+    for (let i = 0; i < sim.traffic.length; i++) {
+      const t = sim.traffic[i];
+      if (t) this.barrelSim.checkVehicleHit(t.x, t.z, t.yaw, t.speed, t.kind);
+    }
+    this.barrelSim.update(dt, BUILDINGS);
   }
   private emit(): void {
     const sim = this.simulation;
@@ -1188,6 +1243,11 @@ export class WorldEngine {
       const distance = Math.hypot(p.x - sim.x, p.z - sim.z);
       mesh.actor.group.visible = !p.hidden && distance < (this.quality === 'low' ? 90 : 130);
       mesh.tag.visible = !p.hidden && distance < (this.quality === 'low' ? 30 : 50);
+      if (!mesh.actor.group.visible) {
+        mesh.actor.group.position.set(p.x, 0, p.z);
+        mesh.actor.group.rotation.y = -p.yaw;
+        continue;
+      }
       const k = 1 - Math.exp(-dt * 12);
       const oldX = mesh.actor.group.position.x, oldZ = mesh.actor.group.position.z;
       mesh.actor.group.position.x += (p.x - mesh.actor.group.position.x) * k;
@@ -1518,7 +1578,7 @@ export class WorldEngine {
   joystick(x: number, y: number): void { if (!this.suspended) this.simulation.setStick(x, y); }
   look(dx: number, dy: number): void { if (!this.suspended) this.simulation.look(dx, dy); }
   clearInput(): void { this.simulation.clearInput(); }
-  setSuspended(value: boolean): void { this.suspended = value; this.clearInput(); this.vehicleAudio.setSuspended(value); if (value) this.loop.stop(); else this.loop.start(); }
+  setSuspended(value: boolean): void { this.suspended = value; this.clearInput(); this.vehicleAudio.setSuspended(value); this.lastRenderMs = 0; this.visualTime = -1; if (value) this.loop.stop(); else this.loop.start(); }
   setTheme(theme: Theme): void {
     this.theme = theme;
     // Snap day<->night on explicit switch; the render loop eases nightFactor.
@@ -1779,8 +1839,11 @@ export class WorldEngine {
   }
   resize(width: number, height: number): void {
     this.lastW = Math.max(1, width); this.lastH = Math.max(1, height);
-    const eff = Math.min(window.devicePixelRatio || 1, this.pixelCap) * this.dynScale;
-    this.renderer.setPixelRatio(Math.max(0.75, eff));
+    const eff = Math.min(window.devicePixelRatio || 1, this.pixelCap);
+    // Limit actual framebuffer area on large/retina screens as well as device pixel ratio.
+    const pixelBudget = this.quality === 'low' ? 1000000 : this.quality === 'balanced' ? 2000000 : this.quality === 'high' ? 3600000 : 6000000;
+    const areaCap = Math.sqrt(pixelBudget / (this.lastW * this.lastH));
+    this.renderer.setPixelRatio(Math.max(0.4, Math.min(eff, areaCap) * this.dynScale));
     this.renderer.setSize(this.lastW, this.lastH, false);
     this.camera.aspect = this.lastW / this.lastH; this.camera.updateProjectionMatrix();
   }
@@ -1788,6 +1851,10 @@ export class WorldEngine {
   applyQuality(q: QualityLevel): void {
     this.quality = q; this.pixelCap = QUALITY_PIXEL[q]; this.dynScale = 1;
     this.slowFrames = 0; this.fastFrames = 0;
+    this.frameEMA = 16.7; this.lastRenderMs = 0;
+    this.sun.castShadow = q !== 'low';
+    this.renderer.shadowMap.needsUpdate = true;
+    this.updateTextureQuality();
     this.precip?.setQuality(q);
     const shadowSize = QUALITY_SHADOW[q];
     if (this.sun.shadow.mapSize.x !== shadowSize) {
@@ -1811,8 +1878,8 @@ export class WorldEngine {
         for (const m of mats as THREE.Material[]) if (m && !seen.has(m)) { seen.add(m); m.needsUpdate = true; }
       });
     }
-    // Cheaper depth range on low (fill-rate + z-precision win, same nearby look).
-    this.camera.far = q === 'low' ? 220 : 340;
+    // Keep sufficient braking-distance visibility at racing speeds.
+    this.camera.far = q === 'low' ? 260 : 380;
     this.camera.updateProjectionMatrix();
     // Small props stop casting on low/balanced-mobile (big shadow-pass saving, invisible at distance).
     const smallCast = q === 'high' || q === 'ultra';
@@ -1828,7 +1895,7 @@ export class WorldEngine {
     this.resize(this.lastW, this.lastH);
     this.applyLook();
   }
-  /** Dynamic resolution: hold 50-60fps by scaling pixelRatio 0.75x..1x of the tier cap. */
+  /** Adaptive resolution with fast relief and slow recovery on 60 Hz displays. */
   private autoResolution(now: number): void {
     if (this.lastRenderMs === 0) { this.lastRenderMs = now; return; }
     const ms = now - this.lastRenderMs;
@@ -1836,41 +1903,49 @@ export class WorldEngine {
     if (ms <= 0 || ms > 100) return;
     this.frameEMA += (ms - this.frameEMA) * 0.06;
     if (now - this.lastDynAdjust < 1500) return;
-    if (this.frameEMA > 20 && this.dynScale > 0.75) {
+    if (this.frameEMA > 19.5 && this.dynScale > 0.55) {
       this.slowFrames++;
       this.fastFrames = 0;
       if (this.slowFrames >= 2) {
         this.slowFrames = 0; this.lastDynAdjust = now;
-        this.dynScale = Math.max(0.75, this.dynScale - 0.15);
+        this.dynScale = Math.max(0.55, this.dynScale - 0.1);
         this.resize(this.lastW, this.lastH);
       }
-    } else if (this.frameEMA < 12 && this.dynScale < 1) {
+    } else if (this.frameEMA < 17.5 && this.dynScale < 1) {
       this.fastFrames++;
       this.slowFrames = 0;
-      if (this.fastFrames >= 8) {
+      if (this.fastFrames >= 180) {
         this.fastFrames = 0; this.lastDynAdjust = now;
-        this.dynScale = Math.min(1, this.dynScale + 0.1);
+        this.dynScale = Math.min(1, this.dynScale + 0.05);
         this.resize(this.lastW, this.lastH);
       }
     } else { this.slowFrames = 0; this.fastFrames = 0; }
   }
   private render = (alpha: number): void => {
     if (this.disposed) return;
-    this.autoResolution(performance.now());
+    const renderNow = performance.now();
+    this.autoResolution(renderNow);
+    const shadowInterval = this.quality === 'balanced' ? 1000 / 30 : 1000 / 60;
+    if (renderNow - this.lastShadowAt >= shadowInterval) {
+      this.renderer.shadowMap.needsUpdate = true; this.lastShadowAt = renderNow;
+    }
     this.renderCount++;
     const sim = this.simulation; if (!sim.active) alpha = 1;
     const raceGuidance = this.raceGuidanceActive;
-    if (raceGuidance && !this.raceRoute) {
+    if (raceGuidance && this.race.track === 'city' && !this.raceRoute) {
       this.raceRoute = new RaceRoute();
+      this.prepareScenery(this.raceRoute.group, true);
       this.scene.add(this.raceRoute.group);
     }
     const approachingF1 = sim.car.x > F1_ORIGIN.x - 450 || sim.x > F1_ORIGIN.x - 450;
-    if ((raceGuidance || approachingF1) && !this.f1Route) {
+    const f1Race = raceGuidance && this.race.track === 'f1';
+    if ((f1Race || approachingF1) && !this.f1Route) {
       this.f1Route = new F1Route();
+      this.prepareScenery(this.f1Route.group, true);
       this.scene.add(this.f1Route.group);
     }
     if (this.raceRoute) this.raceRoute.group.visible = raceGuidance && this.race.track === 'city' && sim.phase === 'playing' && sim.mode === 'roam';
-    if (this.f1Route) this.f1Route.group.visible = (raceGuidance || approachingF1 || this.onF1IslandPos(sim)) && sim.phase === 'playing' && sim.mode === 'roam';
+    if (this.f1Route) this.f1Route.group.visible = (f1Race || approachingF1 || this.onF1IslandPos(sim)) && sim.phase === 'playing' && sim.mode === 'roam';
     const x = THREE.MathUtils.lerp(sim.previous.x, sim.x, alpha), z = THREE.MathUtils.lerp(sim.previous.z, sim.z, alpha), y = THREE.MathUtils.lerp(sim.previous.y, sim.y, alpha);
     this.avatar.group.position.set(x, y + 0.08, z); this.avatar.group.rotation.y = -sim.facing;
     // Model forward is -Z; a positive world yaw turns it toward +X.
@@ -1886,7 +1961,10 @@ export class WorldEngine {
     this.nameTag.visible = showTag;
     if (showTag) this.nameTag.position.set(x, y + 2.35 + bob, z);
     // Car body feel: pitch under accel/brake, roll in corners, bounce on crash.
-    const dt = Math.max(0, Math.min(0.05, sim.time - this.prevSimTime));
+    // Render-time interpolation keeps camera and suspension smooth between 60 Hz physics steps.
+    const visualTime = sim.active ? sim.time + alpha / 60 : sim.time;
+    const dt = this.visualTime < 0 ? 0 : Math.max(0, Math.min(0.05, visualTime - this.visualTime));
+    this.visualTime = visualTime;
     this.prevSimTime = sim.time;
     // ── Sense of speed (always, not just racing): FOV widens toward top
     // speed, boost pushes past it. Eases back when walking or parked.
@@ -1897,7 +1975,7 @@ export class WorldEngine {
       const raw = spec.topSpeed > 0 ? spd / spec.topSpeed : 0;
       const ads = !sim.driving && sim.armed && sim.aiming && sim.mode === 'roam' ? GUNS[sim.gunIndex] : null;
       const wantFov = sim.driving ? 60 + Math.min(1.2, raw) * 15 : ads ? ads.zoomFov : 60;
-      this.speedFov += (wantFov - this.speedFov) * Math.min(1, dt * (ads ? 8 : 3));
+      this.speedFov += (wantFov - this.speedFov) * (1 - Math.exp(-dt * (ads ? 8 : 3)));
       if (Math.abs(this.camera.fov - this.speedFov) > 0.05) {
         this.camera.fov = this.speedFov;
         this.camera.updateProjectionMatrix();
@@ -1920,22 +1998,33 @@ export class WorldEngine {
       }
     }
     if (this.precip) this.precip.update(dt, sim.driving ? sim.car.x : sim.x, sim.driving ? sim.car.z : sim.z);
-    // Player headlight: shadowless spot thrown ahead of the driven car.
-    if (this._nightFactor > 0.01 && sim.driving) {
-      const fx = Math.sin(sim.car.yaw), fz = -Math.cos(sim.car.yaw);
-      this.headlight.position.set(sim.car.x + fx * 1.5, sim.carY + 1.1, sim.car.z + fz * 1.5);
-      this.headlight.target.position.set(sim.car.x + fx * 14, sim.carY + 0.2, sim.car.z + fz * 14);
-      this.headlight.visible = true;
-    } else this.headlight.visible = false;
     const accel = sim.driving ? sim.acceleration : 0;
     this.car = this.ensureFleetKind(sim.vehicleKind);
     for (const [kind, vehicle] of this.fleet) vehicle.group.visible = kind === sim.vehicleKind && !sim.carWrecked;
-    this.car.group.position.set(sim.car.x, sim.carY + 0.08, sim.car.z); this.car.group.rotation.y = -sim.car.yaw;
+    const pc = this.previousCar;
+    const carAlpha = pc.valid && Math.hypot(pc.x - sim.car.x, pc.z - sim.car.z) < 25 ? alpha : 1;
+    const carX = THREE.MathUtils.lerp(pc.x, sim.car.x, carAlpha);
+    const carZ = THREE.MathUtils.lerp(pc.z, sim.car.z, carAlpha);
+    const carY = THREE.MathUtils.lerp(pc.y, sim.carY, carAlpha);
+    const carYaw = pc.yaw + Math.atan2(Math.sin(sim.car.yaw - pc.yaw), Math.cos(sim.car.yaw - pc.yaw)) * carAlpha;
+    const cameraYaw = pc.cameraYaw + Math.atan2(Math.sin(sim.yaw - pc.cameraYaw), Math.cos(sim.yaw - pc.cameraYaw)) * carAlpha;
+    this.car.group.position.set(carX, carY + 0.08, carZ); this.car.group.rotation.y = -carYaw;
+    const suspension = 1 - Math.exp(-dt * 12);
+    const f1Body = sim.vehicleKind === 'f1' ? 0.35 : 1;
+    this.bodyPitch += (THREE.MathUtils.clamp(-accel * 0.009 * f1Body + sim.carPitch, -0.3, 0.3) - this.bodyPitch) * suspension;
+    this.bodyRoll += (-sim.car.steer * Math.min(0.045, Math.abs(sim.car.speed) * 0.0025) * f1Body - this.bodyRoll) * suspension;
+    // Player headlight: shadowless spot thrown ahead of the driven car.
+    if (this._nightFactor > 0.01 && sim.driving) {
+      const fx = Math.sin(carYaw), fz = -Math.cos(carYaw);
+      this.headlight.position.set(carX + fx * 1.5, carY + 1.1, carZ + fz * 1.5);
+      this.headlight.target.position.set(carX + fx * 14, carY + 0.2, carZ + fz * 14);
+      this.headlight.visible = true;
+    } else this.headlight.visible = false;
     // Wipers: auto sweeps in rain, manual T-key override (on = always, off = parked).
     const wiper = this.wiperSweep(0);
     this.car.update(sim.car.speed, sim.car.steer, dt, sim.car.braking, {
-      pitch: THREE.MathUtils.clamp(-accel * 0.012 + sim.carPitch, -0.3, 0.3),
-      roll: sim.skidding ? Math.sin(sim.time * 20) * 0.02 : -sim.car.steer * Math.min(0.05, Math.abs(sim.car.speed) * 0.003),
+      pitch: this.bodyPitch,
+      roll: this.bodyRoll,
     }, sim.blinker, sim.time, wiper);
     this.car.glazing.visible = !(sim.driving && sim.view === 'first');
     // Cockpit hides the 3D cowl blades (the screen overlay draws the sweep instead).
@@ -1951,7 +2040,14 @@ export class WorldEngine {
     this.people.forEach((person, i) => {
       const point = sim.peds[i]; if (!point) return;
       const dx = point.x - px, dz = point.z - pz;
-      const far = dx * dx + dz * dz > cullDist * cullDist;
+      const distance2 = dx * dx + dz * dz;
+      const far = distance2 > cullDist * cullDist;
+      person.actor.group.visible = !far || (sim.mode === 'table' && i === 0);
+      if (far && !(sim.mode === 'table' && i === 0)) {
+        if (person.tag) person.tag.visible = false;
+        return;
+      }
+      const animatePed = distance2 < 625 || (this.renderCount + i) % (this.quality === 'low' ? 3 : 2) === 0;
       if (point.say && !person.tag) {
         person.canvas = document.createElement('canvas'); person.canvas.width = 256; person.canvas.height = 72;
         person.texture = new THREE.CanvasTexture(person.canvas);
@@ -1968,24 +2064,14 @@ export class WorldEngine {
       if (point.ragdoll) {
         person.actor.group.position.set(point.x, 0.08 + point.ry, point.z);
         person.actor.group.rotation.set(point.rpitch, -point.rollYaw, 0, 'YXZ');
-        if (!far) person.actor.animate({ phase: point.phase, intensity: 0, airborne: point.ry > 0.05, dip: 0, idle: sim.time + i * 1.7 });
+        if (animatePed) person.actor.animate({ phase: point.phase, intensity: 0, airborne: point.ry > 0.05, dip: 0, idle: sim.time + i * 1.7 });
       } else {
         person.actor.group.position.set(point.x, 0.08, point.z);
         person.actor.group.rotation.set(0, -point.yaw, 0);
-        if (!far) person.actor.animate({ phase: point.phase, intensity: point.move, airborne: false, dip: 0, idle: sim.time + i * 1.7, activity: point.activity });
+        if (animatePed) person.actor.animate({ phase: point.phase, intensity: point.move, airborne: false, dip: 0, idle: sim.time + i * 1.7, activity: point.activity });
       }
     });
-    // Dynamic interactive barrels: vehicle & player collision, physics, and mesh sync
-    if (sim.driving) {
-      this.barrelSim.checkVehicleHit(sim.car.x, sim.car.z, sim.car.yaw, sim.car.speed, sim.vehicleKind, sim.lateralSpeed);
-    } else {
-      this.barrelSim.checkPlayerHit(sim.x, sim.z, sim.pvx, sim.pvz);
-    }
-    for (let i = 0; i < sim.traffic.length; i++) {
-      const t = sim.traffic[i];
-      if (t) this.barrelSim.checkVehicleHit(t.x, t.z, t.yaw, t.speed, t.kind);
-    }
-    this.barrelSim.update(dt, BUILDINGS);
+    // Render the barrel state computed by fixed-step physics.
     for (let i = 0; i < this.barrelSim.barrels.length; i++) {
       const b = this.barrelSim.barrels[i];
       if (b.mesh) {
@@ -2000,7 +2086,9 @@ export class WorldEngine {
     const isRacing = this.race.phase === 'countdown' || this.race.phase === 'racing';
     const cheerLevel = isRacing ? 1.0 : nearArena ? 0.85 : 0.45;
     // Far crowd: animate at 1/3 rate (same look nearby, ~66% cheaper far away).
-    const crowdTick = nearArena || isRacing || this.renderCount % 3 === 0;
+    const crowdVisible = arenaDist < (this.quality === 'low' ? 65 : 100);
+    for (const fan of this.crowd) fan.actor.group.visible = crowdVisible;
+    const crowdTick = crowdVisible && (nearArena || this.renderCount % 3 === 0);
     if (crowdTick) {
       for (let i = 0; i < this.crowd.length; i++) {
         const fan = this.crowd[i];
@@ -2041,6 +2129,7 @@ export class WorldEngine {
       const vehicle = this.agentVehicles.get(cop.id);
       if (!vehicle) continue;
       vehicle.group.visible = Math.hypot(cop.x - sim.x, cop.z - sim.z) < (this.quality === 'low' ? 100 : 150);
+      if (!vehicle.group.visible) continue;
       vehicle.group.position.set(cop.onFoot ? cop.vehicleX ?? cop.x : cop.x, 0.08, cop.onFoot ? cop.vehicleZ ?? cop.z : cop.z);
       vehicle.group.rotation.y = -cop.yaw;
       const blink = cop.lightsOn ? (Math.floor(sim.time * 4) % 2 === 0 ? 1 : 2) : 0;
@@ -2051,6 +2140,7 @@ export class WorldEngine {
       const vehicle = this.agentVehicles.get(ride.id);
       if (!vehicle) continue;
       vehicle.group.visible = Math.hypot(ride.x - sim.x, ride.z - sim.z) < (this.quality === 'low' ? 100 : 150);
+      if (!vehicle.group.visible) continue;
       const blend = 1 - Math.exp(-dt * 14);
       vehicle.group.position.x += (ride.x - vehicle.group.position.x) * blend;
       vehicle.group.position.z += (ride.z - vehicle.group.position.z) * blend;
@@ -2064,18 +2154,24 @@ export class WorldEngine {
     if (this.cpuRacers.length > 0) {
       for (const cpu of this.cpuRacers) {
         const v = this.cpuVehicles.get(cpu.id);
+        const tag = this.cpuTags.get(cpu.id);
+        const visible = Math.hypot(cpu.x - px, cpu.z - pz) < (this.quality === 'low' ? 180 : 260);
+        if (v) v.group.visible = visible;
+        if (tag) tag.visible = visible && sim.view === 'third';
+        if (!visible) continue;
+        const previous = this.previousCpu.get(cpu.id);
+        const blend = previous && Math.hypot(previous.x - cpu.x, previous.z - cpu.z) < 25 ? alpha : 1;
+        const cx = previous ? THREE.MathUtils.lerp(previous.x, cpu.x, blend) : cpu.x;
+        const cz = previous ? THREE.MathUtils.lerp(previous.z, cpu.z, blend) : cpu.z;
+        const cy = previous ? THREE.MathUtils.lerp(previous.y, cpu.y, blend) : cpu.y;
+        const yaw = previous ? previous.yaw + Math.atan2(Math.sin(cpu.yaw - previous.yaw), Math.cos(cpu.yaw - previous.yaw)) * blend : cpu.yaw;
         if (v) {
-          const gy = groundHeight(cpu.x, cpu.z, cpu.y) + 0.08;
-          v.group.position.set(cpu.x, gy, cpu.z);
-          v.group.rotation.y = -cpu.yaw;
-          const pitch = cpu.track === 'f1' ? Math.atan(f1Progress(cpu.x, cpu.z).grade) : 0;
+          v.group.position.set(cx, cy + 0.08, cz);
+          v.group.rotation.y = -yaw;
+          const pitch = cpu.pitch;
           v.update(cpu.speed, cpu.steer, dt, cpu.braking, { pitch, roll: 0 }, 0, sim.time, 0);
         }
-        const tag = this.cpuTags.get(cpu.id);
-        if (tag) {
-          tag.position.set(cpu.x, groundHeight(cpu.x, cpu.z, cpu.y) + 2.6, cpu.z);
-          tag.visible = sim.view === 'third';
-        }
+        if (tag) tag.position.set(cx, cy + 2.6, cz);
       }
     }
     // Table tennis sounds: play only fresh sim events.
@@ -2203,17 +2299,17 @@ export class WorldEngine {
         const spec = VEHICLES[sim.vehicleKind];
         const ratio = spec.topSpeed > 0 ? Math.min(1.2, Math.abs(sim.car.speed) / spec.topSpeed) : 0;
         const vib = ratio * ratio * 0.02;
-        this.camera.position.x += x - sim.car.x + shakeX * 0.15 + Math.sin(sim.time * 47) * vib;
-        this.camera.position.z += z - sim.car.z;
+        this.camera.position.x += shakeX * 0.15 + Math.sin(sim.time * 47) * vib;
+
         this.camera.position.y += shakeY * 0.15 + Math.abs(Math.cos(sim.time * 39)) * vib;
       } else this.camera.position.set(x + shakeX, y + 1.84 + shakeY, z);
-      this.target.copy(this.camera.position).add(this.direction.set(Math.sin(sim.yaw) * 10, -Math.sin(sim.pitch) * 10, -Math.cos(sim.yaw) * 10));
+      this.target.copy(this.camera.position).add(this.direction.set(Math.sin(sim.driving ? cameraYaw : sim.yaw) * 10, -Math.sin(sim.pitch) * 10, -Math.cos(sim.driving ? cameraYaw : sim.yaw) * 10));
       this.camera.lookAt(this.target);
     } else {
       // Chase rides at car height so the bridge deck doesn't sink out of frame.
       // Both the look target AND the camera anchor lift with the car —
       // otherwise the camera sits at street level staring up through the deck.
-      const rideY = sim.driving ? sim.carY : 0;
+      const rideY = sim.driving ? carY - y : 0;
       // Over-the-shoulder aim (pro style): ease the lens to the right shoulder
       // and pull it in close while aiming on foot; centered chase otherwise.
       const wantShoulder = sim.armed && sim.aiming && !sim.driving && sim.mode === 'roam' ? 1 : 0;
@@ -2224,9 +2320,10 @@ export class WorldEngine {
       const spec = VEHICLES[sim.vehicleKind];
       const ratio = sim.driving && spec.topSpeed > 0
         ? Math.min(1.2, Math.abs(sim.car.speed) / spec.topSpeed) : 0;
-      const vib = ratio * ratio * 0.06;
+      const vib = ratio * ratio * 0.012;
       const distance = (sim.driving ? spec.length + 6 + ratio * 2.2 : 6.5) * (1 - shoulder * 0.45);
-      this.desired.set(x - Math.sin(sim.yaw) * distance, y + 3.4 + sim.pitch * 5 + rideY - shoulder * 0.5, z + Math.cos(sim.yaw) * distance);
+      const chaseYaw = sim.driving ? cameraYaw : sim.yaw;
+      this.desired.set(x - Math.sin(chaseYaw) * distance, y + 3.4 + sim.pitch * 5 + rideY - shoulder * 0.5, z + Math.cos(chaseYaw) * distance);
       // Right-shoulder offset: right of facing = (cos yaw, sin yaw) in XZ.
       this.desired.x += Math.cos(sim.yaw) * 1.15 * shoulder;
       this.desired.z += Math.sin(sim.yaw) * 1.15 * shoulder;
@@ -2279,6 +2376,8 @@ export class WorldEngine {
     for (const pooled of this.ghostVehiclePool.values()) for (const v of pooled) this.scene.remove(v.group);
     this.ghostVehiclePool.clear();
     this.raceRoute?.dispose();
+    this.f1Route?.dispose();
+    this.textureQuality.clear(); this.previousCpu.clear();
     this.scene.traverse(object => { if (object instanceof THREE.InstancedMesh) object.dispose(); });
     this.marker.geometry.dispose(); (this.marker.material as THREE.Material).dispose();
     this.nameTexture.dispose(); (this.nameTag.material as THREE.Material).dispose();

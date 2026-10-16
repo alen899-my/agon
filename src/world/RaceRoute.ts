@@ -479,6 +479,7 @@ export class RaceRoute {
       if (isFinalLap) {
         const pulse = Math.sin(simTime * 8) * 0.1 + 0.95;
         this.finalLapSign.scale.set(pulse, pulse, 1);
+        this.finalLapSign.updateMatrix();
       }
     }
     if (this.strobes.length > 0) {

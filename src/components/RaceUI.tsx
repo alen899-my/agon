@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { RaceModal } from './RaceModal';
+import { VehiclePreview } from './VehiclePreview';
 import type { WorldEngine } from '../world/WorldEngine';
 import { formatRaceTime } from '../world/Track';
 import { lightStage } from '../world/RaceSim';
@@ -8,12 +10,17 @@ import { VEHICLES, VEHICLE_KINDS, type VehicleKind } from '../world/Vehicles';
 
 /** Live standings panel (top-right, mobile-first, theme via CSS vars). */
 export function RaceLeaderboard({ engine }: { engine: WorldEngine | null }) {
+  const [expanded, setExpanded] = useState(false);
   if (!engine || engine.race.phase === 'idle' || engine.race.phase === 'lobby') return null;
   const order = engine.race.standings();
   const laps = engine.race.laps;
   const trackLabel = engine.race.track === 'f1' ? 'F1 CIRCUIT' : 'CITY LOOP';
   return (
-    <div className="race-board" role="status" aria-label="Live race leaderboard">
+    <div className={'race-board' + (expanded ? ' mobile-expanded' : '')} role="status" aria-label="Live race leaderboard">
+      <button type="button" className="mobile-race-summary" aria-label="Toggle race standings" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>
+        <b>P{Math.max(1, order.findIndex(r => r.id === engine.raceId) + 1)}<small> / {order.length}</small></b>
+        <span>LAP {order.find(r => r.id === engine.raceId)?.lap ?? 1} / {laps}</span><i aria-hidden="true">{expanded ? '?' : '+'}</i>
+      </button>
       <b>RACE · {trackLabel} · {laps} LAP{laps > 1 ? 'S' : ''}</b>
       <ol>
         {order.map((r, i) => (
@@ -66,14 +73,14 @@ export function RaceDirectory({ engine, inServer, raceCar, onCar, laps, onLaps, 
   const races = engine.raceDir.filter((r) => (r.track ?? 'city') === 'city');
   const canHost = inServer;
   return (
-    <div className="race-setup" role="dialog" aria-label="Neon paddock race directory">
+    <RaceModal label="City racing multiplayer setup" onClose={onClose}>
       <div className="race-setup-head">
-        <div><p className="eyebrow">NEON PADDOCK · TOKYO DRIFT MEET</p><h2>Line up 8 cars.</h2></div>
+        <div><p className="eyebrow">NEON PADDOCK · TOKYO DRIFT MEET</p><h2>City racing</h2></div>
         <button className="control" onClick={onClose} aria-label="Close race directory">✕</button>
       </div>
       <div className="race-mode-tabs">
-        {onSwitchTab && <button onClick={onSwitchTab}>SOLO (vs AI)</button>}
-        <button className="on" disabled>MULTIPLAYER</button>
+        {onSwitchTab && <button onClick={onSwitchTab}>Solo</button>}
+        <button className="on" disabled>Multiplayer</button>
       </div>
       <p>City loop · traffic on · min 2 racers · host sets laps · all ready starts.</p>
       {!inServer && <p className="race-warn">Join a server first — race lobbies live inside your server code.</p>}
@@ -111,7 +118,7 @@ export function RaceDirectory({ engine, inServer, raceCar, onCar, laps, onLaps, 
         }}>HOST RACE <span>→</span></button>
       </div>
       {!canHost && <small className="race-hint">Hosting needs a server — create or join one from the intro.</small>}
-    </div>
+    </RaceModal>
   );
 }
 
@@ -131,17 +138,17 @@ export function SoloRaceSetup({ engine, raceCar, onCar, laps, onLaps, onStart, o
   const [difficulty, setDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium');
   if (!engine || engine.race.phase !== 'idle') return null;
   return (
-    <div className="race-setup" role="dialog" aria-label="Solo race setup">
+    <RaceModal label="City racing solo setup" onClose={onClose}>
       <div className="race-setup-head">
         <div>
           <p className="eyebrow">NEON PADDOCK · SOLO RACE</p>
-          <h2>You vs. the machine.</h2>
+          <h2>City racing</h2>
         </div>
         <button className="control" onClick={onClose} aria-label="Close solo race setup">✕</button>
       </div>
       <div className="race-mode-tabs">
-        <button className="on" disabled>SOLO (vs AI)</button>
-        {onSwitchTab && <button onClick={onSwitchTab}>MULTIPLAYER</button>}
+        <button className="on" disabled>Solo</button>
+        {onSwitchTab && <button onClick={onSwitchTab}>Multiplayer</button>}
       </div>
       <p>City loop · race CPU opponents offline · no server needed.</p>
       <RaceCarPicker value={raceCar} onChange={onCar} />
@@ -150,7 +157,7 @@ export function SoloRaceSetup({ engine, raceCar, onCar, laps, onLaps, onStart, o
         <div className="race-pill-group">
           {CPU_COUNT_OPTIONS.map((n) => (
             <button key={n} className={`control${cpuCount === n ? ' on' : ''}`} onClick={() => setCpuCount(n)} aria-pressed={cpuCount === n}>
-              {n} CPU
+              {n} {n === 1 ? 'driver' : 'drivers'}
             </button>
           ))}
         </div>
@@ -178,8 +185,8 @@ export function SoloRaceSetup({ engine, raceCar, onCar, laps, onLaps, onStart, o
           RACE <span>→</span>
         </button>
       </div>
-      <small className="race-hint">CPU cars race on the city loop. Hard difficulty = nearly unbeatable in a fast car.</small>
-    </div>
+      <small className="race-hint">Your grid is ready. Choose a difficulty that suits your pace.</small>
+    </RaceModal>
   );
 }
 
@@ -334,29 +341,40 @@ export function RaceLobby({ engine, inServer, onNeedServer }: LobbyProps) {
 
 const PICKER_CATS = ['all', 'sport', 'car', 'suv', 'truck', 'van', 'service', 'bus'] as const;
 
-/** Car picker grid for the race form (keeps own chosen car). Category tabs keep 46 rides browsable. */
+/** Browse actual in-game vehicles with pointer, touch or keyboard arrows. */
 export function RaceCarPicker({ value, onChange }: { value: VehicleKind; onChange: (k: VehicleKind) => void }) {
   const [cat, setCat] = useState<(typeof PICKER_CATS)[number]>('all');
-  const kinds = VEHICLE_KINDS.filter((k) => cat === 'all' || VEHICLES[k].category === cat);
-  return (
-    <div>
-      <div className="race-cats" role="tablist" aria-label="Filter by category">
-        {PICKER_CATS.map((c) => (
-          <button key={c} role="tab" aria-selected={cat === c} className={cat === c ? 'on' : ''} onClick={() => setCat(c)}>
-            {c.toUpperCase()}
-          </button>
-        ))}
-      </div>
-      <div className="race-cars" role="radiogroup" aria-label="Choose your race car">
-        {kinds.map((k) => (
-          <button key={k} role="radio" aria-checked={value === k} className={value === k ? 'on' : ''} onClick={() => onChange(k)}>
-            <b>{VEHICLES[k].name}</b>
-            <small>{VEHICLES[k].topSpeed * 3.6 | 0} km/h</small>
-          </button>
-        ))}
-      </div>
+  const [direction, setDirection] = useState(1);
+  const kinds = VEHICLE_KINDS.filter(k => cat === 'all' || VEHICLES[k].category === cat);
+  const index = kinds.indexOf(value);
+  const spec = VEHICLES[value];
+  const move = (step: number) => {
+    setDirection(step);
+    onChange(kinds[((index < 0 ? 0 : index) + step + kinds.length) % kinds.length]);
+  };
+  return <div className="race-picker">
+    <div className="race-picker-label"><span>Your vehicle</span><span>{Math.max(0, index) + 1} / {kinds.length}</span></div>
+    <div className="race-cats" aria-label="Vehicle category">
+      {PICKER_CATS.map(c => <button type="button" key={c} aria-pressed={cat === c} className={cat === c ? 'on' : ''} onClick={() => {
+        setCat(c); setDirection(1);
+        const next = VEHICLE_KINDS.filter(k => c === 'all' || VEHICLES[k].category === c);
+        if (!next.includes(value)) onChange(next[0]);
+      }}>{c === 'all' ? 'All cars' : c === 'suv' ? 'SUV' : c.charAt(0).toUpperCase() + c.slice(1)}</button>)}
     </div>
-  );
+    <div className="race-showroom" role="group" aria-label="Vehicle carousel" tabIndex={0} onKeyDown={event => {
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); move(event.key === 'ArrowLeft' ? -1 : 1); }
+    }}>
+      <button type="button" className="race-vehicle-arrow previous" onClick={() => move(-1)} aria-label="Previous vehicle" disabled={kinds.length < 2}>?</button>
+      <VehiclePreview kind={value} direction={direction} />
+      <button type="button" className="race-vehicle-arrow next" onClick={() => move(1)} aria-label="Next vehicle" disabled={kinds.length < 2}>?</button>
+      <div className="race-vehicle-caption" aria-live="polite" aria-atomic="true"><h3>{spec.name}</h3><span>{spec.category === 'sport' ? 'Performance' : spec.category} / {spec.inspiredBy}</span></div>
+    </div>
+    <div className="race-vehicle-specs">
+      <div><span>Top speed</span><b>{Math.round(spec.topSpeed * 3.6)} <small>km/h</small></b></div>
+      <div><span>Acceleration</span><b>{spec.acceleration} <small>m/s?</small></b></div>
+      <div><span>Handling</span><b>{spec.grip >= 9 ? 'Precise' : spec.grip >= 7 ? 'Balanced' : 'Heavy'}</b></div>
+    </div>
+  </div>;
 }
 
 /**
@@ -395,14 +413,14 @@ export function F1RaceDirectory({ engine, inServer, raceCar, onCar, laps, onLaps
   const races = engine.raceDir.filter((r) => (r.track ?? 'city') === 'f1');
   const canHost = inServer;
   return (
-    <div className="race-setup" role="dialog" aria-label="F1 circuit race directory">
+    <RaceModal label="Formula racing multiplayer setup" onClose={onClose}>
       <div className="race-setup-head">
-        <div><p className="eyebrow">F1 CIRCUIT · HILLSIDE ARENA</p><h2>Curvy, hilly, DRS.</h2></div>
+        <div><p className="eyebrow">F1 CIRCUIT · HILLSIDE ARENA</p><h2>Formula racing</h2></div>
         <button className="control" onClick={onClose} aria-label="Close F1 race directory">✕</button>
       </div>
       <div className="race-mode-tabs">
-        {onSwitchTab && <button onClick={onSwitchTab}>SOLO (vs AI)</button>}
-        <button className="on" disabled>MULTIPLAYER</button>
+        {onSwitchTab && <button onClick={onSwitchTab}>Solo</button>}
+        <button className="on" disabled>Multiplayer</button>
       </div>
       <p>F1 circuit · hills + DRS + pit lane · min 2 racers · host sets laps · all ready starts.</p>
       {!inServer && <p className="race-warn">Join a server first — F1 lobbies live inside your server code.</p>}
@@ -437,7 +455,7 @@ export function F1RaceDirectory({ engine, inServer, raceCar, onCar, laps, onLaps
         }}>HOST F1 RACE <span>→</span></button>
       </div>
       {!canHost && <small className="race-hint">Hosting needs a server — create or join one from the intro.</small>}
-    </div>
+    </RaceModal>
   );
 }
 
@@ -453,17 +471,17 @@ export function F1SoloSetup({ engine, raceCar, onCar, laps, onLaps, onStart, onC
   const [difficulty, setDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium');
   if (!engine || engine.race.phase !== 'idle') return null;
   return (
-    <div className="race-setup" role="dialog" aria-label="F1 solo race setup">
+    <RaceModal label="Formula racing solo setup" onClose={onClose}>
       <div className="race-setup-head">
         <div>
           <p className="eyebrow">F1 CIRCUIT · SOLO RACE</p>
-          <h2>Hills, DRS, pit lane.</h2>
+          <h2>Formula racing</h2>
         </div>
         <button className="control" onClick={onClose} aria-label="Close F1 solo race setup">✕</button>
       </div>
       <div className="race-mode-tabs">
-        <button className="on" disabled>SOLO (vs AI)</button>
-        {onSwitchTab && <button onClick={onSwitchTab}>MULTIPLAYER</button>}
+        <button className="on" disabled>Solo</button>
+        {onSwitchTab && <button onClick={onSwitchTab}>Multiplayer</button>}
       </div>
       <p>F1 circuit · race CPU opponents offline · ERS boost + DRS on straights · pit lane repairs.</p>
       <RaceCarPicker value={raceCar} onChange={onCar} />
@@ -472,7 +490,7 @@ export function F1SoloSetup({ engine, raceCar, onCar, laps, onLaps, onStart, onC
         <div className="race-pill-group">
           {([1, 2, 3] as const).map((n) => (
             <button key={n} className={`control${cpuCount === n ? ' on' : ''}`} onClick={() => setCpuCount(n)} aria-pressed={cpuCount === n}>
-              {n} CPU
+              {n} {n === 1 ? 'driver' : 'drivers'}
             </button>
           ))}
         </div>
@@ -500,7 +518,7 @@ export function F1SoloSetup({ engine, raceCar, onCar, laps, onLaps, onStart, onC
         </button>
       </div>
       <small className="race-hint">DRS opens on straights at full throttle. Pit lane caps speed and repairs when you stop.</small>
-    </div>
+    </RaceModal>
   );
 }
 
