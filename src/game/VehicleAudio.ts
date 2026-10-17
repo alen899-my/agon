@@ -305,6 +305,7 @@ function driveVoice(ac: AudioContext, v: Voice, p: DriveParams): void {
 // ---------------------------------------------------------------------------
 
 export interface PlayerEngine {
+  flavor?: EngineFlavor;
   kind: VehicleKind; speed: number; topSpeed: number;
   /** 0..1 throttle load (growl). */
   load: number;
@@ -349,7 +350,7 @@ export class VehicleAudio {
   updatePlayer(p: PlayerEngine): void {
     const ac = this.ensure();
     if (!ac || !this.master || !this.noiseBuf) return;
-    const flavor = flavorFor(p.kind);
+    const flavor = p.flavor ?? flavorFor(p.kind);
     const timbre = TIMBRES[flavor];
     if (!p.audible) {
       if (this.player) { stopVoice(ac, this.player); this.player = null; }

@@ -19,6 +19,7 @@ export function onF1Track(x: number, z: number): boolean {
   return f1OnTrack(x, z, F1_HALF + 1.5);
 }
 
+import { GARAGE_WALLS } from './GarageLocation';
 export interface Point { x: number; z: number }
 export interface Box extends Point { w: number; d: number; h: number }
 export interface Building extends Box { kind: 'apartment' | 'shop' | 'warehouse' | 'station'; shade: number; name?: string }
@@ -35,6 +36,7 @@ export function onRoad(x: number, z: number, half = ROAD_HALF): boolean {
   return ROADS.some((line) => Math.abs(x - line) < half || Math.abs(z - line) < half);
 }
 export const PLACES: Place[] = [
+  { id: 'garage', name: 'Apex Motor Works', category: 'GARAGE', x: -118, z: -14, description: 'Drive into the west workshop. Paint, parts, performance and sound. Save your build for solo and servers.' },
   { id: 'plaza', name: 'Civic Square', category: 'PUBLIC SPACE', x: -27, z: 23, description: 'A quiet square at the heart of the district.' },
   { id: 'market', name: 'Market Street', category: 'SHOPS & CAFÉS', x: 22, z: -12, description: 'Small storefronts, long sidewalks, familiar faces.' },
   { id: 'park', name: 'North Gardens', category: 'PARK', x: 44, z: -48, description: 'A little room to breathe between the buildings.' },
@@ -104,6 +106,7 @@ export function buildings(): Building[] {
 }
 export const BUILDINGS = buildings();
 export const SOLIDS: Box[] = [...BUILDINGS,
+  ...GARAGE_WALLS,
   { x: -27, z: 23, w: 4, d: 4, h: 2.5 },
   { x: 50, z: -38, w: 7, d: 7, h: 0.8 },
   // Table tennis table body blocks walking (players enter via E, not by walking through).

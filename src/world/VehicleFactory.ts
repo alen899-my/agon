@@ -402,7 +402,7 @@ function buildModel(kit: KitLike, kind: VehicleKind): Model {
     gs.moveTo(zf, cowlF - 0.02); gs.lineTo(topF, roofY - 0.03); gs.lineTo(topR, roofY - 0.03); gs.lineTo(zr, cowlR - 0.02);
     const gg = extrudeProfile(gs, W * 0.88, 0);
     P.add('glass', gg, 0, 0, 0, 1, 1, 1); gg.dispose();
-    bx(t.contrastRoof ? 'white' : 'paint', 0, roofY - 0.025, roofMid, W * 0.9, 0.09, roofLen + 0.14);
+    bx('roof', 0, roofY - 0.025, roofMid, W * 0.9, 0.09, roofLen + 0.14);
     const topSill = Math.max(cowlF, cowlR);
     for (const s of [-1, 1]) {
       const px = s * (W * 0.46 + 0.01);
@@ -505,8 +505,8 @@ function buildModel(kit: KitLike, kind: VehicleKind): Model {
   // ---- fascia ----
   const faceTop = hoodY - sil.sn;
   const lampX = W / 2 - 0.36;
-  ink(0, G + 0.24, -hl - 0.01, W - 0.24, 0.22, 0.14);
-  ink(0, G + 0.24, hl + 0.01, W - 0.24, 0.22, 0.14);
+  bx('frontBumper', 0, G + 0.24, -hl - 0.01, W - 0.24, 0.22, 0.14);
+  bx('rearBumper', 0, G + 0.24, hl + 0.01, W - 0.24, 0.22, 0.14);
   ink(0, Math.max(G + 0.45, faceTop - 0.12), -hl - 0.02, W * 0.46, 0.15, 0.06);
   metal(0, Math.max(G + 0.55, faceTop - 0.02), -hl - 0.025, W * 0.46, 0.025, 0.06);
   white(0, G + 0.3, -hl - 0.085, 0.52, 0.14, 0.02);
@@ -522,14 +522,13 @@ function buildModel(kit: KitLike, kind: VehicleKind): Model {
     bx('blink', s * (W / 2 - 0.02), deckY - 0.28, hl - 0.35, 0.06, 0.1, 0.22);
   }
 
-  // ---- wheels (positions + arches) ----
+  // ---- wheel positions ----
   const { WR, tireW } = wheelDims(kind, spec);
   const trackX = W / 2 - 0.03;
   const wheelZ = L * 0.32;
   const wheelPos: Model['wheelPos'] = [];
   for (const s of [-1, 1]) for (const z of [-wheelZ, wheelZ]) {
     wheelPos.push({ x: s * trackX, z, front: z < 0 });
-    P.add('ink', C, s * (W / 2 + 0.005), WR + 0.08, z, WR + 0.1, 0.035, WR + 0.1, 0, 0, Math.PI / 2); // arch shadow
   }
 
   // ---- doors ----
@@ -592,9 +591,9 @@ function buildModel(kit: KitLike, kind: VehicleKind): Model {
   if (kind === 'minibus') ink(W / 2 - 0.01, belt + 0.5, zf + 0.7, 0.06, 1.0, 0.8);
 
   // ---- trim ----
-  if (t.wing) { paint(0, deckY + 0.3, hl - 0.3, W * t.wing - 0.1, 0.07, 0.38); for (const s of [-1, 1]) paint(s * (W * 0.28), deckY + 0.14, hl - 0.3, 0.07, 0.3, 0.12); }
-  if (t.bigWing) { for (const s of [-1, 1]) paint(s * (W / 2 - 0.2), deckY + 0.35, hl - 0.4, 0.07, 0.7, 0.4); paint(0, deckY + 0.7, hl - 0.4, W + 0.05, 0.07, 0.42); }
-  if (t.lip) paint(0, deckY + 0.04, hl - 0.18, W - 0.4, 0.07, 0.34);
+  if (t.wing) { bx('spoiler', 0, deckY + 0.3, hl - 0.3, W * t.wing - 0.1, 0.07, 0.38); for (const s of [-1, 1]) bx('spoiler', s * (W * 0.28), deckY + 0.14, hl - 0.3, 0.07, 0.3, 0.12); }
+  if (t.bigWing) { for (const s of [-1, 1]) bx('spoiler', s * (W / 2 - 0.2), deckY + 0.35, hl - 0.4, 0.07, 0.7, 0.4); bx('spoiler', 0, deckY + 0.7, hl - 0.4, W + 0.05, 0.07, 0.42); }
+  if (t.lip) bx('spoiler', 0, deckY + 0.04, hl - 0.18, W - 0.4, 0.07, 0.34);
   if (t.scoop) {
     const sl = Math.min(1.1, (zf + hl) * 0.45);
     paint(0, hoodY + 0.045, zf - sl / 2 - 0.2, 0.55, 0.09, sl);
@@ -754,6 +753,12 @@ export function buildVehicle(kit: KitLike, kind: VehicleKind = 'car', variant = 
   const M = kit.materials;
   const group = new THREE.Group(); const body = new THREE.Group(); group.add(body);
 
+  const spec = VEHICLES[kind] as VehicleSpec, sil = SIL[STYLE[kind]];
+  const front = Math.max(-spec.length / 2 + 0.15, spec.cab !== undefined ? 0.1 - spec.cab / 2 : -spec.length / 2 + sil.hood * spec.length);
+  const rear = Math.min(front + (spec.cab ?? sil.cab * spec.length), spec.length / 2 - 0.12);
+  group.userData.garageLayout = { hoodY: kind === 'f1' ? 0.57 : sil.belt - sil.hd,
+    hoodZ: (-spec.length / 2 + 0.35 + front) / 2, hoodLength: Math.max(0.25, front + spec.length / 2 - 0.35),
+    roofY: kind === 'f1' ? 1.1 : sil.belt + spec.height, roofZ: (front + rear) / 2, roofLength: rear - front };
   const color = pickVehiclePaint(kind, variant);
   // MeshStandardMaterial instead of MeshPhysicalMaterial/clearcoat: ~same look, far cheaper on mobile GPUs.
   const paintMat = cached(kit, `paint:${color}`, () => new THREE.MeshStandardMaterial({ color, roughness: 0.35, metalness: 0.35 }));
@@ -771,6 +776,7 @@ export function buildVehicle(kit: KitLike, kind: VehicleKind = 'car', variant = 
   kit.extra.push(brakeMat, headMat, blinkerMat);
 
   const roleMat: Record<string, THREE.Material> = {
+    roof: TRIM[kind]?.contrastRoof ? M.white : paintMat, spoiler: paintMat, frontBumper: M.ink, rearBumper: M.ink,
     carbon: cached(kit, 'formula-carbon', () => new THREE.MeshStandardMaterial({ color: 0x121518, roughness: 0.64, metalness: 0.18 })),
     tyreMark: cached(kit, 'formula-tyre-mark', () => new THREE.MeshStandardMaterial({ color: 0xf3cf35, roughness: 0.85 })),
     paint: paintMat, ink: M.ink, metal: M.metal, white: M.white, glass: glassMat, windshield: shieldMat, seat: M.wall2,
@@ -782,6 +788,7 @@ export function buildVehicle(kit: KitLike, kind: VehicleKind = 'car', variant = 
   let shield!: THREE.Mesh;
   model.parts.forEach((geo, role) => {
     const mesh = new THREE.Mesh(geo, roleMat[role] ?? M.ink);
+    mesh.userData.vehicleRole = role;
     mesh.castShadow = role !== 'glass' && role !== 'windshield'; mesh.receiveShadow = true;
     body.add(mesh);
     if (role === 'glass') glazing = mesh;
@@ -824,6 +831,7 @@ export function buildVehicle(kit: KitLike, kind: VehicleKind = 'car', variant = 
   for (const d of model.doors) {
     const pivot = new THREE.Group(); pivot.position.set(d.x, d.y, d.z); body.add(pivot);
     const slab = new THREE.Mesh(kit.geometry.box, paintMat);
+    slab.userData.vehicleRole = 'paint';
     slab.position.set(0, 0, d.dl / 2); slab.scale.set(0.07, d.dh, d.dl); slab.castShadow = true; pivot.add(slab);
     doors.push(pivot);
   }
@@ -851,6 +859,8 @@ export function buildVehicle(kit: KitLike, kind: VehicleKind = 'car', variant = 
     const geos = model.wheels[side];
     const steer = new THREE.Group(); steer.position.set(w.x, model.WR + 0.08, w.z); group.add(steer);
     const spin = new THREE.Group(); spin.scale.x = w.widthScale ?? 1; steer.add(spin);
+    spin.userData.wheelRadius = model.WR;
+    spin.userData.wheelWidth = kind === 'f1' ? 0.305 : wheelDims(kind, spec).tireW;
     geos.forEach((geo, role) => {
       const mesh = new THREE.Mesh(geo, role === 'tyre' ? M.ink : role === 'rim' ? rimMat(dark) : roleMat[role] ?? M.metal);
       mesh.castShadow = role === 'tyre'; spin.add(mesh);
@@ -871,7 +881,7 @@ export function buildVehicle(kit: KitLike, kind: VehicleKind = 'car', variant = 
       brakeMat.emissiveIntensity = kind === 'f1' ? (Math.abs(speed) > 2 && time % 0.3 < 0.15 ? 2.5 : 0.3) : braking ? 2.2 : 0.25;
       const on = blinker !== 0 && (time % 0.62) < 0.31; // 0 off, 1 left, 2 right, 3 hazard
       blinkerMat.emissiveIntensity = on ? 2.4 : 0.15;
-      if (bodyTilt) { body.rotation.x = bodyTilt.pitch; body.rotation.z = bodyTilt.roll; body.position.y = 0; }
+      if (bodyTilt) { body.rotation.x = bodyTilt.pitch; body.rotation.z = bodyTilt.roll; body.position.y = Number(group.userData.rideHeight) || 0; }
     } };
   return vehicle;
 }

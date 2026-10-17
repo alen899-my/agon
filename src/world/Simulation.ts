@@ -1,3 +1,4 @@
+import { tuning, type VehicleCustomization } from './VehicleCustomization';
 import type { BuiltBox, PedAgent, BuildSite } from '../../server/src/agents/livingWorld';
 import { dialogueLines, type DialogueGenerator } from '../../server/src/agents/dialogueTypes';
 import { f1WallContact } from './F1Barriers';
@@ -17,7 +18,7 @@ export type WorldAction = 'forward' | 'back' | 'left' | 'right' | 'sprint' | 'ju
 export type View = 'third' | 'first';
 export interface Impact { speed: number; with: string; at: number }
 export interface TrafficCar { kind: VehicleKind; x: number; z: number; yaw: number; speed: number; offset: number; base: number; steer: number; wheelSpin: number; braking: boolean; prevYaw: number; hp: number; burning: boolean; burnT: number }
-export interface ParkedVehicle { kind: VehicleKind; x: number; z: number; yaw: number; hp?: number; burning?: boolean; burnT?: number }
+export interface ParkedVehicle { customization?: VehicleCustomization; kind: VehicleKind; x: number; z: number; yaw: number; hp?: number; burning?: boolean; burnT?: number }
 /** Map dot for a far-away room member (1 Hz, no full transform). */
 export interface RemoteDot { id: string; x: number; z: number; driving: boolean }
 export interface VehicleTarget { type: 'player' | 'parked' | 'traffic'; index: number; kind: VehicleKind; x: number; z: number; yaw: number; speed: number; dist: number; enterable: boolean; reason: string | null }
@@ -195,6 +196,7 @@ export class Simulation {
   time = 0; distance = 0; pace = 0;
   driving = false;
   vehicleKind: VehicleKind = 'car';
+  vehicleBuilds: Partial<Record<VehicleKind, VehicleCustomization>> = {};
   acceleration = 0;
   lateralSpeed = 0;
   /** Nitro boost meter 0-100. Drains while boosting, auto-refills after a short delay. Racing-only. */
@@ -921,7 +923,7 @@ export class Simulation {
       const target = this.nearestVehicle();
       if (!target || !target.enterable) return false;
       if (target.type !== 'player') {
-        this.parked.push({ kind: this.vehicleKind, x: this.car.x, z: this.car.z, yaw: this.car.yaw, hp: 100, burning: false, burnT: 0 });
+        this.parked.push({ customization: this.vehicleBuilds[this.vehicleKind] ? { ...this.vehicleBuilds[this.vehicleKind]! } : undefined, kind: this.vehicleKind, x: this.car.x, z: this.car.z, yaw: this.car.yaw, hp: 100, burning: false, burnT: 0 });
         if (this.parked.length > 28) this.parked.shift();
       }
       if (target.type === 'parked') {
@@ -1424,7 +1426,9 @@ export class Simulation {
     const side = clamp(Number(this.held('right')) - Number(this.held('left')) + this.stick.x, -1, 1);
     if (this.impact && this.time - this.impact.at > 1.4) this.impact = null;
     if (this.driving) {
-      const spec = VEHICLES[this.vehicleKind];
+      const baseSpec = VEHICLES[this.vehicleKind];
+      const upgrades = tuning(this.vehicleBuilds[this.vehicleKind]);
+      const spec = { ...baseSpec, topSpeed: baseSpec.topSpeed * upgrades.speed, acceleration: baseSpec.acceleration * upgrades.acceleration, grip: baseSpec.grip * upgrades.grip };
       const crashed = this.crashed;
       const oldSpeed = this.car.speed, oldYaw = this.car.yaw;
       const handbrake = this.held('handbrake') || this.held('jump');
@@ -1473,7 +1477,7 @@ export class Simulation {
       const drag = 0.65 + (onF1 ? 0.003 : 0.008) * oldSpeed * oldSpeed * (this.drsOpen ? 0.78 : 1) + (1 - surfaceGrip) * Math.abs(oldSpeed) * 0.3;
       let force = forward * spec.acceleration * (this.boosting ? 1.9 : 1) * Math.max(0.15, 1 - Math.abs(oldSpeed) / (forward < 0 ? 7 : topSpeed));
       if (onF1) force *= Math.min(1, gripF * aeroGrip);
-      if (opposing) force = forward * (onF1 ? 22 * aeroGrip : 13) * gripF;
+      if (opposing) force = forward * (onF1 ? 22 * aeroGrip : 13) * gripF * upgrades.braking;
       // Gentle hill pull: climbing scrubs accel, descents add a little.
       const hillForce = onF1 ? -9.81 * Math.sin(Math.atan(f1Grade)) : 0;
       force += hillForce;

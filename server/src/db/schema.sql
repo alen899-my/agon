@@ -9,6 +9,15 @@ CREATE TABLE IF NOT EXISTS players (
 
 CREATE INDEX IF NOT EXISTS players_last_seen_idx ON players (last_seen_at DESC);
 
+-- Account-owned builds survive room deletion and work in solo as well as multiplayer.
+CREATE TABLE IF NOT EXISTS player_vehicles (
+  player_id UUID NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+  vehicle_kind TEXT NOT NULL,
+  customization JSONB NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (player_id, vehicle_kind)
+);
+
 -- Invite-code rooms, up to 100 members. Public rooms appear in the server browser.
 CREATE TABLE IF NOT EXISTS rooms (
   code TEXT PRIMARY KEY,

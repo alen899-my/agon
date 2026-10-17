@@ -29,7 +29,9 @@ export function rideToMsg(r: RideState): RideMsg {
 export const PROTOCOL_VERSION = 2;
 
 /** Full transform broadcast for nearby ghosts (10 Hz). */
+import type { VehicleCustomization } from '../shared/vehicleCustomization.js';
 export interface PosPayload {
+  customization?: VehicleCustomization;
   x: number;
   z: number;
   /** Height above pavement (jump). */

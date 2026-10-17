@@ -38,8 +38,9 @@ const HELLO_TIMEOUT_MS = 15_000;
 const HELLO_PER_MINUTE_PER_IP = 12;
 const ROOM_TOUCH_THROTTLE_MS = 60_000;
 /** City lives within ±160; the separate F1 island sits near x=1500 (spans ~±350). */
+import { validCustomization } from '../shared/vehicleCustomization.js';
 const WORLD_BOUND = 2000;
-const MAX_ABS_SPEED = 60;
+const MAX_ABS_SPEED = 180;
 
 export interface MemberState {
   ws: WebSocket;
@@ -66,6 +67,7 @@ function validPos(p: unknown): p is PosPayload {
     Number.isFinite(v.y) && (v.y as number) >= 0 && (v.y as number) <= 30 &&
     Number.isFinite(v.yaw) && Number.isFinite(v.facing) &&
     typeof v.driving === 'boolean' &&
+    (v.customization === undefined || validCustomization(v.customization)) &&
     typeof v.vehicleKind === 'string' &&
     (v.vehicleKind as string).length >= 1 &&
     (v.vehicleKind as string).length <= 24 &&

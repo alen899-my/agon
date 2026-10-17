@@ -48,6 +48,13 @@ END $$;
 
 /** v2: named + public/private servers. Runs on every boot so existing databases heal. */
 const ENSURE_V2_STATEMENTS = [
+  `CREATE TABLE IF NOT EXISTS player_vehicles (
+    player_id UUID NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    vehicle_kind TEXT NOT NULL,
+    customization JSONB NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (player_id, vehicle_kind)
+  )`,
   `CREATE TABLE IF NOT EXISTS buildings_delta (
   room_code TEXT NOT NULL REFERENCES rooms(code) ON DELETE CASCADE,
   site_id TEXT NOT NULL,

@@ -23,6 +23,8 @@ interface Box {
 
 /** Building footprints copied from client Map.buildings() (+ station props). */
 const BLOCKS: Box[] = [
+  // Apex Motor Works: side and rear walls; the south service entrance stays open.
+  { x: -127, z: -19, w: 0.5, d: 22 }, { x: -109, z: -19, w: 0.5, d: 22 }, { x: -118, z: -30, w: 18, d: 0.5 },
   ...[-52, -27, 27, 52].flatMap(x => [-101, 101].map(z => ({ x, z, w: 20, d: 14 }))),
   ...[-101, 101].flatMap(x => [-48, -18, 22, 54].map(z => ({ x, z, w: 14, d: 18 }))),
   { x: -26, z: 23, w: 4, d: 4 },

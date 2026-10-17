@@ -23,6 +23,12 @@ import type { TTShot } from './TableTennis';
 import { CpuRacer, CPU_RACER_ID_PREFIX, type CpuDifficulty } from './CpuRacer';
 import { AgentSim } from './AgentSim';
 import { partitionScenery } from './StaticScenery';
+import { createGarageBuilding } from './GarageBuilding';
+import { atGarage } from './GarageLocation';
+import { applyCustomization, clearCustomization, stockBuild, type VehicleCustomization } from './VehicleCustomization';
+import { garageSound } from '../game/GarageSound';
+import { loadGarage, type GarageRecord } from '../api/garage';
+import type { Session } from '../api/session';
 import { CharacterFactory } from './characters/CharacterFactory';
 
 export type { RacerState };
@@ -108,6 +114,35 @@ interface Ghost {
 }
 
 export class WorldEngine {
+  garageRecords: GarageRecord[] = [];
+  get garageAvailable(): boolean {
+    const s = this.simulation;
+    return s.active && s.mode === 'roam' && s.driving && !s.carWrecked && Math.abs(s.car.speed) < 0.5 && this.race.phase === 'idle' && atGarage(s.car.x, s.car.z);
+  }
+  openGarage(): void {
+    if (!this.garageAvailable) return;
+    this.clearInput(); document.exitPointerLock?.();
+    window.dispatchEvent(new Event('agon:garage'));
+  }
+  async restoreGarage(session: Session): Promise<string> {
+    const { records, notice } = await loadGarage(session);
+    this.garageRecords = records; this.simulation.vehicleBuilds = {};
+    for (const record of records) this.simulation.vehicleBuilds[record.kind] = record.customization;
+    for (const [kind, vehicle] of this.fleet) applyCustomization(vehicle, kind, this.simulation.vehicleBuilds[kind]);
+    if (records[0]) {
+      this.simulation.vehicleKind = records[0].kind; this.simulation.driving = true;
+      this.simulation.x = this.simulation.car.x; this.simulation.z = this.simulation.car.z;
+    }
+    this.previousCar.valid = false; this.emit(); return notice;
+  }
+  garageBuild(kind: VehicleKind): VehicleCustomization { return { ...(this.simulation.vehicleBuilds[kind] ?? stockBuild(kind)) }; }
+  installGarageBuild(kind: VehicleKind, customization: VehicleCustomization): void {
+    this.simulation.vehicleBuilds[kind] = { ...customization }; this.simulation.vehicleKind = kind;
+    this.simulation.car.speed = 0; this.simulation.lateralSpeed = 0;
+    this.garageRecords = [{ kind, customization: { ...customization }, updated_at: new Date().toISOString() }, ...this.garageRecords.filter(r => r.kind !== kind)];
+    applyCustomization(this.ensureFleetKind(kind), kind, customization);
+    this.previousCar.valid = false; this.emit();
+  }
   readonly simulation = new Simulation();
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene = new THREE.Scene();
@@ -346,6 +381,7 @@ export class WorldEngine {
     this.renderer.shadowMap.autoUpdate = true;
     this.renderer.shadowMap.type = this.lowPower ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
     this.kit = new AssetKit(); buildMap(this.scene, this.kit);
+    const garageBuilding = createGarageBuilding(); this.scene.add(garageBuilding.group); this.kit.extra.push(garageBuilding);
     partitionScenery(this.scene, 96);
     for (const root of this.scene.children) this.prepareScenery(root);
     this.scene.traverse((obj) => {
@@ -486,6 +522,7 @@ export class WorldEngine {
         });
         const live = sm.phase === 'playing' && !sm.paused;
         this.vehicleAudio.updatePlayer({
+          flavor: garageSound(sm.vehicleBuilds[sm.vehicleKind]?.sound),
           kind: sm.vehicleKind, speed: sm.car.speed, topSpeed: spec.topSpeed,
           load: Math.max(0, Math.min(1, sm.acceleration / 8)),
           audible: live && sm.driving,
@@ -548,6 +585,7 @@ export class WorldEngine {
       this.realtime.sendPos({
         x: sim.x, z: sim.z, y: sim.y, yaw: sim.yaw, facing: sim.facing,
         driving: sim.driving, vehicleKind: sim.vehicleKind,
+        customization: sim.vehicleBuilds[sim.vehicleKind],
         speed: sim.driving ? sim.car.speed : sim.pace,
       });
       // Race progress @10Hz (same cadence as pos). Works solo too (host relays when joined).
@@ -1059,8 +1097,9 @@ export class WorldEngine {
   /** Lazy player fleet: build a kind on demand instead of 46 hidden cars up-front. */
   private ensureFleetKind(kind: VehicleKind): Vehicle {
     const existing = this.fleet.get(kind);
-    if (existing) return existing;
+    if (existing) { applyCustomization(existing, kind, this.simulation.vehicleBuilds[kind]); return existing; }
     const vehicle = this.kit.car(kind, false, 0);
+    applyCustomization(vehicle, kind, this.simulation.vehicleBuilds[kind]);
     this.applyHeadlightMat(vehicle);
     vehicle.group.visible = false;
     this.fleet.set(kind, vehicle);
@@ -1069,6 +1108,7 @@ export class WorldEngine {
   }
   /** Dispose per-car lamp materials (they are unique per vehicle, shared geo is kept). */
   private disposeVehicleMats(v: Vehicle): void {
+    clearCustomization(v);
     try {
       (v.brakeMat as THREE.Material)?.dispose?.();
       (v.headMat as THREE.Material)?.dispose?.();
@@ -1090,6 +1130,7 @@ export class WorldEngine {
   }
   private releaseGhostVehicle(ghost: Ghost): void {
     if (!ghost.vehicle || !ghost.vehicleKind) return;
+    clearCustomization(ghost.vehicle);
     ghost.vehicle.group.visible = false;
     const pooled = this.ghostVehiclePool.get(ghost.vehicleKind) ?? [];
     if (pooled.length < 4) {
@@ -1193,6 +1234,7 @@ export class WorldEngine {
           ghost.vehicleKind = kind;
         }
         ghost.vehicle.group.visible = true;
+        applyCustomization(ghost.vehicle, kind, r.pos.customization);
         ghost.vehicle.group.position.set(ghost.x, 0.08, ghost.z);
         ghost.vehicle.group.rotation.y = -ghost.yaw;
         ghost.blinker = r.blinker;
@@ -1338,11 +1380,12 @@ export class WorldEngine {
       const v = this.parked.pop()!; this.scene.remove(v.group); this.disposeVehicleMats(v); this.parkedKinds.pop();
     }
     sim.parked.forEach((p, i) => {
-      const key = `${p.kind}:${parkedVariant(p.kind, i)}`;
+      const key = `${p.kind}:${parkedVariant(p.kind, i)}:${JSON.stringify(p.customization ?? null)}`;
       if (!initial && this.parkedKinds[i] === key) return;
       const old = this.parked[i];
       if (old) { this.scene.remove(old.group); this.disposeVehicleMats(old); }
       const v = this.kit.car(p.kind, false, parkedVariant(p.kind, i));
+      applyCustomization(v, p.kind, p.customization);
       this.applyHeadlightMat(v);
       this.scene.add(v.group); this.parked[i] = v; this.parkedKinds[i] = key;
     });
@@ -1550,7 +1593,7 @@ export class WorldEngine {
   disarm(): void { this.simulation.disarm(); this.emit(); }
   reloadGun(): void { this.simulation.startReload(); this.emit(); }
   selectGun(i: number): void { unlockAudio(); this.simulation.selectGun(i); this.emit(); }
-  interact(): void { if (this.race.phase === 'countdown' || this.race.phase === 'racing') return; this.simulation.interact(); this.emit(); }
+  interact(): void { if (this.garageAvailable) { this.openGarage(); return; } if (this.race.phase === 'countdown' || this.race.phase === 'racing') return; this.simulation.interact(); this.emit(); }
   waypoint(id: string): void {
     if (PLACES.some(p => p.id === id)) {
       this.simulation.mapWaypoint = null;
@@ -2363,6 +2406,7 @@ export class WorldEngine {
     for (const s of this.glowSprites) { this.scene.remove(s); (s.material as THREE.Material).dispose(); }
     this.glowSprites.length = 0; this.glowPoints.length = 0;
     this.glowTexture?.dispose(); this.glowTexture = null;
+    for (const vehicle of [...this.fleet.values(), ...this.parked]) clearCustomization(vehicle);
     this.sun.shadow.dispose(); this.kit.dispose(); this.renderer.dispose();
     this.scene.clear();
   }

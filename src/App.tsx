@@ -1,3 +1,5 @@
+import { Garage } from './components/Garage';
+import { GARAGE_BAY } from './world/GarageLocation';
 import { readLookSettings } from './game/CameraInput';
 import { VEHICLES } from './world/Vehicles';
 import { GUNS } from './world/Guns';
@@ -55,6 +57,12 @@ export default function App() {
   const [quality, setQuality] = useState<QualityLevel>(initialQuality);
   const [portrait, setPortrait] = useState(() => matchMedia(portraitQuery).matches);
   const [mapOpen, setMapOpen] = useState(false);
+  const [garageOpen, setGarageOpen] = useState(false);
+  useEffect(() => {
+    const open = () => { setGarageOpen(true); engine.current?.setSuspended(true); };
+    window.addEventListener('agon:garage', open);
+    return () => window.removeEventListener('agon:garage', open);
+  }, []);
   const resumeAfterMap = useRef(false);
   const [notice, setNotice] = useState('');
   const [fullscreen, setFullscreen] = useState(false);
@@ -171,6 +179,7 @@ export default function App() {
     world.setAuthToken(session.token);
     await world.joinRoomSession(session.token, session.roomCode!);
     world.setPlayerName(session.name);
+    const garageNotice = await world.restoreGarage(session); if (garageNotice) setNotice(garageNotice);
     world.begin();
     rememberRoom(session);
     setEnterNote('');
@@ -193,7 +202,9 @@ export default function App() {
       pendingToken.current = null; setCreated(null); setJoinedRoom(null);
       if (previous?.roomCode && previous.token) void apiLeaveRoom(previous.token, previous.roomCode).catch(() => undefined);
       engine.current.setAuthToken(token);
-      engine.current.setPlayerName(player.name); engine.current.begin(); focus(); setEnterNote('');
+      engine.current.setPlayerName(player.name);
+      const garageNotice = await engine.current.restoreGarage(session); if (garageNotice) setNotice(garageNotice);
+      engine.current.begin(); focus(); setEnterNote('');
     } catch (error) {
       // Solo may fall back to offline gameplay when the API is unreachable.
       if (error instanceof ApiRequestError && error.status === 0) {
@@ -201,7 +212,9 @@ export default function App() {
         saveSession({ token: '', name: display, id: 'offline' });
         pendingToken.current = null; setCreated(null); setJoinedRoom(null);
         engine.current?.setAuthToken(null);
-        engine.current?.setPlayerName(display); engine.current?.begin(); focus();
+        engine.current?.setPlayerName(display);
+        await engine.current?.restoreGarage({ token: '', name: display, id: 'offline' });
+        engine.current?.begin(); focus();
         setNotice('Playing solo offline. ' + error.message);
       } else {
         engine.current?.leaveRoomSession();
@@ -281,6 +294,17 @@ export default function App() {
       engine.current?.leaveRoomSession();
       setEnterNote(error instanceof Error ? error.message : 'Could not join the server. Please try again.');
     } finally { entryLock.current = false; setEntering(false); }
+  };
+  const createServerFromSolo = async (serverName: string, visibility: RoomVisibility) => {
+    const current = loadSession();
+    if (!current || !engine.current) throw new Error('Sign in before creating a server.');
+    const session = current.token ? await refreshSession(current) : await apiLogin(current.name).then(({ token, player }) => ({ token, name: player.name, id: player.id }));
+    const { room } = await apiCreateRoom(session.token, { name: serverName, visibility });
+    engine.current.setAuthToken(session.token);
+    await engine.current.joinRoomSession(session.token, room.code);
+    rememberRoom({ ...session, roomCode: room.code });
+    setJoinedRoom({ name: room.name, visibility: room.visibility });
+    setNotice('Server ' + room.code + ' created. Share the code from the menu.');
   };
   const leaveServer = async () => {
     if (entryLock.current) return;
@@ -373,7 +397,7 @@ export default function App() {
     } catch { setNotice('Fullscreen was unavailable. You can explore in this window.'); }
   };
   const ready = !state || state.phase === 'ready';
-  const active = !ready && !state?.paused && !portrait && !mapOpen && !physicsOpen && !menuOpen && !raceOpen && !f1RaceOpen;
+  const active = !ready && !state?.paused && !portrait && !mapOpen && !physicsOpen && !menuOpen && !raceOpen && !f1RaceOpen && !garageOpen;
   /** In-canvas menu: pauses like the map, resumes on close only if it paused. */
   const toggleMenu = (open: boolean) => {
     if (open) {
@@ -397,7 +421,7 @@ export default function App() {
   };
   return <main className={`district-shell${fullscreen ? ' is-fullscreen' : ''}`}>
     <section className={`world-stage${state?.driving ? ' is-driving' : ''}${state?.armed ? ' is-armed' : ''}${engine.current?.raceGuidanceActive ? ' is-racing' : ''}`} aria-label="Open world neighborhood">
-      <WorldViewport engineRef={engine} onSnapshot={setState} onMap={toggleMap} theme={theme} weather={weather} season={season} intensity={intensity} quality={quality} portrait={portrait} blocked={mapOpen || physicsOpen || menuOpen || raceOpen || f1RaceOpen}
+      <WorldViewport engineRef={engine} onSnapshot={setState} onMap={toggleMap} theme={theme} weather={weather} season={season} intensity={intensity} quality={quality} portrait={portrait} blocked={mapOpen || physicsOpen || menuOpen || raceOpen || f1RaceOpen || garageOpen}
         onDismissOverlay={() => { if (physicsOpen) setPhysicsOpen(false); else if (menuOpen) { toggleMenu(false); focus(); } else if (mapOpen) toggleMap(); }}
         lookSettings={lookSettings} lookEnabled={active && state?.mode === 'roam'} />
       {state && state.phase === 'playing' && state.driving && state.view === 'first' && (state.weather === 'rain' || state.wiperMode === 'on') && (
@@ -439,6 +463,11 @@ export default function App() {
         <button className="control" onClick={enterFullscreen} aria-label={fullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}>⛶</button>
         <button className="control" onClick={() => toggleMenu(true)} aria-label="Open menu" aria-expanded={menuOpen}>☰</button>
       </div>
+      {garageOpen && engine.current && <Garage engine={engine.current} onCreateServer={createServerFromSolo} onClose={() => { setGarageOpen(false); if (engine.current) { engine.current.simulation.paused = false; engine.current.setSuspended(false); } focus(); }} />}
+      {!ready && !garageOpen && state?.mode === 'roam' && state.driving && engine.current?.race.phase === 'idle' && <div className="garage-entry">
+        <button disabled={!active} onClick={() => { if (engine.current?.garageAvailable) engine.current.openGarage(); else { engine.current?.waypoint('garage'); setNotice('Apex Motor Works: follow the map to the west avenue. Drive into the open bay and stop.'); } }}>{engine.current?.garageAvailable ? 'E ? ENTER CUSTOM SHOP' : '? APEX GARAGE ? ' + Math.round(Math.hypot(state.car.x - GARAGE_BAY.x, state.car.z - GARAGE_BAY.z)) + ' m'}</button>
+        {Math.hypot(state.car.x - GARAGE_BAY.x, state.car.z - GARAGE_BAY.z) < 15 && !engine.current?.garageAvailable && <small>Stop inside the bay to customize</small>}
+      </div>}
       {menuOpen && <GameMenu
         theme={theme} onTheme={setTheme}
         weather={weather} onWeather={setWeather}

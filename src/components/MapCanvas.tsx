@@ -3,13 +3,14 @@ import { BRIDGE, BUILDINGS, CANAL, PLACES, ROADS, type Point } from '../world/Ma
 import { F1_ACCESS_SAMPLES } from '../world/F1Access';
 import { F1_LENGTH, F1_ORIGIN, f1PathAt, type RaceTrackId } from '../world/F1Track';
 import { TRACK_POINTS } from '../world/Track';
+import { GARAGE } from '../world/GarageLocation';
 import type { WorldSnapshot } from '../world/Simulation';
 
-export type MapFilter = 'all' | 'racing' | 'activities' | 'places';
+export type MapFilter = 'all' | 'racing' | 'activities' | 'places' | 'garages';
 export type MapView = { x: number; z: number; scale: number };
 export const CIRCUIT_POINTS = Array.from({ length: 241 }, (_, i) => f1PathAt(i / 240 * F1_LENGTH));
 export const isVisiblePlace = (category: string, filter: MapFilter) => filter === 'all' ||
-  (filter === 'racing' ? category.includes('RACING') : filter === 'activities' ? category.includes('SPORTS') || category === 'PARK' : !category.includes('RACING') && !category.includes('SPORTS'));
+  (filter === 'garages' ? category === 'GARAGE' : filter === 'racing' ? category.includes('RACING') : filter === 'activities' ? category.includes('SPORTS') || category === 'PARK' : !category.includes('RACING') && !category.includes('SPORTS'));
 export function mapDestination(state: WorldSnapshot | null): Point | null {
   return state?.mapWaypoint ?? PLACES.find(p => p.id === state?.waypoint) ?? null;
 }
@@ -87,6 +88,7 @@ export function MapCanvas({ state, mini = false, view = { x: 360, z: 0, scale: 0
     if (!mini) for (let x = -200; x <= 1000; x += 50) line([{ x, z: -250 }, { x, z: 250 }], '#293033', 0.5);
     if (!mini) for (let z = -250; z <= 250; z += 50) line([{ x: -200, z }, { x: 1000, z }], '#293033', 0.5);
     BUILDINGS.forEach(b => rect(b.x - b.w / 2, b.z - b.d / 2, b.w, b.d, '#383e40'));
+    rect(GARAGE.x - GARAGE.w / 2, GARAGE.z - GARAGE.d / 2, GARAGE.w, GARAGE.d, '#36675b');
     (state?.buildSites ?? []).forEach(b => rect(b.x - b.w / 2, b.z - b.d / 2, b.w, b.d, b.stage === 4 ? '#4b5355' : '#796347'));
     const roads: Point[][] = ROADS.flatMap(r => [[{ x: -160, z: r }, { x: 160, z: r }], [{ x: r, z: -160 }, { x: r, z: 160 }]]);
     roads.push(F1_ACCESS_SAMPLES, CIRCUIT_POINTS);
@@ -106,10 +108,15 @@ export function MapCanvas({ state, mini = false, view = { x: 360, z: 0, scale: 0
     PLACES.filter(p => isVisiblePlace(p.category, filter)).forEach(p => {
       const s = project(p); if (s.x < -15 || s.x > size.width + 15 || s.y < -15 || s.y > size.height + 15) return;
       const racing = p.category.includes('RACING');
-      ctx.fillStyle = selected === p.id ? '#df99ff' : racing ? '#f3c949' : '#fafafa';
+      const garage = p.category === 'GARAGE';
+      ctx.fillStyle = selected === p.id ? '#df99ff' : garage ? '#a5ffe2' : racing ? '#f3c949' : '#fafafa';
       ctx.strokeStyle = '#141819'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(s.x, s.y, mini ? 4 : 7, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-      if (!mini && (selected === p.id || scale > 2)) {
+      ctx.beginPath(); ctx.arc(s.x, s.y, garage ? (mini ? 7 : 10) : mini ? 4 : 7, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      if (garage) {
+        ctx.fillStyle = '#12382d'; ctx.font = `bold ${mini ? 9 : 12}px Arial`; ctx.textAlign = 'center';
+        ctx.fillText('G', s.x, s.y + (mini ? 3 : 4));
+      }
+      if (!mini && (garage || selected === p.id || scale > 2)) {
         ctx.font = '600 12px Arial'; ctx.textAlign = 'left'; ctx.lineWidth = 4; ctx.strokeStyle = '#171b1d';
         ctx.strokeText(p.name, s.x + 12, s.y + 4); ctx.fillStyle = '#fff'; ctx.fillText(p.name, s.x + 12, s.y + 4);
       }

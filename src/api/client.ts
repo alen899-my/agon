@@ -1,4 +1,14 @@
 /** Minimal HTTP client for the Agon API (see server/README.md). */
+import type { VehicleCustomization } from '../../server/src/shared/vehicleCustomization';
+import type { VehicleKind } from '../world/Vehicles';
+
+export interface SavedVehicle { kind: VehicleKind; customization: VehicleCustomization; updated_at: string }
+export function getGarage(token: string): Promise<{ vehicles: SavedVehicle[] }> {
+  return request('/api/garage', { headers: authHeader(token) });
+}
+export function saveGarageVehicle(token: string, kind: VehicleKind, customization: VehicleCustomization): Promise<{ vehicle: SavedVehicle }> {
+  return request(`/api/garage/${encodeURIComponent(kind)}`, { method: 'PUT', headers: authHeader(token), body: JSON.stringify({ customization }) });
+}
 
 const rawBase = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:4000';
 const BASE = rawBase.trim().replace(/\/+$/, '');

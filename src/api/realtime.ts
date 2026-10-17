@@ -6,7 +6,9 @@ import { realtimeUrl } from './client';
  * — keep both sides in lockstep when changing message shapes.
  */
 
+import type { VehicleCustomization } from '../../server/src/shared/vehicleCustomization';
 export interface RemotePos {
+  customization?: VehicleCustomization;
   x: number;
   z: number;
   y: number;
