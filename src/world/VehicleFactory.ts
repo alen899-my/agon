@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { buildNascarModel } from './NascarModel';
+import { createVehicleOccupant } from './VehicleOccupant';
 import { buildDetailedVehicleModel } from './DetailedVehicleModel';
 import { VEHICLE_DESIGNS, type DetailedKind } from './VehicleDesigns';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
@@ -26,6 +27,7 @@ export interface KitLike {
 }
 
 export interface VehicleParts {
+  setOccupancy: (occupied: boolean, cockpit?: boolean) => void;
   group: THREE.Group; body: THREE.Group; glazing: THREE.Mesh; steeringWheel: THREE.Group; eye: THREE.Vector3;
   spins: THREE.Object3D[]; frontSteer: THREE.Group[];
   doors: THREE.Group[];
@@ -852,6 +854,7 @@ export function buildVehicle(kit: KitLike, kind: VehicleKind = 'car', variant = 
   }
 
   // doors (WorldEngine swings these on enter / exit)
+  const driver = createVehicleOccupant(kit, model); body.add(driver);
   const doors: THREE.Group[] = [];
   for (const d of model.authoredDoors ?? []) {
     const pivot = new THREE.Group(); pivot.position.copy(d.position); body.add(pivot);
@@ -891,20 +894,25 @@ export function buildVehicle(kit: KitLike, kind: VehicleKind = 'car', variant = 
   for (const w of model.wheelPos) {
     const side = w.x < 0 ? '-1' : '1';
     const geos = model.wheels[side];
-    const steer = new THREE.Group(); steer.position.set(w.x, model.WR + 0.08, w.z); group.add(steer);
+    // World placement adds 0.08 m. Cancel it here so rubber contacts the road.
+    const steer = new THREE.Group(); steer.position.set(w.x, model.WR - 0.08, w.z); group.add(steer);
     const spin = new THREE.Group(); spin.scale.x = w.widthScale ?? 1; steer.add(spin);
     spin.userData.wheelRadius = model.WR;
     spin.userData.wheelWidth = kind === 'f1' ? 0.305 : wheelDims(kind, spec).tireW;
     geos.forEach((geo, role) => {
       const mesh = new THREE.Mesh(geo, role === 'tyre' ? M.ink : role === 'rim' ? rimMat(dark) : roleMat[role] ?? M.metal);
-      mesh.castShadow = role === 'tyre'; spin.add(mesh);
+      mesh.castShadow = role === 'tyre' || role === 'rubber' || role === 'raceRubber';
+      mesh.receiveShadow = true; spin.add(mesh);
     });
     spins.push(spin);
     if (w.front) frontSteer.push(steer);
   }
 
   const WR = model.WR;
+  // Panels and calipers were authored around wheel centres at WR + 0.08.
+  body.position.y = -0.16;
   const vehicle: VehicleParts = { group, body, glazing, steeringWheel, eye: model.eye.clone(), spins, frontSteer, doors, wipers, brakeMat, headMat, blinkerMat, spin: 0,
+    setOccupancy: (occupied, cockpit = false) => { driver.visible = occupied && !cockpit; },
     update: (speed, steer, dt, braking, bodyTilt, blinker = 0, time = 0, wiper = 0) => {
       vehicle.spin += (speed * dt) / WR;
       for (const s of spins) s.rotation.x = vehicle.spin;
@@ -921,7 +929,7 @@ export function buildVehicle(kit: KitLike, kind: VehicleKind = 'car', variant = 
       group.rotation.x = bodyTilt?.pitch ?? 0;
       body.rotation.x = 0;
       body.rotation.z = bodyTilt?.roll ?? 0;
-      body.position.y = Number(group.userData.rideHeight) || 0;
+      body.position.y = -0.16 + (Number(group.userData.rideHeight) || 0);
     } };
   return vehicle;
 }

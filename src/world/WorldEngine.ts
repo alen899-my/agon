@@ -1234,6 +1234,7 @@ export class WorldEngine {
           ghost.vehicleKind = kind;
         }
         ghost.vehicle.group.visible = true;
+        ghost.vehicle.setOccupancy(true);
         applyCustomization(ghost.vehicle, kind, r.pos.customization);
         ghost.vehicle.group.position.set(ghost.x, 0.08, ghost.z);
         ghost.vehicle.group.rotation.y = -ghost.yaw;
@@ -2059,6 +2060,7 @@ export class WorldEngine {
       roll: sim.skidding ? Math.sin(sim.time * 20) * 0.02 : -sim.car.steer * Math.min(0.05, Math.abs(sim.car.speed) * 0.003),
     }, sim.blinker, sim.time, wiper);
     this.car.glazing.visible = !(sim.driving && sim.view === 'first');
+    this.car.setOccupancy(sim.driving, sim.view === 'first');
     // Cockpit hides the 3D cowl blades (the screen overlay draws the sweep instead).
     const hideBlades = sim.driving && sim.view === 'first';
     for (const w of this.car.wipers) w.visible = !hideBlades;
@@ -2136,6 +2138,7 @@ export class WorldEngine {
       vehicle.group.visible = true;
       vehicle.group.position.set(p.x, 0.08, p.z); vehicle.group.rotation.y = -p.yaw;
       vehicle.update(p.speed, p.steer, dt, p.braking, undefined, 0, sim.time, wiperAngle(sim.time + i * 0.53, this.intensity) * (sim.weather === 'rain' ? 1 : 0));
+      vehicle.setOccupancy(true);
     });
     this.parked.forEach((vehicle, i) => {
       const p = sim.parked[i]; if (!p) { vehicle.group.visible = false; return; }
@@ -2144,6 +2147,7 @@ export class WorldEngine {
       vehicle.group.visible = true;
       vehicle.group.position.set(p.x, 0.08, p.z); vehicle.group.rotation.y = -p.yaw;
       vehicle.update(0, 0, 0, false);
+      vehicle.setOccupancy(false);
     });
     // AI role agents (police cruisers): bodies resolve via CharacterFactory.
     this.syncAgentPeople(dt);
@@ -2157,6 +2161,7 @@ export class WorldEngine {
       vehicle.group.rotation.y = -cop.yaw;
       const blink = cop.lightsOn ? (Math.floor(sim.time * 4) % 2 === 0 ? 1 : 2) : 0;
       vehicle.update(cop.speed, 0, dt, false, undefined, blink, sim.time, 0);
+      vehicle.setOccupancy(!cop.onFoot);
     }
     // Street-racer rides (Maya vs Leo): real cars on the Grand Circuit.
     for (const ride of this.agents.rides) {
@@ -2170,6 +2175,7 @@ export class WorldEngine {
       const turn = Math.atan2(Math.sin(-ride.yaw - vehicle.group.rotation.y), Math.cos(-ride.yaw - vehicle.group.rotation.y));
       vehicle.group.rotation.y += turn * blend;
       vehicle.update(ride.speed, ride.steer ?? 0, dt, ride.braking || ride.state === 'countdown', undefined, 0, sim.time, 0);
+      vehicle.setOccupancy(true);
     }
     // Friend ghosts from the private server (nearest MAX_GHOSTS, interpolated).
     this.syncGhosts(dt);
@@ -2190,6 +2196,7 @@ export class WorldEngine {
           v.group.rotation.y = -yaw;
           const pitch = cpu.pitch;
           v.update(cpu.speed, cpu.steer, dt, cpu.braking, { pitch, roll: 0 }, 0, sim.time, 0);
+          v.setOccupancy(true);
         }
         if (tag) tag.position.set(cx, cy + 2.6, cz);
       }

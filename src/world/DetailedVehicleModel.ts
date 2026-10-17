@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import type { KitLike, Model } from './VehicleFactory';
 import { VEHICLES, VEHICLE_WHEELS } from './Vehicles';
 import { VEHICLE_DESIGNS, type DetailedKind } from './VehicleDesigns';
@@ -15,6 +16,7 @@ const smooth = THREE.MathUtils.smoothstep;
 export function buildDetailedVehicleModel(_kit: KitLike, kind: DetailedKind): Model {
   const spec = VEHICLES[kind], d = VEHICLE_DESIGNS[kind];
   const L = spec.length, W = spec.width, half = L / 2, hw = W / 2;
+  const baseHW = hw * Math.min(0.985, Math.max(0.83, d.roofWidth + 0.035));
   const zAt = (t: number) => (t - 0.5) * L;
   const cf = zAt(d.cowl), rf = zAt(d.roofFront), rr = zAt(d.roofRear), cr = zAt(d.rearGlass);
   const axles = [zAt(d.axleFront), zAt(d.axleRear)];
@@ -29,8 +31,13 @@ export function buildDetailedVehicleModel(_kit: KitLike, kind: DetailedKind): Mo
   material('rotor', new THREE.MeshStandardMaterial({ color: 0x94989e, metalness: 0.85, roughness: 0.42 }));
   material('caliper', new THREE.MeshStandardMaterial({ color: spec.category === 'sport' ? 0xb62621 : 0x35383e, roughness: 0.38 }));
   material('interior', new THREE.MeshStandardMaterial({ color: d.chrome ? 0x593c2c : 0x20242b, roughness: 0.85, side: THREE.DoubleSide }));
+  material('stitch', new THREE.MeshStandardMaterial({ color: d.chrome ? 0xb28c66 : 0x626975, roughness: 0.92 }));
+  material('display', new THREE.MeshStandardMaterial({ color: 0x0a1820, emissive: 0x173746, emissiveIntensity: 0.35, roughness: 0.32 }));
   material('glass', new THREE.MeshPhysicalMaterial({ color: 0x526774, metalness: 0.08, roughness: 0.10,
-    clearcoat: 1, transparent: true, opacity: 0.46, depthWrite: false, side: THREE.DoubleSide }));
+    clearcoat: 1, transparent: true, opacity: 0.32, depthWrite: false, side: THREE.DoubleSide }));
+  const rounded = (role: string, x: number, y: number, z: number, w: number, h: number, l: number, radius = 0.035, rx = 0) => {
+    p.add(role, new RoundedBoxGeometry(w, h, l, 3, Math.min(radius, Math.min(w, h, l) * 0.4)), V(x, y, z), new THREE.Euler(rx, 0, 0));
+  };
 
   const shoulder = (z: number) => {
     const front = smooth(z, -half, cf), rear = smooth(z, cr, half);
@@ -86,6 +93,22 @@ export function buildDetailedVehicleModel(_kit: KitLike, kind: DetailedKind): Mo
         const z = mix(doorStart + 0.003, doorEnd - 0.003, u);
         return sidePoint(side, z, mix(ground + 0.073, shoulder(z) - 0.003, v)).sub(pivot);
       }, 24, 12, side < 0);
+      // Inner door card and edge returns close the paper-thin outer shell.
+      const doorPoint = (u: number, v: number, inner = false) => {
+        const z = mix(doorStart + 0.003, doorEnd - 0.003, u);
+        const point = sidePoint(side, z, mix(ground + 0.073, shoulder(z) - 0.003, v));
+        if (inner) point.x -= side * 0.045;
+        return point.sub(pivot);
+      };
+      panel.surface('interior', (u, v) => doorPoint(u, v, true), 24, 12, side > 0);
+      for (const edge of [0, 1]) {
+        panel.surface('paint', (u, v) => doorPoint(edge, u).lerp(doorPoint(edge, u, true), v), 12, 2);
+        panel.surface('paint', (u, v) => doorPoint(u, edge).lerp(doorPoint(u, edge, true), v), 24, 2);
+      }
+      const armrest = doorPoint(0.55, 0.57, true); armrest.x -= side * 0.025;
+      panel.add('interior', new RoundedBoxGeometry(0.085, 0.055, Math.min(0.42, (doorEnd - doorStart) * 0.6), 3, 0.018), armrest);
+      const latch = doorPoint(0.22, 0.75, true); latch.x -= side * 0.012;
+      panel.box('alloy', latch.x, latch.y, latch.z, 0.018, 0.025, 0.075);
       const handle = sidePoint(side, doorEnd - 0.13, shoulder(doorEnd) - 0.10, 0.012).sub(pivot);
       panel.box(d.chrome ? 'alloy' : 'trim', handle.x, handle.y, handle.z, 0.024, 0.025, 0.13);
       authoredDoors.push({ position: pivot, parts: panel.finish() });
@@ -109,20 +132,26 @@ export function buildDetailedVehicleModel(_kit: KitLike, kind: DetailedKind): Mo
   p.box('trim', 0, ground, 0, W - d.tire * 2 - 0.15, 0.035, L - 0.35);
   for (const side of [-1, 1]) p.surface('paint', (u, v) => {
     const z = mix(cf, cr, v);
-    return V(side * mix(hw * 0.83, width(z) - 0.025, u), shoulder(z), z);
+    return V(side * mix(baseHW, width(z) - 0.025, u), shoulder(z), z);
   }, 6, 32, side < 0);
 
-  const roofHW = hw * d.roofWidth, baseHW = hw * 0.83;
+  const roofHW = hw * d.roofWidth;
   const roofY = d.roof - 0.035, frontY = shoulder(cf), rearY = shoulder(cr);
   const roofPoint = (u: number, v: number) => {
     const x = u * 2 - 1;
-    return V(x * roofHW * (1 + 0.025 * Math.sin(Math.PI * v)), roofY + 0.035 * (1 - x * x)
-      + (upright ? 0.004 : 0.014) * Math.sin(Math.PI * v), mix(rf, rr, v));
+    return V(x * roofHW, roofY + (0.035 + (upright ? 0.004 : 0.014) * Math.sin(Math.PI * v)) * (1 - x * x), mix(rf, rr, v));
   };
-  p.quad('glass', V(-baseHW, frontY, cf), V(baseHW, frontY, cf), V(roofHW, roofY, rf), V(-roofHW, roofY, rf), 0.018);
+  const glassBase = (z: number, u: number) => deck(z, 0.5 + (u - 0.5) * baseHW / (width(z) - (upright ? 0.012 : 0.03)));
+  p.surface('glass', (u, v) => {
+    const point = glassBase(cf, u).lerp(roofPoint(u, 0), v);
+    point.z -= 0.012 * Math.sin(Math.PI * u) * Math.sin(Math.PI * v); return point;
+  }, 28, 20);
+  for (const upper of [false, true]) p.tube('trim', Array.from({ length: 20 }, (_, i) => upper ? roofPoint(i / 19, 0) : glassBase(cf, i / 19)), 0.010);
   if (!open) {
     p.surface('paint', roofPoint, 28, 32);
-    p.quad('glass', V(-roofHW, roofY, rr), V(roofHW, roofY, rr), V(baseHW, rearY, cr), V(-baseHW, rearY, cr), upright ? 0 : 0.014);
+    p.surface('interior', (u, v) => roofPoint(u, v).add(V(0, -0.026, 0)), 24, 24, true);
+    p.surface('glass', (u, v) => roofPoint(u, 1).lerp(glassBase(cr, u), v), 28, 20);
+    for (const upper of [false, true]) p.tube('trim', Array.from({ length: 20 }, (_, i) => upper ? roofPoint(i / 19, 1) : glassBase(cr, i / 19)), 0.010);
   }
   for (const side of [-1, 1]) {
     const a = V(side * baseHW, frontY, cf), b = V(side * roofHW, roofY, rf);
@@ -138,7 +167,10 @@ export function buildDetailedVehicleModel(_kit: KitLike, kind: DetailedKind): Mo
         p.quad('glass', a, b, V(side * roofHW, roofY, split), V(side * baseHW, frontY, split));
         p.quad('paint', V(side * baseHW, frontY, split), V(side * roofHW, roofY, split), c, e);
       } else {
-        p.quad('glass', a, b, V(side * roofHW, roofY - 0.008, rr - 0.10), V(side * baseHW, shoulder(sailZ), sailZ));
+        p.surface('glass', (u, v) => {
+          const bottomZ = mix(cf, sailZ, u), topZ = mix(rf, rr - 0.10, u);
+          return V(side * mix(baseHW, roofHW, v), mix(shoulder(bottomZ) - 0.004, roofY - 0.008 * u, v), mix(bottomZ, topZ, v));
+        }, 32, 16, side < 0);
         const count = d.family === 'bus' ? Math.max(4, Math.floor((rr - rf) / 0.9)) : d.fourDoor ? 2 : 1;
         for (let i = 1; i <= count; i++) {
           const t = i / (count + 1), topZ = mix(rf, rr - 0.10, t), bottomZ = mix(cf, sailZ, t);
@@ -158,30 +190,60 @@ export function buildDetailedVehicleModel(_kit: KitLike, kind: DetailedKind): Mo
 
   // Real cabin volume: dashboard, seats, headrests and centre tunnel.
   p.box('interior', 0, ground + 0.12, (cf + cr) / 2, W * 0.72, 0.05, cr - cf);
-  p.box('interior', 0, frontY - 0.04, cf + 0.20, W * 0.75, 0.12, 0.35);
+  rounded('interior', 0, frontY - 0.055, cf + 0.21, W * 0.75, 0.15, 0.37, 0.055);
   const seatZ = Math.min(cr - 0.35, rf + 0.42), seatY = Math.max(ground + 0.22, d.belt - 0.36);
   for (const side of [-1, 1]) {
-    p.box('interior', side * W * 0.19, seatY, seatZ, W * 0.23, 0.12, 0.48);
-    p.box('interior', side * W * 0.19, seatY + 0.28, seatZ + 0.20, W * 0.23, 0.53, 0.10, -0.12);
+    rounded('interior', side * W * 0.19, seatY, seatZ, W * 0.23, 0.12, 0.48, 0.045);
+    rounded('interior', side * W * 0.19, seatY + 0.28, seatZ + 0.20, W * 0.23, 0.53, 0.12, 0.045, -0.12);
+    for (const edge of [-1, 1]) {
+      const sx = side * W * 0.19 + edge * W * 0.09;
+      rounded('interior', sx, seatY + 0.08, seatZ, 0.065, 0.10, 0.41, 0.025);
+      p.tube('stitch', [V(sx, seatY + 0.12, seatZ - 0.16), V(sx, seatY + 0.14, seatZ + 0.12), V(sx, seatY + 0.49, seatZ + 0.18)], 0.0025);
+    }
     const head = new THREE.SphereGeometry(1, 16, 10); head.scale(0.14, 0.12, 0.065);
     p.add('interior', head, V(side * W * 0.19, seatY + 0.61, seatZ + 0.23));
   }
-  p.box('interior', 0, seatY + 0.04, seatZ - 0.15, 0.22, 0.20, 0.75);
+  rounded('interior', 0, seatY + 0.04, seatZ - 0.15, 0.22, 0.20, 0.75, 0.035);
+  // Driver-facing instruments, vents and centre controls use actual depth.
+  rounded('trim', -W * 0.19, frontY + 0.025, cf + 0.27, 0.41, 0.18, 0.17, 0.035);
+  for (const side of [-1, 1]) {
+    const gx = -W * 0.19 + side * 0.095, gy = frontY + 0.035, gz = cf + 0.36;
+    p.add('display', new THREE.CircleGeometry(0.062, 28), V(gx, gy, gz));
+    p.add('alloy', new THREE.TorusGeometry(0.063, 0.004, 6, 28), V(gx, gy, gz + 0.002));
+    for (let i = 0; i < 9; i++) {
+      const angle = (-0.8 + i * 0.32) * Math.PI;
+      p.add('white', new THREE.BoxGeometry(0.004, 0.010, 0.002), V(gx + Math.sin(angle) * 0.050, gy + Math.cos(angle) * 0.050, gz + 0.003), new THREE.Euler(0, 0, -angle));
+    }
+    p.add('white', new THREE.BoxGeometry(0.003, 0.043, 0.002), V(gx - 0.009, gy + 0.016, gz + 0.005), new THREE.Euler(0, 0, 0.55));
+  }
+  rounded('trim', W * 0.08, frontY - 0.02, cf + 0.39, 0.27, 0.17, 0.025, 0.01);
+  p.box('display', W * 0.08, frontY - 0.02, cf + 0.407, 0.23, 0.13, 0.004);
+  for (let i = 0; i < 3; i++) p.box('alloy', W * 0.08 - 0.07 + i * 0.07, frontY - 0.14, cf + 0.40, 0.025, 0.025, 0.018);
+  for (const x of [-W * 0.32, W * 0.30]) {
+    p.box('trim', x, frontY - 0.02, cf + 0.397, 0.14, 0.055, 0.012);
+    for (let i = 0; i < 4; i++) p.box('alloy', x - 0.045 + i * 0.03, frontY - 0.02, cf + 0.406, 0.006, 0.043, 0.005);
+  }
+  p.tube('alloy', [V(0, seatY + 0.13, seatZ - 0.22), V(0, seatY + 0.27, seatZ - 0.25)], 0.012);
+  rounded('trim', 0, seatY + 0.28, seatZ - 0.25, 0.045, 0.045, 0.06, 0.016);
+  p.box('trim', 0, roofY - 0.16, rf + 0.13, 0.24, 0.065, 0.025);
+  p.box('alloy', 0, roofY - 0.16, rf + 0.148, 0.215, 0.045, 0.004);
   if (d.fourDoor && cr - seatZ > 1.2) p.box('interior', 0, seatY + 0.18, cr - 0.36, W * 0.68, 0.38, 0.42);
 
   // Fascias and signature lamp clusters are fitted to the individual nose profile.
   for (const front of [true, false]) {
     if (work && !front) continue;
-    const z = front ? -half : half, top = front ? d.nose : d.tail;
+    const z = front ? -half : half;
     p.surface('paint', (u, v) => {
       const x = u * 2 - 1;
-      return V(x * (width(z) - 0.025), mix(ground + 0.02, Math.max(top, shoulder(z)), v), z + (front ? 1 : -1) * 0.09 * Math.abs(x) ** 4);
+      const y = mix(ground, deck(z, u).y, v);
+      return V(x * Math.abs(sidePoint(1, z, y).x), y,
+        z + (front ? -1 : 1) * 0.018 * (1 - x * x) * Math.sin(Math.PI * v));
     }, 36, 16, !front);
     p.box('trim', 0, ground + 0.035, z, W * 0.85, 0.045, 0.11);
   }
   const lightY = Math.max(ground + 0.31, d.nose - 0.13), lampX = hw * 0.66;
   for (const side of [-1, 1]) {
-    const x = side * lampX, front = -half + 0.018;
+    const x = side * lampX, front = -half - 0.026;
     if (d.lights === 'round' || d.lights === 'quad' || d.lights === 'oval') {
       const n = d.lights === 'quad' ? 2 : 1;
       for (let i = 0; i < n; i++) {
@@ -307,9 +369,9 @@ export function buildDetailedVehicleModel(_kit: KitLike, kind: DetailedKind): Mo
     }
     wheels[side === -1 ? '-1' : '1'] = b.finish();
   }
-  const wheelPos = axles.flatMap(z => [-1, 1].map(side => ({ x: side * (width(z) - d.tire * 0.51), z, front: z === axles[0] })));
+  const wheelPos = axles.flatMap(z => [-1, 1].map(side => ({ x: side * (width(z) - d.tire * 0.5 - 0.025), z, front: z === axles[0] })));
   if (work && ['tractor', 'tank', 'dump', 'ladder'].includes(d.equipment ?? '')) {
-    for (const side of [-1, 1]) wheelPos.push({ x: side * (hw - d.tire * 0.51), z: axles[1] - WR * 2.25, front: false });
+    for (const side of [-1, 1]) wheelPos.push({ x: side * (hw - d.tire * 0.5 - 0.025), z: axles[1] - WR * 2.25, front: false });
   }
   // Calipers belong to the body, not the spinning rim.
   for (const w of wheelPos) p.box('caliper', w.x, wy + WR * 0.10, w.z + WR * 0.48, d.tire * 0.42, WR * 0.40, 0.07);

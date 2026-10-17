@@ -16,6 +16,7 @@ export interface Stickman {
   animate: (s: GaitState) => void;
 }
 export interface Vehicle {
+  setOccupancy: (occupied: boolean, cockpit?: boolean) => void;
   group: THREE.Group; body: THREE.Group; glazing: THREE.Mesh; steeringWheel: THREE.Group; eye: THREE.Vector3;
   spins: THREE.Object3D[]; frontSteer: THREE.Group[];
   doors: THREE.Group[];

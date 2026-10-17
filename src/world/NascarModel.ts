@@ -110,9 +110,10 @@ export function buildNascarModel(kit: KitLike): Model {
 
   // Rounded front and rear bumper skins taper in plan and elevation.
   for (const front of [true, false]) p.surface('paint', (u, v) => {
-    const x = u * 2 - 1, edge = Math.abs(x), z = front ? -2.515 : 2.515;
-    return V(x * lerp(station(z, 1) - 0.045, station(z, 1) - 0.028, v),
-      lerp(0.20, station(z, 2), v), z + (front ? 1 : -1) * (0.10 * edge ** 4 + 0.025 * Math.sin(v * Math.PI)));
+    const x = u * 2 - 1, z = front ? -2.515 : 2.515;
+    const y = lerp(0.19, deckPoint(z, u).y, v);
+    return V(x * Math.abs(sidePoint(1, z, y).x), y,
+      z + (front ? -1 : 1) * 0.015 * (1 - x * x) * Math.sin(v * Math.PI));
   }, 48, 16, !front);
   p.surface('raceCarbon', (u, v) => {
     const x = (u * 2 - 1) * 0.99;
@@ -128,11 +129,13 @@ export function buildNascarModel(kit: KitLike): Model {
   // Compound-curved roof, separate glazing and broad rear sail panels.
   const roof = (u: number, v: number, lift = 0) => {
     const cross = u * 2 - 1, z = lerp(-0.19, 0.70, v);
-    return V(cross * lerp(0.665, 0.685, v), 1.355 + 0.055 * (1 - cross * cross) + 0.012 * Math.sin(Math.PI * v) + lift, z);
+    return V(cross * lerp(0.665, 0.685, v), 1.355 + (0.055 + 0.012 * Math.sin(Math.PI * v)) * (1 - cross * cross) + lift, z);
   };
   p.surface('paint', roof, 32, 32);
-  p.quad('glass', V(-0.83, 0.923, -0.85), V(0.83, 0.923, -0.85), V(0.665, 1.355, -0.19), V(-0.665, 1.355, -0.19), 0.018);
-  p.quad('glass', V(-0.685, 1.355, 0.70), V(0.685, 1.355, 0.70), V(0.83, 0.95, 1.38), V(-0.83, 0.95, 1.38), 0.015);
+  p.surface('raceCarbon', (u, v) => roof(u, v, -0.025), 24, 24, true);
+  p.surface('glass', (u, v) => V(lerp(-0.83, 0.83, u), 0.923, -0.85).lerp(roof(u, 0), v), 28, 20);
+  p.surface('glass', (u, v) => roof(u, 1).lerp(V(lerp(-0.83, 0.83, u), 0.95, 1.38), v), 28, 20);
+  for (const end of [0, 1]) p.tube('raceCarbon', Array.from({ length: 20 }, (_, i) => roof(i / 19, end)), 0.009);
   for (const side of [-1, 1]) {
     const a = V(side * 0.83, 0.94, -0.82), b = V(side * 0.665, 1.355, -0.19);
     const c = V(side * 0.685, 1.355, 0.70), d = V(side * 0.83, 0.95, 1.38);
@@ -168,6 +171,11 @@ export function buildNascarModel(kit: KitLike): Model {
     p.box('raceRed', -0.34 + side * 0.09, 0.76, 0.448, 0.052, 0.43, 0.018, -0.10);
   }
   p.box('raceCarbon', 0, 0.88, -0.56, 1.48, 0.15, 0.37);
+  for (const x of [-0.43, -0.25]) {
+    p.add('raceSteel', new THREE.TorusGeometry(0.061, 0.004, 6, 28), V(x, 0.93, -0.365));
+    p.add('raceCarbon', new THREE.CircleGeometry(0.059, 28), V(x, 0.93, -0.367));
+    p.add('raceCage', new THREE.BoxGeometry(0.003, 0.043, 0.003), V(x - 0.009, 0.945, -0.360), new THREE.Euler(0, 0, 0.55));
+  }
   p.box('raceSteel', 0.13, 0.40, 0.16, 0.18, 0.24, 0.64);
   p.tube('raceSteel', [V(0.11, 0.49, 0.12), V(0.10, 0.72, 0.08)], 0.015);
   p.add('raceCarbon', new THREE.SphereGeometry(0.036, 12, 8), V(0.10, 0.72, 0.08));
@@ -254,8 +262,13 @@ export function buildNascarModel(kit: KitLike): Model {
   for (const side of [-1, 1]) {
     p.surface('raceNumber', (u, v) => sidePoint(side, lerp(side < 0 ? -0.60 : 0.52, side < 0 ? 0.52 : -0.60, u), lerp(0.88, 0.34, v), 0.004), 24, 16);
     p.surface('raceBadges', (u, v) => sidePoint(side, lerp(side < 0 ? -1.02 : -0.68, side < 0 ? -0.68 : -1.02, u), lerp(0.76, 0.45, v), 0.005), 12, 12);
-    p.quad('raceLamp', V(side * 0.36, 0.58, -2.527), V(side * 0.82, 0.57, -2.457), V(side * 0.82, 0.43, -2.457), V(side * 0.36, 0.44, -2.527));
-    p.quad('raceTail', V(side * 0.37, 0.78, 2.526), V(side * 0.80, 0.77, 2.475), V(side * 0.80, 0.65, 2.475), V(side * 0.37, 0.66, 2.526));
+    for (const front of [true, false]) p.surface(front ? 'raceLamp' : 'raceTail', (u, v) => {
+      const z = front ? -2.515 : 2.515, x = side * lerp(front ? 0.36 : 0.37, front ? 0.82 : 0.80, u);
+      const y = lerp(front ? 0.58 : 0.78, front ? 0.44 : 0.66, v) - 0.01 * u;
+      const cross = x / Math.abs(sidePoint(1, z, y).x);
+      const t = THREE.MathUtils.clamp((y - 0.19) / (deckPoint(z, (cross + 1) / 2).y - 0.19), 0, 1);
+      return V(x, y, z + (front ? -1 : 1) * (0.015 * (1 - cross * cross) * Math.sin(t * Math.PI) + 0.004));
+    }, 16, 8);
     // Contrast lower sweep follows the flank and stays between the arches.
     p.surface('raceCarbon', (u, v) => {
       const z = lerp(-0.97, 0.98, u);
@@ -290,7 +303,7 @@ export function buildNascarModel(kit: KitLike): Model {
   const parts = p.finish();
   // Resource ownership stays with the factory cache; instances only own transforms.
   return { parts, materials, wheels, WR, style: 'sport',
-    wheelPos: AXLES.flatMap(z => [-1, 1].map(side => ({ x: side * 0.825, z, front: z < 0 }))),
+    wheelPos: AXLES.flatMap(z => [-1, 1].map(side => ({ x: side * 0.807, z, front: z < 0 }))),
     eye: V(-0.34, 1.14, 0.12), steerPos: V(-0.34, 0.85, -0.28), steerTilt: -0.28,
     doors: [], wiperAnchors: [],
     garageLayout: { hoodY: 0.86, hoodZ: -1.54, hoodLength: 1.25, roofY: 1.42, roofZ: 0.25, roofLength: 0.89 },
