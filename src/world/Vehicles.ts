@@ -14,6 +14,7 @@ export interface VehicleSpec {
 }
 
 export const VEHICLES = {
+  nascar: { name: 'NASCAR Stock Car', inspiredBy: 'Next Gen Cup-style stock car', category: 'sport', length: 5.03, width: 1.99, height: 0.49, topSpeed: 88, acceleration: 13.5, grip: 10.5, blurb: 'No. 24 AGON Motorsport: wide-body V8 stock car, slicks, roll cage and racing aero' },
   f1: { name: 'Formula One', inspiredBy: 'Modern single-seat formula racer', category: 'sport', length: 5.5, width: 2.0, height: 0.65, topSpeed: 320 / 3.6, acceleration: 24, grip: 13, blurb: 'Open-wheel single-seater with slick tyres and ground-effect aerodynamics' },
   car: { name: 'Sedan', inspiredBy: 'Toyota Camry', category: 'car', length: 4.3, width: 1.9, height: 0.75, topSpeed: 32, acceleration: 7, grip: 8, blurb: 'Everyday 4-door family sedan' },
   hatch: { name: 'Hatchback', inspiredBy: 'VW Golf GTI', category: 'car', length: 4.0, width: 1.85, height: 0.8, topSpeed: 33, acceleration: 7.5, grip: 8.5, blurb: 'Nimble 5-door hot hatch' },
@@ -80,6 +81,7 @@ export type WheelStyle = 'sport' | 'touring' | 'offroad' | 'steel' | 'dually';
 /** Factory paint palettes: first entry = signature/hero color, rest = traffic variety.
  *  Service/livery kinds stay fixed (taxi yellow, police, fire, ambulance). */
 export const VEHICLE_PAINTS: Record<VehicleKind, number[]> = {
+  nascar: [0x1254c5, 0xd8242f, 0xf0bd22, 0xf0f1f4, 0x151b25],
   f1: [0xdc172c, 0x16b8aa, 0xff8000, 0x225ac7, 0xf2f3f4],
   car: [0xd8dce2, 0x1c1e22, 0xf5f5f5, 0x8a0f1a, 0x2456c8, 0x2f4a3c, 0x8a8f96],
   hatch: [0xc23b2e, 0x2456c8, 0xf5f5f5, 0x1c1e22, 0xf2b705, 0x2f8f5b, 0x8a8f96],
@@ -131,6 +133,7 @@ export const VEHICLE_PAINTS: Record<VehicleKind, number[]> = {
 
 /** Distinct rim/tire treatment per model so wheels stop looking cloned. */
 export const VEHICLE_WHEELS: Record<VehicleKind, WheelStyle> = {
+  nascar: 'sport',
   f1: 'sport',
   car: 'touring', hatch: 'touring', taxi: 'steel', police: 'steel',
   sport: 'sport', muscle: 'sport', super: 'sport', convertible: 'sport',

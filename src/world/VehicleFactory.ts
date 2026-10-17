@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { buildNascarModel } from './NascarModel';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { VEHICLES, VEHICLE_WHEELS, pickVehiclePaint, vehicleSteeringAngle, type VehicleKind, type VehicleSpec, type WheelStyle } from './Vehicles';
 
@@ -61,6 +62,7 @@ const SIL = {
 type SilName = keyof typeof SIL;
 
 const STYLE: Record<VehicleKind, SilName> = {
+  nascar: 'coupe',
   f1: 'mid',
   car: 'sedan', hatch: 'hatch', taxi: 'sedan', police: 'sedan', sport: 'fast', muscle: 'muscle', super: 'mid', convertible: 'roadster',
   suv: 'suv', pickup: 'pickup', van: 'van', minivan: 'minivan', ambulance: 'rig', fire: 'rig', boxTruck: 'rig', bus: 'bus',
@@ -162,6 +164,7 @@ function wheelRadius(kind: VehicleKind, spec: VehicleSpec): number {
  * razor-thin — worst at full steering lock). Exported for unit tests.
  */
 export function wheelDims(kind: VehicleKind, spec: VehicleSpec): { WR: number; tireW: number; rimR: number } {
+  if (kind === 'nascar') return { WR: 0.365, tireW: 0.316, rimR: 0.238 };
   if (kind === 'f1') return { WR: 0.36, tireW: 0.305, rimR: 0.229 };
   const WR = wheelRadius(kind, spec);
   const style = VEHICLE_WHEELS[kind];
@@ -174,7 +177,10 @@ export function wheelDims(kind: VehicleKind, spec: VehicleSpec): { WR: number; t
 }
 
 export interface WiperAnchor { x: number; y: number; z: number; tilt: number; rest: number; dir: number }
-interface Model {
+export interface Model {
+  /** Authored models can supply their own material roles and garage decal anchors. */
+  materials?: Record<string, THREE.Material>;
+  garageLayout?: { hoodY: number; hoodZ: number; hoodLength: number; roofY: number; roofZ: number; roofLength: number };
   parts: Map<string, THREE.BufferGeometry>;
   wheels: Record<'-1' | '1', Map<string, THREE.BufferGeometry>>;
   wheelPos: { x: number; z: number; front: boolean; widthScale?: number }[];
@@ -336,7 +342,14 @@ function buildFormulaModel(kit: KitLike): Model {
   };
 }
 
+/** Add future hand-authored cars here; all retain the same driving/animation contract. */
+const AUTHORED_MODELS: Partial<Record<VehicleKind, (kit: KitLike) => Model>> = {
+  nascar: buildNascarModel,
+};
+
 function buildModel(kit: KitLike, kind: VehicleKind): Model {
+  const authored = AUTHORED_MODELS[kind];
+  if (authored) return authored(kit);
   if (kind === 'f1') return buildFormulaModel(kit);
   const spec = VEHICLES[kind] as VehicleSpec;
   const sil = SIL[STYLE[kind]] as Sil;
@@ -756,12 +769,15 @@ export function buildVehicle(kit: KitLike, kind: VehicleKind = 'car', variant = 
   const spec = VEHICLES[kind] as VehicleSpec, sil = SIL[STYLE[kind]];
   const front = Math.max(-spec.length / 2 + 0.15, spec.cab !== undefined ? 0.1 - spec.cab / 2 : -spec.length / 2 + sil.hood * spec.length);
   const rear = Math.min(front + (spec.cab ?? sil.cab * spec.length), spec.length / 2 - 0.12);
-  group.userData.garageLayout = { hoodY: kind === 'f1' ? 0.57 : sil.belt - sil.hd,
+  group.userData.garageLayout = model.garageLayout ?? { hoodY: kind === 'f1' ? 0.57 : sil.belt - sil.hd,
     hoodZ: (-spec.length / 2 + 0.35 + front) / 2, hoodLength: Math.max(0.25, front + spec.length / 2 - 0.35),
     roofY: kind === 'f1' ? 1.1 : sil.belt + spec.height, roofZ: (front + rear) / 2, roofLength: rear - front };
   const color = pickVehiclePaint(kind, variant);
   // MeshStandardMaterial instead of MeshPhysicalMaterial/clearcoat: ~same look, far cheaper on mobile GPUs.
-  const paintMat = cached(kit, `paint:${color}`, () => new THREE.MeshStandardMaterial({ color, roughness: 0.35, metalness: 0.35 }));
+  const paintMat = kind === 'nascar'
+    ? cached(kit, `race-paint:${color}`, () => new THREE.MeshPhysicalMaterial({ color, roughness: 0.27,
+      metalness: 0.22, clearcoat: 1, clearcoatRoughness: 0.14, side: THREE.DoubleSide }))
+    : cached(kit, `paint:${color}`, () => new THREE.MeshStandardMaterial({ color, roughness: 0.35, metalness: 0.35 }));
   const glassMat = cached(kit, 'glass', () => new THREE.MeshStandardMaterial({ color: 0x14202b, roughness: 0.06, metalness: 0.7 }));
   const shieldMat = cached(kit, 'glass-windshield', () => new THREE.MeshStandardMaterial({ color: 0xbdd5e4, roughness: 0.05, metalness: 0.1, transparent: true, opacity: 0.42 }));
   const lamp = (k: string, color: number, emissive: number) => cached(kit, `lamp:${k}`, () => new THREE.MeshStandardMaterial({ color, emissive, emissiveIntensity: 1.2 }));
@@ -784,6 +800,7 @@ export function buildVehicle(kit: KitLike, kind: VehicleKind = 'car', variant = 
     red: lamp('red', 0xff2020, 0xff0000), blue: lamp('blue', 0x2040ff, 0x0022ff), amber: lamp('amber', 0xffa500, 0xff8800),
     cross: crossMat, head: headMat, brake: brakeMat, blink: blinkerMat,
   };
+  Object.assign(roleMat, model.materials);
   let glazing!: THREE.Mesh;
   let shield!: THREE.Mesh;
   model.parts.forEach((geo, role) => {
