@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { VehicleParts } from './VehicleFactory';
+import type { GarageLayout, VehicleParts } from './VehicleFactory';
 import { VEHICLES, pickVehiclePaint, type VehicleKind } from './Vehicles';
 import { DEFAULT_CUSTOMIZATION, type VehicleCustomization } from '../../server/src/shared/vehicleCustomization';
 export { PART_OPTIONS, DEFAULT_CUSTOMIZATION, validCustomization, tuning } from '../../server/src/shared/vehicleCustomization';
@@ -37,8 +37,12 @@ export function applyCustomization(vehicle: VehicleParts, kind: VehicleKind, c?:
     if (role === 'paint' || role === 'roof' || role === 'spoiler' || role === 'frontBumper' || role === 'rearBumper') replace(object, paint);
     if (role === 'roof' && c.roof === 'carbon') replace(object, carbon);
     if (role === 'spoiler' && c.spoiler !== 'stock') hide(object);
+    if (role === 'wing' && c.spoiler !== 'stock') hide(object);
     if (role === 'frontBumper' && c.frontBumper !== 'stock') hide(object);
     if (role === 'rearBumper' && c.rearBumper !== 'stock') hide(object);
+    if (role === 'exhaust' && c.exhaust !== 'stock') hide(object);
+    if (role === 'rack' && c.roof === 'rack') hide(object);
+    if (role === 'caliper' && c.brakes !== 'stock') hide(object);
     if (role === 'glass' && c.tint !== 'stock') replace(object, mat(c.tint === 'dark' ? 0x030608 : 0x7693a3, 0.45, 0.12));
   });
   const originalLight = vehicle.headMat.color.clone(), originalEmission = vehicle.headMat.emissive.clone();
@@ -50,42 +54,62 @@ export function applyCustomization(vehicle: VehicleParts, kind: VehicleKind, c?:
     const mesh = new THREE.Mesh(boxGeo, m); mesh.position.set(x, y, z); mesh.scale.set(w, h, d); mesh.castShadow = true; mesh.receiveShadow = true; parent.add(mesh); return mesh;
   };
   const spec = VEHICLES[kind], w = spec.width, l = spec.length;
-  const layout = vehicle.group.userData.garageLayout as { hoodY: number; hoodZ: number; hoodLength: number; roofY: number; roofZ: number; roofLength: number };
-  const h = layout?.hoodY ?? 0.8, hz = layout?.hoodZ ?? -l * 0.32;
+  const layout = vehicle.group.userData.garageLayout as GarageLayout | undefined;
+  const h = layout?.hoodY ?? 0.8, hz = layout?.hoodZ ?? -l * 0.32, slope = layout?.hoodSlope ?? 0;
   if (c.hood !== 'stock') {
-    box(additions, carbon, 0, h + 0.025, hz, w * 0.8, 0.045, layout?.hoodLength ?? l * 0.22);
+    const plate = box(additions, carbon, 0, h + 0.025, hz, w * 0.8, 0.045, layout?.hoodLength ?? l * 0.22);
+    plate.rotation.x = -Math.atan(slope);
     if (c.hood === 'scoop') { box(additions, paint, 0, h + 0.17, hz, w * 0.36, 0.25, 0.65); box(additions, rubber, 0, h + 0.17, hz - 0.331, w * 0.29, 0.14, 0.02); }
-    if (c.hood === 'vented') for (const side of [-1, 1]) for (let i = 0; i < 5; i++) box(additions, chrome, side * w * 0.23, h + 0.06, hz - 0.3 + i * 0.13, w * 0.2, 0.035, 0.055);
+    if (c.hood === 'vented') for (const side of [-1, 1]) for (let i = 0; i < 5; i++) {
+      const z = hz - 0.3 + i * 0.13;
+      box(additions, chrome, side * w * 0.23, h + 0.06 + (z - hz) * slope, z, w * 0.2, 0.035, 0.055);
+    }
   }
   if (c.roof === 'rack') {
     const ry = (layout?.roofY ?? 1.2) + 0.12, rz = layout?.roofZ ?? 0.2;
-    for (const side of [-1, 1]) box(additions, carbon, side * w * 0.36, ry, rz, 0.08, 0.14, 1.25);
-    for (const z of [-0.5, 0, 0.5]) box(additions, chrome, 0, ry + 0.08, rz + z, w * 0.8, 0.05, 0.06);
+    const railX = (layout?.roofHalfWidth ?? w * 0.36) * 0.82;
+    const railLength = Math.min(1.25, (layout?.roofLength ?? 1.6) * 0.92);
+    for (const side of [-1, 1]) box(additions, carbon, side * railX, ry, rz, 0.08, 0.14, railLength);
+    for (const z of [-0.4, 0, 0.4]) box(additions, chrome, 0, ry + 0.08, rz + z * railLength, Math.min(w * 0.92, railX * 2 + 0.12), 0.05, 0.06);
   }
   if (c.frontBumper !== 'stock') {
-    box(additions, paint, 0, 0.48, -l / 2 - 0.04, w * 1.01, 0.33, 0.28);
-    box(additions, carbon, 0, 0.32, -l / 2 - 0.15, w * 1.03, 0.06, c.frontBumper === 'race' ? 0.5 : 0.3);
-    box(additions, rubber, 0, 0.5, -l / 2 - 0.19, w * 0.55, 0.16, 0.025);
+    const fy = layout?.noseY !== undefined ? Math.max(0.36, layout.noseY * 0.72) : 0.48;
+    box(additions, paint, 0, fy, -l / 2 - 0.04, w * 1.01, 0.33, 0.28);
+    box(additions, carbon, 0, fy - 0.16, -l / 2 - 0.15, w * 1.03, 0.06, c.frontBumper === 'race' ? 0.5 : 0.3);
+    box(additions, rubber, 0, fy + 0.02, -l / 2 - 0.19, w * 0.55, 0.16, 0.025);
   }
   if (c.rearBumper !== 'stock') {
-    box(additions, paint, 0, 0.5, l / 2, w, 0.3, 0.28);
-    box(additions, carbon, 0, 0.32, l / 2 + 0.06, w * 0.9, 0.12, 0.38);
-    if (c.rearBumper === 'diffuser') for (let i = -3; i <= 3; i++) box(additions, carbon, i * w / 9, 0.29, l / 2 + 0.12, 0.035, 0.22, 0.48);
+    const ty = layout?.tailY !== undefined ? Math.max(0.36, layout.tailY * 0.62) : 0.5;
+    box(additions, paint, 0, ty, l / 2, w, 0.3, 0.28);
+    box(additions, carbon, 0, ty - 0.18, l / 2 + 0.06, w * 0.9, 0.12, 0.38);
+    if (c.rearBumper === 'diffuser') for (let i = -3; i <= 3; i++) box(additions, carbon, i * w / 9, ty - 0.21, l / 2 + 0.12, 0.035, 0.22, 0.48);
   }
-  if (c.skirts !== 'stock') for (const side of [-1, 1]) box(additions, c.skirts === 'carbon' ? carbon : paint, side * w / 2, 0.32, 0, 0.16, 0.18, l * 0.56);
+  if (c.skirts !== 'stock') {
+    const sy = layout?.groundY !== undefined ? layout.groundY + 0.12 : 0.32;
+    const axles = layout?.axles;
+    const span = axles ? Math.max(0.9, axles[1] - axles[0] - 0.85) : l * 0.56;
+    const center = axles ? (axles[0] + axles[1]) / 2 : 0;
+    for (const side of [-1, 1]) box(additions, c.skirts === 'carbon' ? carbon : paint, side * w / 2, sy, center, 0.16, 0.18, span);
+  }
   if (c.spoiler !== 'stock') {
-    const y = kind === 'f1' ? 1.1 : h + (c.spoiler === 'wing' ? 0.65 : 0.15);
-    if (c.spoiler === 'wing') for (const side of [-1, 1]) box(additions, carbon, side * w * 0.3, y - 0.23, l * 0.41, 0.06, 0.46, 0.15);
+    const tail = layout?.tailY;
+    const y = kind === 'f1' ? 1.1 : (tail ?? h) + (c.spoiler === 'wing' ? 0.65 : tail !== undefined ? 0.04 : 0.15);
+    if (c.spoiler === 'wing') for (const side of [-1, 1]) box(additions, carbon, side * w * 0.3,
+      tail !== undefined ? tail + 0.325 : y - 0.23, l * 0.41, 0.06, tail !== undefined ? 0.65 : 0.46, 0.15);
     box(additions, c.spoiler === 'wing' ? carbon : paint, 0, y, l * 0.41, w * 0.96, 0.07, c.spoiler === 'wing' ? 0.4 : 0.2);
   }
-  if (c.exhaust !== 'stock') for (const side of [-1, 1]) for (let i = 0; i < (c.exhaust === 'quad' ? 2 : 1); i++) {
-    const geo = own(new THREE.CylinderGeometry(0.08, 0.08, 0.36, 16, 1, true));
-    const pipe = new THREE.Mesh(geo, chrome); pipe.rotation.x = Math.PI / 2; pipe.position.set(side * (w * 0.32 + i * 0.18), 0.35, l / 2 + 0.13); additions.add(pipe);
+  if (c.exhaust !== 'stock') {
+    const ey = layout?.groundY !== undefined ? layout.groundY + 0.10 : 0.35;
+    for (const side of [-1, 1]) for (let i = 0; i < (c.exhaust === 'quad' ? 2 : 1); i++) {
+      const geo = own(new THREE.CylinderGeometry(0.08, 0.08, 0.36, 16, 1, true));
+      const pipe = new THREE.Mesh(geo, chrome); pipe.rotation.x = Math.PI / 2; pipe.position.set(side * (w * 0.32 + i * 0.18), ey, l / 2 + 0.13); additions.add(pipe);
+    }
   }
   if (c.underglow !== 'off') {
     const glow = own(new THREE.MeshStandardMaterial({ color: c.underglow === 'cyan' ? 0x36eeff : c.underglow === 'purple' ? 0xb359ff : 0xff3030, emissiveIntensity: 3 })); glow.emissive.copy(glow.color);
-    for (const side of [-1, 1]) box(additions, glow, side * w * 0.45, 0.21, 0, 0.06, 0.035, l * 0.65);
-    const light = new THREE.PointLight(glow.color, 3, 5, 2); light.position.y = 0.3; additions.add(light);
+    const gy = layout?.groundY !== undefined ? layout.groundY + 0.035 : 0.21;
+    for (const side of [-1, 1]) box(additions, glow, side * w * 0.45, gy, 0, 0.06, 0.035, l * 0.65);
+    const light = new THREE.PointLight(glow.color, 3, 5, 2); light.position.y = gy + 0.09; additions.add(light);
   }
   for (const spin of vehicle.spins) {
     const radius = Number(spin.userData.wheelRadius) || 0.4;

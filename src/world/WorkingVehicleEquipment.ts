@@ -31,8 +31,8 @@ export function addWorkingVehicleEquipment(p: VehicleMeshBuilder, kind: Detailed
     p.add('alloy', new THREE.CylinderGeometry(d.wheel * d.rim, d.wheel * d.rim, 0.08, 32), V(0, d.belt, half + 0.19), new THREE.Euler(Math.PI / 2, 0, 0));
   }
   if (d.rack) {
-    for (const side of [-1, 1]) p.tube('alloy', [V(side * W * 0.33, d.roof + 0.025, rf + 0.10), V(side * W * 0.33, d.roof + 0.09, rf + 0.25), V(side * W * 0.33, d.roof + 0.09, rr - 0.18), V(side * W * 0.33, d.roof + 0.025, rr - 0.04)], 0.022);
-    for (const z of [rf + 0.35, rr - 0.28]) p.box('trim', 0, d.roof + 0.08, z, W * 0.70, 0.035, 0.05);
+    for (const side of [-1, 1]) p.tube('rack', [V(side * W * 0.33, d.roof + 0.025, rf + 0.10), V(side * W * 0.33, d.roof + 0.09, rf + 0.25), V(side * W * 0.33, d.roof + 0.09, rr - 0.18), V(side * W * 0.33, d.roof + 0.025, rr - 0.04)], 0.022);
+    for (const z of [rf + 0.35, rr - 0.28]) p.box('rack', 0, d.roof + 0.08, z, W * 0.70, 0.035, 0.05);
   }
   if (kind === 'camper') rounded('white', 0, d.roof + 0.11, (rf + rr) / 2, W * 0.55, 0.20, 0.90);
   if (d.family === 'van' || d.family === 'bus') {

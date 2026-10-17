@@ -14,7 +14,7 @@ export const F1_ACCESS_LENGTH = curve.getLength();
 const sampleCount = Math.ceil(F1_ACCESS_LENGTH / 3);
 export const F1_ACCESS_SAMPLES = curve.getSpacedPoints(sampleCount).map((p, i) => {
   const tangent = curve.getTangentAt(i / sampleCount);
-  return { x: p.x, y: p.y, z: p.z, yaw: Math.atan2(tangent.x, -tangent.z), dist: i / sampleCount * F1_ACCESS_LENGTH };
+  return { x: p.x, y: Math.max(0.02, p.y), z: p.z, yaw: Math.atan2(tangent.x, -tangent.z), dist: i / sampleCount * F1_ACCESS_LENGTH };
 });
 
 export const F1_ACCESS_RAIL_START = 36;

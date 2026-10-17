@@ -183,12 +183,22 @@ export function wheelDims(kind: VehicleKind, spec: VehicleSpec): { WR: number; t
 }
 
 export interface WiperAnchor { x: number; y: number; z: number; tilt: number; rest: number; dir: number }
+/** Garage fitting anchors: where bolt-on parts mount on this body. */
+export interface GarageLayout {
+  hoodY: number; hoodZ: number; hoodLength: number;
+  roofY: number; roofZ: number; roofLength: number;
+  /** Rise per metre from nose to cowl, so hood panels tilt with the bonnet. */
+  hoodSlope?: number;
+  /** Panel heights the garage mounts fascias, skirts, exhausts and spoilers to. */
+  noseY?: number; tailY?: number; groundY?: number;
+  roofHalfWidth?: number; axles?: [number, number];
+}
 export interface Model {
   /** Curved door panels in hinge-local coordinates, animated by the existing controller. */
   authoredDoors?: { position: THREE.Vector3; parts: Map<string, THREE.BufferGeometry> }[];
   /** Authored models can supply their own material roles and garage decal anchors. */
   materials?: Record<string, THREE.Material>;
-  garageLayout?: { hoodY: number; hoodZ: number; hoodLength: number; roofY: number; roofZ: number; roofLength: number };
+  garageLayout?: GarageLayout;
   parts: Map<string, THREE.BufferGeometry>;
   wheels: Record<'-1' | '1', Map<string, THREE.BufferGeometry>>;
   wheelPos: { x: number; z: number; front: boolean; widthScale?: number }[];

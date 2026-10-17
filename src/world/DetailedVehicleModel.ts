@@ -28,6 +28,10 @@ export function buildDetailedVehicleModel(_kit: KitLike, kind: DetailedKind): Mo
   material('trim', new THREE.MeshStandardMaterial({ color: 0x10151b, roughness: 0.58, side: THREE.DoubleSide }));
   material('rubber', new THREE.MeshStandardMaterial({ color: 0x191b1d, roughness: 0.93 }));
   material('alloy', new THREE.MeshStandardMaterial({ color: d.chrome ? 0xc4c9cf : 0x727983, metalness: 0.88, roughness: 0.25 }));
+  // Garage-refittable stock parts (replaceable by customization options).
+  material('wing', new THREE.MeshStandardMaterial({ color: 0x10151b, roughness: 0.58, side: THREE.DoubleSide }));
+  material('exhaust', new THREE.MeshStandardMaterial({ color: d.chrome ? 0xc4c9cf : 0x727983, metalness: 0.88, roughness: 0.25 }));
+  material('rack', new THREE.MeshStandardMaterial({ color: d.chrome ? 0xc4c9cf : 0x727983, metalness: 0.88, roughness: 0.25 }));
   material('rotor', new THREE.MeshStandardMaterial({ color: 0x94989e, metalness: 0.85, roughness: 0.42 }));
   material('caliper', new THREE.MeshStandardMaterial({ color: spec.category === 'sport' ? 0xb62621 : 0x35383e, roughness: 0.38 }));
   material('interior', new THREE.MeshStandardMaterial({ color: d.chrome ? 0x593c2c : 0x20242b, roughness: 0.85, side: THREE.DoubleSide }));
@@ -148,7 +152,7 @@ export function buildDetailedVehicleModel(_kit: KitLike, kind: DetailedKind): Mo
   }, 28, 20);
   for (const upper of [false, true]) p.tube('trim', Array.from({ length: 20 }, (_, i) => upper ? roofPoint(i / 19, 0) : glassBase(cf, i / 19)), 0.010);
   if (!open) {
-    p.surface('paint', roofPoint, 28, 32);
+    p.surface('roof', roofPoint, 28, 32);
     p.surface('interior', (u, v) => roofPoint(u, v).add(V(0, -0.026, 0)), 24, 24, true);
     p.surface('glass', (u, v) => roofPoint(u, 1).lerp(glassBase(cr, u), v), 28, 20);
     for (const upper of [false, true]) p.tube('trim', Array.from({ length: 20 }, (_, i) => upper ? roofPoint(i / 19, 1) : glassBase(cr, i / 19)), 0.010);
@@ -239,7 +243,7 @@ export function buildDetailedVehicleModel(_kit: KitLike, kind: DetailedKind): Mo
       return V(x * Math.abs(sidePoint(1, z, y).x), y,
         z + (front ? -1 : 1) * 0.018 * (1 - x * x) * Math.sin(Math.PI * v));
     }, 36, 16, !front);
-    p.box('trim', 0, ground + 0.035, z, W * 0.85, 0.045, 0.11);
+    p.box(front ? 'frontBumper' : 'rearBumper', 0, ground + 0.035, z, W * 0.85, 0.045, 0.11);
   }
   const lightY = Math.max(ground + 0.31, d.nose - 0.13), lampX = hw * 0.66;
   for (const side of [-1, 1]) {
@@ -263,8 +267,8 @@ export function buildDetailedVehicleModel(_kit: KitLike, kind: DetailedKind): Mo
       if (kind === 'muscle') for (let i = 0; i < 3; i++) p.box('brake', side * (hw * 0.50 + i * 0.11), d.tail - 0.14, half + 0.005, 0.065, 0.15, 0.025);
       else p.box('brake', side * hw * 0.64, d.tail - 0.12, half + 0.005, W * 0.24, upright ? 0.17 : 0.065, 0.025);
       if (d.grille !== 'closed') {
-        p.add('alloy', new THREE.CylinderGeometry(0.047, 0.047, 0.13, 24), V(side * hw * 0.64, ground + 0.08, half + 0.01), new THREE.Euler(Math.PI / 2, 0, 0));
-        p.add('trim', new THREE.CircleGeometry(0.035, 24), V(side * hw * 0.64, ground + 0.08, half + 0.08));
+        p.add('exhaust', new THREE.CylinderGeometry(0.047, 0.047, 0.13, 24), V(side * hw * 0.64, ground + 0.08, half + 0.01), new THREE.Euler(Math.PI / 2, 0, 0));
+        p.add('exhaust', new THREE.CircleGeometry(0.035, 24), V(side * hw * 0.64, ground + 0.08, half + 0.08));
       }
     }
     p.box('blink', side * (hw + 0.004), frontY - 0.11, cf - 0.15, 0.015, 0.035, 0.09);
@@ -295,9 +299,9 @@ export function buildDetailedVehicleModel(_kit: KitLike, kind: DetailedKind): Mo
   }
   const wingHeight = d.wing;
   if (wingHeight !== undefined && wingHeight > 0) {
-    for (const side of [-1, 1]) p.box('trim', side * W * 0.27, d.tail + wingHeight / 2, half - 0.35, 0.035, wingHeight, 0.16);
-    p.surface('paint', (u, v) => V((u * 2 - 1) * W * 0.47, d.tail + wingHeight + 0.022 * Math.sin(Math.PI * v), mix(half - 0.52, half - 0.23, v)), 32, 10);
-    for (const side of [-1, 1]) p.box('trim', side * W * 0.47, d.tail + wingHeight, half - 0.37, 0.016, 0.13, 0.34);
+    for (const side of [-1, 1]) p.box('wing', side * W * 0.27, d.tail + wingHeight / 2, half - 0.35, 0.035, wingHeight, 0.16);
+    p.surface('spoiler', (u, v) => V((u * 2 - 1) * W * 0.47, d.tail + wingHeight + 0.022 * Math.sin(Math.PI * v), mix(half - 0.52, half - 0.23, v)), 32, 10);
+    for (const side of [-1, 1]) p.box('wing', side * W * 0.47, d.tail + wingHeight, half - 0.37, 0.016, 0.13, 0.34);
   }
   // Fine shut-lines and flush handles carry the proportions at close camera range.
   for (const side of [-1, 1]) {
@@ -381,8 +385,14 @@ export function buildDetailedVehicleModel(_kit: KitLike, kind: DetailedKind): Mo
     steerPos: V(-W * 0.19, frontY - 0.06, cf + 0.38), steerTilt: -0.28,
     doors: [], wiperAnchors: [-1, 1].map(side => ({ x: side * W * 0.18, y: frontY + 0.025, z: cf + 0.08,
       tilt: -Math.atan2(roofY - frontY, rf - cf) * 0.8, rest: Math.PI + 0.12, dir: 1 })),
-    garageLayout: { hoodY: d.belt + 0.02, hoodZ: (-half + cf) / 2, hoodLength: cf + half - 0.15,
-      roofY: d.roof + 0.015, roofZ: (rf + rr) / 2, roofLength: rr - rf },
+    garageLayout: (() => {
+      const hoodZ = (-half + cf) / 2, hoodFront = -half + 0.12, hoodRear = cf - 0.12;
+      return { hoodY: deck(hoodZ, 0.5).y + 0.005, hoodZ, hoodLength: cf + half - 0.15,
+        roofY: d.roof + 0.015, roofZ: (rf + rr) / 2, roofLength: rr - rf,
+        hoodSlope: (deck(hoodRear, 0.5).y - deck(hoodFront, 0.5).y) / (hoodRear - hoodFront),
+        noseY: deck(hoodFront, 0.5).y, tailY: deck(L * 0.41, 0.5).y, groundY: ground,
+        roofHalfWidth: roofHW, axles: [axles[0], axles[1]] as [number, number] };
+    })(),
     dispose: () => { parts.forEach(g => g.dispose()); Object.values(wheels).forEach(m => m.forEach(g => g.dispose()));
       authoredDoors.forEach(door => door.parts.forEach(g => g.dispose())); Object.values(materials).forEach(m => m.dispose()); },
   };

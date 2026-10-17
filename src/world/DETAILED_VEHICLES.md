@@ -27,7 +27,15 @@ The Formula car retains its dedicated builder.
 5. Supply `materials` for custom roles, `eye` and `steerPos` for the cockpit,
    and `garageLayout` for customization anchors. The `paint` role uses the
    selected factory colour. Put all glazing in the `glass` role so cockpit
-   visibility works. A welded stock car correctly returns no animated doors.
+   visibility works. Tag garage-refittable stock parts so customization can
+   replace them: roof panel `roof`, factory wing `spoiler` (blade) and `wing`
+   (posts/endplates), exhaust tips `exhaust`, bumper lips `frontBumper` /
+   `rearBumper`, roof racks `rack` and calipers `caliper`. Anchors beyond the
+   hood/roof boxes are optional but keep bolt-ons on the panels: `hoodSlope`
+   tilts hood covers with the bonnet, `noseY` / `tailY` / `groundY` mount
+   fascias, skirts, spoilers, exhausts and underglow, while `roofHalfWidth`
+   and `axles` size racks and side skirts. A welded stock car correctly returns
+   no animated doors.
    For road cars, return `authoredDoors` with hinge-local panel geometry. The
    factory instantiates and animates these panels using the existing door logic.
 
