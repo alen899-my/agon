@@ -4,7 +4,7 @@ import { buildVehicle } from './VehicleFactory';
 import { F1_PORTAL_CITY } from './F1Track';
 import { F1_ACCESS_HALF, F1_ACCESS_LENGTH, F1_ACCESS_RAIL_START, F1_ACCESS_RAIL_END, F1_ACCESS_SAMPLES, f1AccessProgress } from './F1Access';
 import * as THREE from 'three';
-import { BENCHES, BRIDGE, BUILDINGS, CANAL, FALLS, FREE_THROW_DIST, GAME_CENTER, GARDEN_STATUE, HARBOR_STATUE, HOOP, LAMPS, PROMENADE, RACE_ARENA, RACE_SHOW_CARS, RACE_SLAB, RIM, ROADS, ROAD_GAP, TABLE, TREES, WATER_Y, groundHeight, seeded } from './Map';
+import { BENCHES, BRIDGE, BUILDINGS, CANAL, CAR_MEET_GRID, CAR_MEET_PAD, CAR_MEET_ROWS, FALLS, FREE_THROW_DIST, GAME_CENTER, GARDEN_STATUE, HARBOR_STATUE, HOOP, LAMPS, PROMENADE, RACE_ARENA, RACE_SHOW_CARS, RACE_SLAB, RIM, ROADS, ROAD_GAP, TABLE, TREES, WATER_Y, groundHeight, seeded } from './Map';
 
 type Shape = 'box' | 'sphere' | 'cylinder';
 export type MaterialName = 'road' | 'pavement' | 'white' | 'ink' | 'glass' | 'metal' | 'wall0' | 'wall1' | 'wall2' | 'leaf' | 'lampGlow' | 'windowLit';
@@ -343,6 +343,7 @@ export function buildMap(scene: THREE.Scene, kit: AssetKit): void {
   buildGameCenter(scene, kit, box);
   buildBasketballCourt(scene, kit, box);
   buildRaceArena(scene, kit, box);
+  buildCarMeet(scene, kit, box);
   buildF1Portal(scene, kit);
   buildHarbor(scene, kit, box);
   buildGarden(scene, kit, box);
@@ -609,6 +610,37 @@ export function buildRaceArena(scene: THREE.Scene, kit: AssetKit, box?: (m: Mate
     glowMesh.userData.showCarGlow = true;
     scene.add(glowMesh);
   });
+}
+
+/** Community car meet pad: asphalt slab, painted stall rows, entry signage and floodlights. */
+export function buildCarMeet(scene: THREE.Scene, kit: AssetKit, box?: (m: MaterialName, x: number, y: number, z: number, w: number, h: number, d: number) => void): void {
+  const put = box ?? ((m, x, y, z, w, h, d) => kit.stamp('box', m, x, y, z, w, h, d));
+  const { x: px, z: pz, w, d } = CAR_MEET_PAD;
+  put('wall2', px, 0.03, pz, w, 0.08, d);
+  put('road', px, 0.065, pz, w - 1.6, 0.065, d - 1.6);
+
+  // Painted stall separators + nose stop bar for each of the four display rows.
+  const { z0, pitch, count } = CAR_MEET_GRID;
+  const rowZ = z0 + (count * pitch) / 2;
+  for (const row of CAR_MEET_ROWS) {
+    for (let i = 0; i <= count; i++) {
+      put('white', (row.x0 + row.x1) / 2, 0.085, z0 + i * pitch, row.x1 - row.x0 - 0.4, 0.008, 0.09);
+    }
+    put('white', row.nose + (row.yaw > 0 ? -0.28 : 0.28), 0.09, rowZ, 0.16, 0.01, count * pitch - 0.3);
+  }
+
+  // Entry signage on the north edge, facing the z = -80 avenue.
+  for (const [sx, label, sw] of [[-118.4, 'AGON CAR MEET', 8], [-97.6, 'EVERY RIDE IN TOWN', 9]] as const) {
+    put('metal', sx, 1.3, -92.4, 0.16, 2.6, 0.16);
+    kit.sign(scene, label, sx, 2.75, -92.4, sw, 0);
+  }
+  // Corner floodlight masts at the south end of the pad.
+  for (const fx of [-126.2, -91.6]) {
+    put('metal', fx, 0.3, -129.3, 0.9, 0.6, 0.9);
+    put('metal', fx, 3.5, -129.3, 0.16, 6.6, 0.16);
+    put('ink', fx, 6.9, -129.3, 0.9, 0.3, 0.5);
+    put('lampGlow', fx, 6.9, -129.05, 0.7, 0.22, 0.06);
+  }
 }
 
 /** Basketball side court north of the table hall. Rim at HOOP, shooter ~4.2m south. */

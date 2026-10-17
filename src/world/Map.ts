@@ -1,5 +1,5 @@
 export { BUILD_LOTS } from '../../server/src/agents/livingWorld';
-import type { VehicleKind } from './Vehicles';
+import { VEHICLES, VEHICLE_KINDS, type VehicleKind } from './Vehicles';
 import { F1_HALF, F1_ORIGIN, F1_PORTAL_CITY, f1HeightAt, f1OnTrack } from './F1Track';
 import { f1AccessProgress, onF1Access } from './F1Access';
 
@@ -51,6 +51,7 @@ export const PLACES: Place[] = [
   { id: 'garden', name: 'Heights Garden', category: 'PARK', x: 30, z: 99, description: 'A quiet statue garden between the new shops.' },
   { id: 'f1-portal', name: 'F1 Circuit Entrance', category: 'RACING ARENA', ...F1_PORTAL_CITY, description: 'Circuit reception on the east access road. Entry to the circuit and return lanes to the city.' },
   { id: 'f1-circuit', name: 'F1 Circuit', category: 'RACING CIRCUIT', x: F1_ORIGIN.x, z: -110, description: 'Start/finish straight, pit lane and hillside circuit. Host or join a race anywhere at the track.' },
+  { id: 'car-meet', name: 'Agon Car Meet', category: 'CAR MEET', x: -114.1, z: -111.6, description: 'The whole catalogue on display — one of every ride in town parked for the meet. Walk the aisles and take your pick.' },
 ];
 
 /** Neon Paddock race arena anchor (north edge, off the racing line). */
@@ -237,6 +238,37 @@ export const RACE_SHOW_CARS: readonly { kind: VehicleKind; x: number; z: number;
   { kind: 'egt', x: -35.4, z: 81.5, yaw: 0.12 },
   { kind: 'track', x: -29, z: 81.5, yaw: -0.08 },
 ];
+/** Community car meet: one of every vehicle kind, front-aligned in four
+ *  back-to-back rows on the empty south-west block (off every road, prop and building). */
+export const CAR_MEET = { x: -114.1, z: -111.6 };
+export const CAR_MEET_PAD = { x: -108.6, z: -110.6, w: 35.6, d: 38.2 };
+export const CAR_MEET_GRID = { z0: -129, pitch: 2.9, count: 12, aisle: 4.2, gap: 0.3 };
+export interface CarMeetRow { x0: number; x1: number; nose: number; yaw: number }
+const CAR_MEET_LAYOUT = (() => {
+  const { z0, pitch, count, aisle, gap } = CAR_MEET_GRID;
+  const sorted = [...VEHICLE_KINDS].sort((a, b) => VEHICLES[b].length - VEHICLES[a].length);
+  const rows = Array.from({ length: 4 }, (_, r) => sorted.slice(r * 12, r * 12 + 12));
+  const depth = rows.map(row => Math.max(...row.map(k => VEHICLES[k].length)) + gap);
+  const nose0 = -125.5 + depth[0];
+  const nose1 = nose0 + aisle;
+  const nose2 = nose1 + depth[1] + depth[2];
+  const nose3 = nose2 + aisle;
+  const defs: CarMeetRow[] = [
+    { x0: -125.5, x1: nose0, nose: nose0, yaw: Math.PI / 2 },
+    { x0: nose1, x1: nose1 + depth[1], nose: nose1, yaw: -Math.PI / 2 },
+    { x0: nose1 + depth[1], x1: nose2, nose: nose2, yaw: Math.PI / 2 },
+    { x0: nose3, x1: nose3 + depth[3], nose: nose3, yaw: -Math.PI / 2 },
+  ];
+  const cars: { kind: VehicleKind; x: number; z: number; yaw: number }[] = [];
+  rows.forEach((row, r) => row.forEach((kind, i) => {
+    const L = VEHICLES[kind].length;
+    const x = defs[r].yaw > 0 ? defs[r].nose - L / 2 : defs[r].nose + L / 2;
+    cars.push({ kind, x, z: z0 + (i + 0.5) * pitch, yaw: defs[r].yaw });
+  }));
+  return { rows: defs, cars };
+})();
+export const CAR_MEET_ROWS: readonly CarMeetRow[] = CAR_MEET_LAYOUT.rows;
+export const MEETUP_CARS: readonly { kind: VehicleKind; x: number; z: number; yaw: number }[] = CAR_MEET_LAYOUT.cars;
 /** Static spectator rows flanking the display (clear of the racing line and tents). */
 export interface CrowdSpot { x: number; z: number; yaw: number }
 export const RACE_CROWD: CrowdSpot[] = (() => {

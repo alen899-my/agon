@@ -5,7 +5,7 @@ import { f1WallContact } from './F1Barriers';
 import { bodyContact, boundaryContact, circleContact, vehicleBody, type Body, type Contact } from './Collision';
 import { VEHICLES, VEHICLE_KINDS, vehicleSteeringAngle, type VehicleKind } from './Vehicles';
 import { WEATHER_GRIP, type Season, type Weather } from './Weather';
-import { GAME_CENTER, HOOP, PROMENADE, ROAD_HALF, groundHeight, inPromenade, inWater, intersects, LIMIT, onF1Island, onRoad, SOLIDS, PARKED_CARS, PLACES, PROPS, RACE_SHOW_CARS, TRAFFIC_ROUTE, circleHit, seeded, type Point } from './Map';
+import { GAME_CENTER, HOOP, MEETUP_CARS, PROMENADE, ROAD_HALF, groundHeight, inPromenade, inWater, intersects, LIMIT, onF1Island, onRoad, SOLIDS, PARKED_CARS, PLACES, PROPS, RACE_SHOW_CARS, TRAFFIC_ROUTE, circleHit, seeded, type Point } from './Map';
 import { TRACK_LENGTH, gridSlots, startLine } from './Track';
 import { F1_ORIGIN, F1_PORTAL_CITY } from './F1Track';
 import { F1_ACCESS_LENGTH, F1_ACCESS_RAIL_START, F1_ACCESS_RAIL_END, f1AccessProgress, onF1Access } from './F1Access';
@@ -242,7 +242,7 @@ export class Simulation {
   carWrecked = false;
   private wreckT = 0;
   /** Every parked car in the world is stealable. Includes your previously driven cars.
-   *  Slots mirror Map PARKED_CARS + RACE_SHOW_CARS (all clear of driving lines). */
+   *  Slots mirror Map PARKED_CARS + RACE_SHOW_CARS + MEETUP_CARS (all clear of driving lines). */
   parked: ParkedVehicle[] = [
     { kind: 'van', x: -14, z: -38, yaw: 0 },
     { kind: 'car', x: 14, z: -54, yaw: 0 },
@@ -265,6 +265,7 @@ export class Simulation {
     { kind: 'pickup', x: -64, z: -115, yaw: 0.2 },
     { kind: 'coupe', x: 64, z: -115, yaw: -0.2 },
     ...RACE_SHOW_CARS.map((s): ParkedVehicle => ({ kind: s.kind, x: s.x, z: s.z, yaw: s.yaw })),
+    ...MEETUP_CARS.map((p): ParkedVehicle => ({ kind: p.kind, x: p.x, z: p.z, yaw: p.yaw })),
   ];
   waypoint: string | null = 'plaza';
   mapWaypoint: { x: number; z: number } | null = null;
@@ -924,7 +925,7 @@ export class Simulation {
       if (!target || !target.enterable) return false;
       if (target.type !== 'player') {
         this.parked.push({ customization: this.vehicleBuilds[this.vehicleKind] ? { ...this.vehicleBuilds[this.vehicleKind]! } : undefined, kind: this.vehicleKind, x: this.car.x, z: this.car.z, yaw: this.car.yaw, hp: 100, burning: false, burnT: 0 });
-        if (this.parked.length > 28) this.parked.shift();
+        if (this.parked.length > 80) this.parked.shift();
       }
       if (target.type === 'parked') {
         const [p] = this.parked.splice(target.index, 1);
