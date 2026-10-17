@@ -1995,7 +1995,7 @@ export class WorldEngine {
     const showTag = this.playerName !== '' && !sim.driving && sim.view === 'third' && sim.active && sim.mode === 'roam';
     this.nameTag.visible = showTag;
     if (showTag) this.nameTag.position.set(x, y + 2.35 + bob, z);
-    // Car body feel: pitch under accel/brake, roll in corners, bounce on crash.
+    // Follow road slopes without artificial acceleration/braking pitch.
     // Render-time interpolation keeps camera and suspension smooth between 60 Hz physics steps.
     const visualTime = sim.active ? sim.time + alpha / 60 : sim.time;
     const dt = this.visualTime < 0 ? 0 : Math.max(0, Math.min(0.05, visualTime - this.visualTime));
@@ -2009,7 +2009,9 @@ export class WorldEngine {
       const spd = sim.driving ? Math.abs(sim.car.speed) : 0;
       const raw = spec.topSpeed > 0 ? spd / spec.topSpeed : 0;
       const ads = !sim.driving && sim.armed && sim.aiming && sim.mode === 'roam' ? GUNS[sim.gunIndex] : null;
-      const wantFov = sim.driving ? 60 + Math.min(1.2, raw) * 15 : ads ? ads.zoomFov : 60;
+      const wantFov = sim.driving
+        ? sim.view === 'third' ? 58 + Math.min(1, raw) * 5 : 60 + Math.min(1.2, raw) * 15
+        : ads ? ads.zoomFov : 60;
       this.speedFov += (wantFov - this.speedFov) * (1 - Math.exp(-dt * (ads ? 8 : 3)));
       if (Math.abs(this.camera.fov - this.speedFov) > 0.05) {
         this.camera.fov = this.speedFov;
@@ -2033,7 +2035,6 @@ export class WorldEngine {
       }
     }
     if (this.precip) this.precip.update(dt, sim.driving ? sim.car.x : sim.x, sim.driving ? sim.car.z : sim.z);
-    const accel = sim.driving ? sim.acceleration : 0;
     this.car = this.ensureFleetKind(sim.vehicleKind);
     for (const [kind, vehicle] of this.fleet) vehicle.group.visible = kind === sim.vehicleKind && !sim.carWrecked;
     const pc = this.previousCar;
@@ -2054,7 +2055,7 @@ export class WorldEngine {
     // Wipers: auto sweeps in rain, manual T-key override (on = always, off = parked).
     const wiper = this.wiperSweep(0);
     this.car.update(sim.car.speed, sim.car.steer, dt, sim.car.braking, {
-      pitch: THREE.MathUtils.clamp(-accel * 0.012 + sim.carPitch, -0.3, 0.3),
+      pitch: sim.carPitch,
       roll: sim.skidding ? Math.sin(sim.time * 20) * 0.02 : -sim.car.steer * Math.min(0.05, Math.abs(sim.car.speed) * 0.003),
     }, sim.blinker, sim.time, wiper);
     this.car.glazing.visible = !(sim.driving && sim.view === 'first');
@@ -2334,15 +2335,21 @@ export class WorldEngine {
       const wantShoulder = sim.armed && sim.aiming && !sim.driving && sim.mode === 'roam' ? 1 : 0;
       this.aimBlend += (wantShoulder - this.aimBlend) * Math.min(1, dt * 7);
       const shoulder = this.aimBlend;
-      this.target.set(x, y + 1.35 + rideY, z);
-      // Chase pulls back and trembles a touch as speed climbs — top speed reads fast.
+      this.target.set(x, y + (sim.driving ? 1.05 : 1.35) + rideY, z);
+      // Close, low chase framing with only a small speed-dependent pullback.
       const spec = VEHICLES[sim.vehicleKind];
       const ratio = sim.driving && spec.topSpeed > 0
         ? Math.min(1.2, Math.abs(sim.car.speed) / spec.topSpeed) : 0;
       const vib = ratio * ratio * 0.06;
-      const distance = (sim.driving ? spec.length + 6 + ratio * 2.2 : 6.5) * (1 - shoulder * 0.45);
+      const distance = (sim.driving ? spec.length * 0.5 + 3.4 + ratio * 0.35 : 4.2) * (1 - shoulder * 0.35);
       const chaseYaw = sim.driving ? cameraYaw : sim.yaw;
-      this.desired.set(x - Math.sin(chaseYaw) * distance, y + 3.4 + sim.pitch * 5 + rideY - shoulder * 0.5, z + Math.cos(chaseYaw) * distance);
+      const roofHeight = Number(this.car.group.userData.garageLayout?.roofY) || 1.4;
+      const chaseHeight = sim.driving ? Math.max(2.35, roofHeight + 0.95) : 2.45;
+      this.desired.set(x - Math.sin(chaseYaw) * distance, y + chaseHeight + sim.pitch * 3 + rideY - shoulder * 0.35, z + Math.cos(chaseYaw) * distance);
+      if (sim.driving) {
+        this.target.x += Math.sin(chaseYaw) * 0.9;
+        this.target.z -= Math.cos(chaseYaw) * 0.9;
+      }
       // Right-shoulder offset: right of facing = (cos yaw, sin yaw) in XZ.
       this.desired.x += Math.cos(sim.yaw) * 1.15 * shoulder;
       this.desired.z += Math.sin(sim.yaw) * 1.15 * shoulder;

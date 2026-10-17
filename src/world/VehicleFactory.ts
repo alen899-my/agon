@@ -1,17 +1,19 @@
 import * as THREE from 'three';
 import { buildNascarModel } from './NascarModel';
+import { buildDetailedVehicleModel } from './DetailedVehicleModel';
+import { VEHICLE_DESIGNS, type DetailedKind } from './VehicleDesigns';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { VEHICLES, VEHICLE_WHEELS, pickVehiclePaint, vehicleSteeringAngle, type VehicleKind, type VehicleSpec, type WheelStyle } from './Vehicles';
 
 /**
- * Procedural, low-poly-budget vehicle factory (no GLB / image files).
+ * Cached vehicle factory with authored continuous-panel models (no external assets).
  *
- *  - Each KIND is modelled ONCE (side-profile body shell, sloped glass, pillars, bumpers, lights,
- *    kind details) and every box/curve is MERGED into ~10 geometries by material role.
- *  - Each car instance is then only: ~8 body meshes + 3 meshes per wheel + 2 doors + steering wheel.
- *    (the old version made 85-120 separate meshes per car.)
+ *  - Detailed road bodies and working equipment are built once per kind and kit.
+ *    Surface patches and trim are merged by material; instances share geometry.
+ *  - NASCAR and Formula retain dedicated model builders. The legacy builder below
+ *    remains a fallback for vehicle kinds without an authored registry entry.
  *  - Variants: paint colour comes from pickVehiclePaint(kind, variant); wheel look from VEHICLE_WHEELS.
- *  - Sizes still come from VEHICLES (length / width / height / cab) so physics is untouched.
+ *  - Footprints and handling stay in VEHICLES; visible profiles live in VehicleDesigns.
  */
 
 type Mat = 'road' | 'pavement' | 'white' | 'ink' | 'glass' | 'metal' | 'wall0' | 'wall1' | 'wall2' | 'leaf';
@@ -166,6 +168,8 @@ function wheelRadius(kind: VehicleKind, spec: VehicleSpec): number {
 export function wheelDims(kind: VehicleKind, spec: VehicleSpec): { WR: number; tireW: number; rimR: number } {
   if (kind === 'nascar') return { WR: 0.365, tireW: 0.316, rimR: 0.238 };
   if (kind === 'f1') return { WR: 0.36, tireW: 0.305, rimR: 0.229 };
+  const design = VEHICLE_DESIGNS[kind];
+  if (design) return { WR: design.wheel, tireW: design.tire, rimR: design.wheel * design.rim };
   const WR = wheelRadius(kind, spec);
   const style = VEHICLE_WHEELS[kind];
   const factor = style === 'sport' ? 0.8 : style === 'offroad' ? 0.8 : style === 'dually' ? 0.75 : 0.7;
@@ -178,6 +182,8 @@ export function wheelDims(kind: VehicleKind, spec: VehicleSpec): { WR: number; t
 
 export interface WiperAnchor { x: number; y: number; z: number; tilt: number; rest: number; dir: number }
 export interface Model {
+  /** Curved door panels in hinge-local coordinates, animated by the existing controller. */
+  authoredDoors?: { position: THREE.Vector3; parts: Map<string, THREE.BufferGeometry> }[];
   /** Authored models can supply their own material roles and garage decal anchors. */
   materials?: Record<string, THREE.Material>;
   garageLayout?: { hoodY: number; hoodZ: number; hoodLength: number; roofY: number; roofZ: number; roofLength: number };
@@ -345,6 +351,8 @@ function buildFormulaModel(kit: KitLike): Model {
 /** Add future hand-authored cars here; all retain the same driving/animation contract. */
 const AUTHORED_MODELS: Partial<Record<VehicleKind, (kit: KitLike) => Model>> = {
   nascar: buildNascarModel,
+  ...Object.fromEntries((Object.keys(VEHICLE_DESIGNS) as DetailedKind[]).map(kind =>
+    [kind, (kit: KitLike) => buildDetailedVehicleModel(kit, kind)])),
 };
 
 function buildModel(kit: KitLike, kind: VehicleKind): Model {
@@ -773,8 +781,8 @@ export function buildVehicle(kit: KitLike, kind: VehicleKind = 'car', variant = 
     hoodZ: (-spec.length / 2 + 0.35 + front) / 2, hoodLength: Math.max(0.25, front + spec.length / 2 - 0.35),
     roofY: kind === 'f1' ? 1.1 : sil.belt + spec.height, roofZ: (front + rear) / 2, roofLength: rear - front };
   const color = pickVehiclePaint(kind, variant);
-  // MeshStandardMaterial instead of MeshPhysicalMaterial/clearcoat: ~same look, far cheaper on mobile GPUs.
-  const paintMat = kind === 'nascar'
+  // Authored bodies use clearcoat; legacy fallback geometry retains standard paint.
+  const paintMat = AUTHORED_MODELS[kind]
     ? cached(kit, `race-paint:${color}`, () => new THREE.MeshPhysicalMaterial({ color, roughness: 0.27,
       metalness: 0.22, clearcoat: 1, clearcoatRoughness: 0.14, side: THREE.DoubleSide }))
     : cached(kit, `paint:${color}`, () => new THREE.MeshStandardMaterial({ color, roughness: 0.35, metalness: 0.35 }));
@@ -845,6 +853,15 @@ export function buildVehicle(kit: KitLike, kind: VehicleKind = 'car', variant = 
 
   // doors (WorldEngine swings these on enter / exit)
   const doors: THREE.Group[] = [];
+  for (const d of model.authoredDoors ?? []) {
+    const pivot = new THREE.Group(); pivot.position.copy(d.position); body.add(pivot);
+    d.parts.forEach((geometry, role) => {
+      const panel = new THREE.Mesh(geometry, roleMat[role] ?? paintMat);
+      panel.userData.vehicleRole = role; panel.castShadow = true; panel.receiveShadow = true;
+      pivot.add(panel);
+    });
+    doors.push(pivot);
+  }
   for (const d of model.doors) {
     const pivot = new THREE.Group(); pivot.position.set(d.x, d.y, d.z); body.add(pivot);
     const slab = new THREE.Mesh(kit.geometry.box, paintMat);
@@ -898,7 +915,13 @@ export function buildVehicle(kit: KitLike, kind: VehicleKind = 'car', variant = 
       brakeMat.emissiveIntensity = kind === 'f1' ? (Math.abs(speed) > 2 && time % 0.3 < 0.15 ? 2.5 : 0.3) : braking ? 2.2 : 0.25;
       const on = blinker !== 0 && (time % 0.62) < 0.31; // 0 off, 1 left, 2 right, 3 hazard
       blinkerMat.emissiveIntensity = on ? 2.4 : 0.15;
-      if (bodyTilt) { body.rotation.x = bodyTilt.pitch; body.rotation.z = bodyTilt.roll; body.position.y = Number(group.userData.rideHeight) || 0; }
+      // Terrain pitch belongs to the complete vehicle, including its wheels.
+      // Apply local pitch after heading so ramps work in every driving direction.
+      group.rotation.order = 'YXZ';
+      group.rotation.x = bodyTilt?.pitch ?? 0;
+      body.rotation.x = 0;
+      body.rotation.z = bodyTilt?.roll ?? 0;
+      body.position.y = Number(group.userData.rideHeight) || 0;
     } };
   return vehicle;
 }
