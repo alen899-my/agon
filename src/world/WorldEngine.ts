@@ -26,7 +26,7 @@ import { partitionScenery, SceneryVisibility } from './StaticScenery';
 import { createGarageBuilding } from './GarageBuilding';
 import { atGarage } from './GarageLocation';
 import { applyCustomization, clearCustomization, stockBuild, type VehicleCustomization } from './VehicleCustomization';
-import { garageSound } from '../game/GarageSound';
+import { garageSound, garagePitch } from '../game/GarageSound';
 import { loadGarage, type GarageRecord } from '../api/garage';
 import type { Session } from '../api/session';
 import { CharacterFactory } from './characters/CharacterFactory';
@@ -530,6 +530,7 @@ export class WorldEngine {
         const live = sm.phase === 'playing' && !sm.paused;
         this.vehicleAudio.updatePlayer({
           flavor: garageSound(sm.vehicleBuilds[sm.vehicleKind]?.sound),
+          pitch: garagePitch(sm.vehicleBuilds[sm.vehicleKind]?.sound),
           kind: sm.vehicleKind, speed: sm.car.speed, topSpeed: spec.topSpeed,
           load: Math.max(0, Math.min(1, sm.acceleration / 8)),
           audible: live && sm.driving,
@@ -2021,8 +2022,10 @@ export class WorldEngine {
       const spd = sim.driving ? Math.abs(sim.car.speed) : 0;
       const raw = spec.topSpeed > 0 ? spd / spec.topSpeed : 0;
       const ads = !sim.driving && sim.armed && sim.aiming && sim.mode === 'roam' ? GUNS[sim.gunIndex] : null;
+      const near = sim.driving && sim.view === 'first' ? 0.025 : 0.1;
+      if (this.camera.near !== near) { this.camera.near = near; this.camera.updateProjectionMatrix(); }
       const wantFov = sim.driving
-        ? sim.view === 'third' ? 58 + Math.min(1, raw) * 5 : 60 + Math.min(1.2, raw) * 15
+        ? sim.view === 'third' ? 58 + Math.min(1, raw) * 5 : 64 + Math.min(1, raw) * 4
         : ads ? ads.zoomFov : 60;
       this.speedFov += (wantFov - this.speedFov) * (1 - Math.exp(-dt * (ads ? 8 : 3)));
       if (Math.abs(this.camera.fov - this.speedFov) > 0.05) {

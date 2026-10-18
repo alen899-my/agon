@@ -305,6 +305,7 @@ function driveVoice(ac: AudioContext, v: Voice, p: DriveParams): void {
 // ---------------------------------------------------------------------------
 
 export interface PlayerEngine {
+  pitch?: number;
   flavor?: EngineFlavor;
   kind: VehicleKind; speed: number; topSpeed: number;
   /** 0..1 throttle load (growl). */
@@ -363,7 +364,7 @@ export class VehicleAudio {
     }
     const ratio = clamp01(Math.abs(p.speed) / Math.max(1, p.topSpeed));
     driveVoice(ac, this.player, {
-      hz: rpmHz(p.speed, p.topSpeed, timbre, p.load),
+      hz: rpmHz(p.speed, p.topSpeed, timbre, p.load) * (p.pitch ?? 1),
       load: p.load, ratio,
       gear: gearFor(p.speed, p.topSpeed, timbre.gears, p.load),
       level: 1, pan: 0, tc: 0.06,

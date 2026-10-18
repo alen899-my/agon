@@ -381,13 +381,13 @@ export function buildDetailedVehicleModel(_kit: KitLike, kind: DetailedKind): Mo
   for (const w of wheelPos) p.box('caliper', w.x, wy + WR * 0.10, w.z + WR * 0.48, d.tire * 0.42, WR * 0.40, 0.07);
   const parts = p.finish();
   return { parts, materials, wheels, wheelPos, WR, style: VEHICLE_WHEELS[kind], authoredDoors,
-    eye: V(-W * 0.19, Math.min(d.roof - 0.20, frontY + 0.24), seatZ - 0.08),
+    eye: V(-W * 0.19, Math.min(d.roof - 0.16, Math.max(frontY + 0.30, seatY + 0.64)), Math.max(cf + 0.68, seatZ - 0.02)),
     steerPos: V(-W * 0.19, frontY - 0.06, cf + 0.38), steerTilt: -0.28,
     doors: [], wiperAnchors: [-1, 1].map(side => ({ x: side * W * 0.18, y: frontY + 0.025, z: cf + 0.08,
       tilt: -Math.atan2(roofY - frontY, rf - cf) * 0.8, rest: Math.PI + 0.12, dir: 1 })),
     garageLayout: (() => {
       const hoodZ = (-half + cf) / 2, hoodFront = -half + 0.12, hoodRear = cf - 0.12;
-      return { hoodY: deck(hoodZ, 0.5).y + 0.005, hoodZ, hoodLength: cf + half - 0.15,
+      return { hoodSurface: (z: number, across: number) => deck(z, across, 0.016), hoodY: deck(hoodZ, 0.5).y + 0.005, hoodZ, hoodLength: cf + half - 0.15,
         roofY: d.roof + 0.015, roofZ: (rf + rr) / 2, roofLength: rr - rf,
         hoodSlope: (deck(hoodRear, 0.5).y - deck(hoodFront, 0.5).y) / (hoodRear - hoodFront),
         noseY: deck(hoodFront, 0.5).y, tailY: deck(L * 0.41, 0.5).y, groundY: ground,

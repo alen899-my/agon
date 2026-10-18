@@ -189,6 +189,7 @@ export interface GarageLayout {
   roofY: number; roofZ: number; roofLength: number;
   /** Rise per metre from nose to cowl, so hood panels tilt with the bonnet. */
   hoodSlope?: number;
+  hoodSurface?: (z: number, across: number) => THREE.Vector3;
   /** Panel heights the garage mounts fascias, skirts, exhausts and spoilers to. */
   noseY?: number; tailY?: number; groundY?: number;
   roofHalfWidth?: number; axles?: [number, number];
@@ -908,7 +909,7 @@ export function buildVehicle(kit: KitLike, kind: VehicleKind = 'car', variant = 
     const steer = new THREE.Group(); steer.position.set(w.x, model.WR - 0.08, w.z); group.add(steer);
     const spin = new THREE.Group(); spin.scale.x = w.widthScale ?? 1; steer.add(spin);
     spin.userData.wheelRadius = model.WR;
-    spin.userData.wheelWidth = kind === 'f1' ? 0.305 : wheelDims(kind, spec).tireW;
+    spin.userData.wheelWidth = kind === 'f1' ? 0.305 : kind !== 'nascar' ? VEHICLE_DESIGNS[kind].tire : wheelDims(kind, spec).tireW;
     geos.forEach((geo, role) => {
       const mesh = new THREE.Mesh(geo, role === 'tyre' ? M.ink : role === 'rim' ? rimMat(dark) : roleMat[role] ?? M.metal);
       mesh.castShadow = role === 'tyre' || role === 'rubber' || role === 'raceRubber';
@@ -938,7 +939,7 @@ export function buildVehicle(kit: KitLike, kind: VehicleKind = 'car', variant = 
       group.rotation.order = 'YXZ';
       group.rotation.x = bodyTilt?.pitch ?? 0;
       body.rotation.x = 0;
-      body.rotation.z = bodyTilt?.roll ?? 0;
+      body.rotation.z = THREE.MathUtils.clamp(bodyTilt?.roll ?? 0, -0.012, 0.012);
       body.position.y = -0.16 + (Number(group.userData.rideHeight) || 0);
     } };
   return vehicle;
