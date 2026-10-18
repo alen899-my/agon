@@ -4,7 +4,7 @@ import * as THREE from 'three';
 export function partitionScenery(root: THREE.Object3D, cellSize = 64): void {
   const batches: THREE.InstancedMesh[] = [];
   root.traverse(object => {
-    if (object instanceof THREE.InstancedMesh && object.count > 64 && !object.morphTexture) batches.push(object);
+    if (object instanceof THREE.InstancedMesh && object.count > 1 && !object.morphTexture) batches.push(object);
   });
   const matrix = new THREE.Matrix4();
   const color = new THREE.Color();
@@ -35,5 +35,45 @@ export function partitionScenery(root: THREE.Object3D, cellSize = 64): void {
     source.removeFromParent();
     // Geometry and materials remain shared; only release the replaced instance buffers.
     source.dispose();
+  }
+}
+
+/** Static-only visibility gates. Child visibility remains owned by gameplay.
+ * Bounds are cached once; no traversal or geometry work in the frame loop.
+ * Simulation/collision data is deliberately independent of rendering.
+ */
+export class SceneryVisibility {
+  private readonly entries: { gate: THREE.Group; bounds: THREE.Box3 }[] = [];
+  private readonly frustum = new THREE.Frustum();
+  private readonly projection = new THREE.Matrix4();
+
+  register(root: THREE.Object3D): void {
+    root.updateWorldMatrix(true, true);
+    const meshes: THREE.Mesh[] = [];
+    root.traverse(object => { if (object instanceof THREE.Mesh) meshes.push(object); });
+    for (const mesh of meshes) {
+      const parent = mesh.parent;
+      if (!parent) continue;
+      const bounds = new THREE.Box3().setFromObject(mesh);
+      if (bounds.isEmpty()) continue;
+      const gate = new THREE.Group();
+      gate.name = 'scenery-visibility';
+      gate.matrixAutoUpdate = false;
+      parent.add(gate);
+      gate.add(mesh);
+      gate.updateMatrixWorld(true);
+      this.entries.push({ gate, bounds });
+    }
+  }
+
+  update(camera: THREE.PerspectiveCamera, distance: number, shadowReach = 100): void {
+    camera.updateMatrixWorld();
+    this.projection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    this.frustum.setFromProjectionMatrix(this.projection);
+    for (const { gate, bounds } of this.entries) {
+      const range = bounds.distanceToPoint(camera.position);
+      // Keep nearby off-screen casters: objects outside the view can cast into it.
+      gate.visible = range <= distance && (range <= shadowReach || this.frustum.intersectsBox(bounds));
+    }
   }
 }

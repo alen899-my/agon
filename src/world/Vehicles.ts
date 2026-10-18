@@ -13,7 +13,7 @@ export interface VehicleSpec {
   cab?: number;
 }
 
-export const VEHICLES = {
+const BASE_VEHICLES = {
   nascar: { name: 'NASCAR Stock Car', inspiredBy: 'Next Gen Cup-style stock car', category: 'sport', length: 5.03, width: 1.99, height: 0.49, topSpeed: 88, acceleration: 13.5, grip: 10.5, blurb: 'No. 24 AGON Motorsport: wide-body V8 stock car, slicks, roll cage and racing aero' },
   f1: { name: 'Formula One', inspiredBy: 'Modern single-seat formula racer', category: 'sport', length: 5.5, width: 2.0, height: 0.65, topSpeed: 320 / 3.6, acceleration: 24, grip: 13, blurb: 'Open-wheel single-seater with slick tyres and ground-effect aerodynamics' },
   car: { name: 'Sedan', inspiredBy: 'Toyota Camry', category: 'car', length: 4.3, width: 1.9, height: 0.75, topSpeed: 32, acceleration: 7, grip: 8, blurb: 'Everyday 4-door family sedan' },
@@ -64,7 +64,15 @@ export const VEHICLES = {
   coach: { name: 'Coach', inspiredBy: 'Setra touring coach', category: 'bus', length: 9.0, width: 2.25, height: 1.9, topSpeed: 24, acceleration: 3.2, grip: 6, blurb: 'Touring motorcoach' },
   minibus: { name: 'Minibus', inspiredBy: 'Ford Transit bus', category: 'bus', length: 6.0, width: 2.1, height: 1.6, topSpeed: 26, acceleration: 4.5, grip: 6.5, blurb: 'Neighborhood shuttle' },
 } as const satisfies Record<string, VehicleSpec>;
-export type VehicleKind = keyof typeof VEHICLES;
+export type VehicleKind = keyof typeof BASE_VEHICLES;
+/** Shared gameplay tuning: real movement speed and acceleration, in m/s and m/s². */
+export const VEHICLES = Object.fromEntries(
+  Object.entries(BASE_VEHICLES).map(([kind, spec]) => [kind, {
+    ...spec,
+    topSpeed: spec.topSpeed * 1.35,
+    acceleration: spec.acceleration * 1.8,
+  }]),
+) as { [K in VehicleKind]: Omit<typeof BASE_VEHICLES[K], 'topSpeed' | 'acceleration'> & { topSpeed: number; acceleration: number } };
 export const VEHICLE_KINDS = Object.keys(VEHICLES) as VehicleKind[];
 
 /** Keep the visible front wheels aligned with the steering used by physics. */

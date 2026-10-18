@@ -1475,8 +1475,10 @@ export class Simulation {
       const opposing = forward !== 0 && forward * oldSpeed < -0.1;
       const gripF = this.weatherGrip * surfaceGrip;
       const aeroGrip = onF1 ? 1 + Math.min(1.4, oldSpeed * oldSpeed / 1800) * (this.drsOpen ? 0.65 : 1) : 1;
-      const drag = 0.65 + (onF1 ? 0.003 : 0.008) * oldSpeed * oldSpeed * (this.drsOpen ? 0.78 : 1) + (1 - surfaceGrip) * Math.abs(oldSpeed) * 0.3;
-      let force = forward * spec.acceleration * (this.boosting ? 1.9 : 1) * Math.max(0.15, 1 - Math.abs(oldSpeed) / (forward < 0 ? 7 : topSpeed));
+      // Scale road drag to each vehicle so it can reach its advertised speed.
+      const speedRatio = Math.abs(oldSpeed) / Math.max(1, topSpeed);
+      const drag = 0.35 + spec.acceleration * 0.12 * speedRatio * speedRatio * (this.drsOpen ? 0.78 : 1) + (1 - surfaceGrip) * Math.abs(oldSpeed) * 0.3;
+      let force = forward * spec.acceleration * (this.boosting ? 1.9 : 1) * Math.max(0.25, 1 - 0.75 * Math.abs(oldSpeed) / (forward < 0 ? 7 : topSpeed));
       if (onF1) force *= Math.min(1, gripF * aeroGrip);
       if (opposing) force = forward * (onF1 ? 22 * aeroGrip : 13) * gripF * upgrades.braking;
       // Gentle hill pull: climbing scrubs accel, descents add a little.

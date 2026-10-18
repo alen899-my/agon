@@ -22,7 +22,7 @@ import { VehicleAudio } from '../game/VehicleAudio';
 import type { TTShot } from './TableTennis';
 import { CpuRacer, CPU_RACER_ID_PREFIX, type CpuDifficulty } from './CpuRacer';
 import { AgentSim } from './AgentSim';
-import { partitionScenery } from './StaticScenery';
+import { partitionScenery, SceneryVisibility } from './StaticScenery';
 import { createGarageBuilding } from './GarageBuilding';
 import { atGarage } from './GarageLocation';
 import { applyCustomization, clearCustomization, stockBuild, type VehicleCustomization } from './VehicleCustomization';
@@ -35,6 +35,7 @@ export type { RacerState };
 
 export type QualityLevel = 'low' | 'balanced' | 'high' | 'ultra';
 const QUALITY_PIXEL: Record<QualityLevel, number> = { low: 1, balanced: 1.25, high: 1.5, ultra: 2 };
+const QUALITY_VIEW: Record<QualityLevel, number> = { low: 150, balanced: 200, high: 250, ultra: 300 };
 const QUALITY_SHADOW: Record<QualityLevel, number> = { low: 512, balanced: 1024, high: 2048, ultra: 2048 };
 /** Effective ghost caps per tier (visual parity on high, cheap on low). */
 const QUALITY_GHOSTS: Record<QualityLevel, number> = { low: 8, balanced: 12, high: 18, ultra: 24 };
@@ -262,7 +263,7 @@ export class WorldEngine {
   private readonly ghosts = new Map<string, Ghost>();
   private readonly ghostVehiclePool = new Map<VehicleKind, Vehicle[]>();
   private ghostSeed = 0;
-  private shake = 0; private lastImpactAt = -10; private prevSimTime = 0;
+  private lastImpactAt = -10; private prevSimTime = 0;
   /** Speed feel: smoothed chase FOV that widens with velocity (free-roam + race). */
   private speedFov = 60;
   /** 0 = centered chase, 1 = over-the-shoulder aim (eased). */
@@ -271,6 +272,7 @@ export class WorldEngine {
   private _aimScreenPos = { x: 0.5, y: 0.5 };
   private readonly _aimScreenVec = new THREE.Vector3();
   private quality: QualityLevel = 'balanced'; private pixelCap = QUALITY_PIXEL.balanced;
+  private readonly sceneryVisibility = new SceneryVisibility();
   private lastW = 1; private lastH = 1;
   private visualTime = -1;
   private previousCar = { x: 0, y: 0, z: 0, yaw: 0, cameraYaw: 0, valid: false };
@@ -382,8 +384,9 @@ export class WorldEngine {
     this.renderer.shadowMap.type = this.lowPower ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
     this.kit = new AssetKit(); buildMap(this.scene, this.kit);
     const garageBuilding = createGarageBuilding(); this.scene.add(garageBuilding.group); this.kit.extra.push(garageBuilding);
-    partitionScenery(this.scene, 96);
+    partitionScenery(this.scene, 48);
     for (const root of this.scene.children) this.prepareScenery(root);
+    this.sceneryVisibility.register(this.scene);
     this.scene.traverse((obj) => {
       if ((obj as THREE.Mesh).userData?.showCarGlow) this.showCarGlows.push(obj as THREE.Mesh);
     });
@@ -1402,7 +1405,7 @@ export class WorldEngine {
     if (sim.reloadSeq !== this.lastReloadSeq) { this.lastReloadSeq = sim.reloadSeq; reloadSound(); }
     if (sim.explodeSeq !== this.lastExplodeSeq) {
       this.lastExplodeSeq = sim.explodeSeq;
-      explosionSound(); this.shake = 1;
+      explosionSound();
       const b = sim.booms[sim.booms.length - 1];
       if (b) this.boomLight.position.set(b.x, b.y + 1.5, b.z);
     }
@@ -1698,6 +1701,8 @@ export class WorldEngine {
    */
   /** Reuse background Color + Fog objects (no new Color/Fog per frame while night lerps). */
   private setBackgroundFog(color: THREE.Color, near: number, far: number): void {
+    far = Math.min(far, QUALITY_VIEW[this.quality] * 0.65);
+    near = Math.min(near, far * 0.55);
     const bg = this.scene.background;
     if (bg instanceof THREE.Color) bg.copy(color);
     else this.scene.background = color.clone();
@@ -1920,7 +1925,7 @@ export class WorldEngine {
       });
     }
     // Keep sufficient braking-distance visibility at racing speeds.
-    this.camera.far = q === 'low' ? 260 : 380;
+    this.camera.far = QUALITY_VIEW[q] + 40;
     this.camera.updateProjectionMatrix();
     // Small props stop casting on low/balanced-mobile (big shadow-pass saving, invisible at distance).
     const smallCast = q === 'high' || q === 'ultra';
@@ -2075,6 +2080,7 @@ export class WorldEngine {
       const point = sim.peds[i]; if (!point) return;
       const dx = point.x - px, dz = point.z - pz;
       const far = dx * dx + dz * dz > cullDist * cullDist;
+      person.actor.group.visible = !far;
       if (point.say && !person.tag) {
         person.canvas = document.createElement('canvas'); person.canvas.width = 256; person.canvas.height = 72;
         person.texture = new THREE.CanvasTexture(person.canvas);
@@ -2108,12 +2114,13 @@ export class WorldEngine {
     }
 
     // Paddock crowd: movie street-racing crowd cheering (excited jumping, waving arms overhead)
-    const arenaDist = Math.hypot(sim.x - RACE_ARENA.x, sim.z - RACE_ARENA.z);
+    const arenaDist = Math.hypot(px - RACE_ARENA.x, pz - RACE_ARENA.z);
+    for (const fan of this.crowd) fan.actor.group.visible = arenaDist < cullDist;
     const nearArena = arenaDist < 36;
     const isRacing = this.race.phase === 'countdown' || this.race.phase === 'racing';
     const cheerLevel = isRacing ? 1.0 : nearArena ? 0.85 : 0.45;
     // Far crowd: animate at 1/3 rate (same look nearby, ~66% cheaper far away).
-    const crowdTick = nearArena || isRacing || this.renderCount % 3 === 0;
+    const crowdTick = arenaDist < cullDist && (nearArena || isRacing || this.renderCount % 3 === 0);
     if (crowdTick) {
       for (let i = 0; i < this.crowd.length; i++) {
         const fan = this.crowd[i];
@@ -2271,9 +2278,7 @@ export class WorldEngine {
       this.avatar.group.visible = false;
     }
     // Camera kick on fresh impacts.
-    if (sim.impact && sim.impact.at !== this.lastImpactAt) { this.lastImpactAt = sim.impact.at; this.shake = Math.min(1, sim.impact.speed / 40 + 0.35); crashThud(sim.impact.speed); }
-    this.shake *= 0.9;
-    const shakeX = this.shake * Math.sin(sim.time * 70) * 0.35, shakeY = this.shake * Math.cos(sim.time * 55) * 0.25;
+    if (sim.impact && sim.impact.at !== this.lastImpactAt) { this.lastImpactAt = sim.impact.at; crashThud(sim.impact.speed); }
     let waypoint = this.waypointCache;
     if (this.waypointCacheId !== sim.waypoint) {
       this.waypointCacheId = sim.waypoint;
@@ -2301,7 +2306,7 @@ export class WorldEngine {
       const gx = GAME_CENTER.x, gz = GAME_CENTER.z;
       const t = sim.table;
       // First-person: eyes just behind your end, gaze tracks the ball.
-      this.camera.position.set(gx + t.player.x * 0.85 + shakeX, 1.72 + shakeY, gz + t.player.z + 0.45);
+      this.camera.position.set(gx + t.player.x * 0.85, 1.72, gz + t.player.z + 0.45);
       this.target.set(gx + t.ball.x * 0.55, Math.max(0.6, t.ball.y * 0.85), gz - 1.2);
       this.camera.lookAt(this.target);
       // Bat pinned into view: bottom-center, follows your lateral position,
@@ -2323,13 +2328,7 @@ export class WorldEngine {
       if (sim.driving) {
         this.car.group.updateMatrixWorld(true);
         this.camera.position.copy(this.car.eye); this.car.body.localToWorld(this.camera.position);
-        const spec = VEHICLES[sim.vehicleKind];
-        const ratio = spec.topSpeed > 0 ? Math.min(1.2, Math.abs(sim.car.speed) / spec.topSpeed) : 0;
-        const vib = ratio * ratio * 0.02;
-        this.camera.position.x += shakeX * 0.15 + Math.sin(sim.time * 47) * vib;
-
-        this.camera.position.y += shakeY * 0.15 + Math.abs(Math.cos(sim.time * 39)) * vib;
-      } else this.camera.position.set(x + shakeX, y + 1.84 + shakeY, z);
+      } else this.camera.position.set(x, y + 1.84, z);
       this.target.copy(this.camera.position).add(this.direction.set(Math.sin(sim.driving ? cameraYaw : sim.yaw) * 10, -Math.sin(sim.pitch) * 10, -Math.cos(sim.driving ? cameraYaw : sim.yaw) * 10));
       this.camera.lookAt(this.target);
     } else {
@@ -2347,7 +2346,6 @@ export class WorldEngine {
       const spec = VEHICLES[sim.vehicleKind];
       const ratio = sim.driving && spec.topSpeed > 0
         ? Math.min(1.2, Math.abs(sim.car.speed) / spec.topSpeed) : 0;
-      const vib = ratio * ratio * 0.06;
       const distance = (sim.driving ? spec.length * 0.5 + 3.4 + ratio * 0.35 : 4.2) * (1 - shoulder * 0.35);
       const chaseYaw = sim.driving ? cameraYaw : sim.yaw;
       const roofHeight = Number(this.car.group.userData.garageLayout?.roofY) || 1.4;
@@ -2364,8 +2362,6 @@ export class WorldEngine {
       this.ray.set(this.target, this.direction);
       for (const box of this.cameraBoxes) if (this.ray.intersectBox(box, this.hit)) cameraDistance = Math.min(cameraDistance, Math.max(0.45, this.hit.distanceTo(this.target) - 0.3));
       this.camera.position.copy(this.target).addScaledVector(this.direction, cameraDistance);
-      this.camera.position.x += shakeX + Math.sin(sim.time * 47) * vib;
-      this.camera.position.y += shakeY + Math.abs(Math.cos(sim.time * 39)) * vib;
       // Never sink the lens into the deck/ramps when the chase swings low.
       const lensFloor = Math.max(0, groundHeight(this.camera.position.x, this.camera.position.z, this.camera.position.y)) + 1.1;
       if (this.camera.position.y < lensFloor) this.camera.position.y = lensFloor;
@@ -2393,6 +2389,7 @@ export class WorldEngine {
       }
     }
     this.sun.position.set(x + 35, 65, z + 25); this.sun.target.position.set(x, 0, z); this.sun.target.updateMatrixWorld();
+    this.sceneryVisibility.update(this.camera, QUALITY_VIEW[this.quality], this.sun.castShadow ? 100 : 0);
     this.renderer.render(this.scene, this.camera);
   };
   destroy(): void {
