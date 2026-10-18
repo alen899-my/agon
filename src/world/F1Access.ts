@@ -20,23 +20,40 @@ export const F1_ACCESS_SAMPLES = curve.getSpacedPoints(sampleCount).map((p, i) =
 export const F1_ACCESS_RAIL_START = 36;
 export const F1_ACCESS_RAIL_END = F1_ACCESS_LENGTH - 36;
 
+// Road geometry is immutable. Cache segment math once instead of repeating it
+// for every tyre, collision, road-surface and camera query.
+const accessSegments = F1_ACCESS_SAMPLES.slice(1).map((b, i) => {
+  const a = F1_ACCESS_SAMPLES[i];
+  const dx = b.x - a.x, dz = b.z - a.z;
+  const lengthSquared = dx * dx + dz * dz;
+  const yaw = Math.atan2(dx, -dz);
+  return { a, b, dx, dz, inverseLengthSquared: lengthSquared > 0 ? 1 / lengthSquared : 0,
+    yaw, cosYaw: Math.cos(yaw), sinYaw: Math.sin(yaw),
+    minX: Math.min(a.x, b.x), maxX: Math.max(a.x, b.x),
+    minZ: Math.min(a.z, b.z), maxZ: Math.max(a.z, b.z) };
+});
+
 /** Closest road segment; shared by the access surface, edge collision and gate. */
 export function f1AccessProgress(x: number, z: number) {
   let distance = Infinity, signed = 0, height = 0, yaw = 0, along = 0;
   if (x < 125 || x > join.x + 20 || z < -10 || z > 105) return { distance, signed, height, yaw, along };
-  for (let i = 1; i < F1_ACCESS_SAMPLES.length; i++) {
-    const a = F1_ACCESS_SAMPLES[i - 1], b = F1_ACCESS_SAMPLES[i];
-    const dx = b.x - a.x, dz = b.z - a.z;
-    const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (z - a.z) * dz) / (dx * dx + dz * dz)));
+  let distanceSquared = Infinity;
+  for (const segment of accessSegments) {
+    const bx = Math.max(segment.minX - x, 0, x - segment.maxX);
+    const bz = Math.max(segment.minZ - z, 0, z - segment.maxZ);
+    if (bx * bx + bz * bz >= distanceSquared) continue;
+    const { a, b, dx, dz } = segment;
+    const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (z - a.z) * dz) * segment.inverseLengthSquared));
     const ex = x - a.x - dx * t, ez = z - a.z - dz * t;
-    const d = Math.hypot(ex, ez);
-    if (d >= distance) continue;
-    distance = d;
-    yaw = Math.atan2(dx, -dz);
-    signed = ex * Math.cos(yaw) + ez * Math.sin(yaw);
+    const d = ex * ex + ez * ez;
+    if (d >= distanceSquared) continue;
+    distanceSquared = d;
+    yaw = segment.yaw;
+    signed = ex * segment.cosYaw + ez * segment.sinYaw;
     height = a.y + (b.y - a.y) * t;
     along = a.dist + (b.dist - a.dist) * t;
   }
+  distance = Math.sqrt(distanceSquared);
   return { distance, signed, height, yaw, along };
 }
 

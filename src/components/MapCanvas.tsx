@@ -68,12 +68,16 @@ export function MapCanvas({ state, mini = false, view = { x: 360, z: 0, scale: 0
     const canvas = ref.current, ctx = canvas?.getContext('2d');
     if (!canvas || !ctx) return;
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    canvas.width = Math.round(size.width * dpr); canvas.height = Math.round(size.height * dpr);
+    const pixelWidth = Math.round(size.width * dpr), pixelHeight = Math.round(size.height * dpr);
+    // Resizing clears and reallocates the backing store; do it only on resize/DPR changes.
+    if (canvas.width !== pixelWidth) canvas.width = pixelWidth;
+    if (canvas.height !== pixelHeight) canvas.height = pixelHeight;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = '#171b1d'; ctx.fillRect(0, 0, size.width, size.height);
+    const cosRotation = Math.cos(rotation), sinRotation = Math.sin(rotation);
     const project = (p: Point) => {
       const dx = p.x - center.x, dz = p.z - center.z;
-      return { x: size.width / 2 + (dx * Math.cos(rotation) - dz * Math.sin(rotation)) * scale, y: size.height / 2 + (dx * Math.sin(rotation) + dz * Math.cos(rotation)) * scale };
+      return { x: size.width / 2 + (dx * cosRotation - dz * sinRotation) * scale, y: size.height / 2 + (dx * sinRotation + dz * cosRotation) * scale };
     };
     const line = (points: readonly Point[], color: string, width: number, dash: number[] = []) => {
       ctx.beginPath(); points.forEach((p, i) => { const s = project(p); if (i === 0) ctx.moveTo(s.x, s.y); else ctx.lineTo(s.x, s.y); });

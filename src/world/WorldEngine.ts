@@ -273,6 +273,10 @@ export class WorldEngine {
   private readonly _aimScreenVec = new THREE.Vector3();
   private quality: QualityLevel = 'balanced'; private pixelCap = QUALITY_PIXEL.balanced;
   private readonly sceneryVisibility = new SceneryVisibility();
+  private nextVehicleSyncAt = 0;
+  private readonly liveAgentIds = new Set<string>();
+  private readonly liveSiteIds = new Set<string>();
+  private readonly liveVehicleIds = new Set<string>();
   private lastW = 1; private lastH = 1;
   private visualTime = -1;
   private previousCar = { x: 0, y: 0, z: 0, yaw: 0, cameraYaw: 0, valid: false };
@@ -1270,7 +1274,9 @@ export class WorldEngine {
   /** Keep one rendered body per live agent (CharacterFactory decides the mesh). */
   private syncAgentPeople(dt: number): void {
     const sim = this.simulation;
-    const live = new Set(this.agents.walkers.map(p => p.id));
+    const live = this.liveAgentIds;
+    live.clear();
+    for (const p of this.agents.walkers) live.add(p.id);
     for (const [id, p] of this.agentPeds) if (!live.has(id)) {
       this.scene.remove(p.actor.group, p.tag); p.texture.dispose(); (p.tag.material as THREE.Material).dispose(); this.agentPeds.delete(id);
     }
@@ -1316,7 +1322,9 @@ export class WorldEngine {
         cheer: p.task === 'dance' ? 1 : p.task === 'watch' ? 0.3 : 0,
       });
     }
-    const sites = new Set(this.agents.sites.map(s => s.id));
+    const sites = this.liveSiteIds;
+    sites.clear();
+    for (const site of this.agents.sites) sites.add(site.id);
     for (const [id, m] of this.constructionMeshes) if (!sites.has(id)) { this.scene.remove(m.group); this.constructionMeshes.delete(id); }
     for (const site of this.agents.sites) {
       const old = this.constructionMeshes.get(site.id);
@@ -1326,8 +1334,11 @@ export class WorldEngine {
     }
   }
   private syncAgentVehicles(): void {
-    const live = new Set([...this.agents.cops.map((c) => c.id), ...this.agents.rides.map((r) => r.id)]);
-    for (const [id, v] of [...this.agentVehicles]) {
+    const live = this.liveVehicleIds;
+    live.clear();
+    for (const cop of this.agents.cops) live.add(cop.id);
+    for (const ride of this.agents.rides) live.add(ride.id);
+    for (const [id, v] of this.agentVehicles) {
       if (!live.has(id)) {
         this.scene.remove(v.group);
         this.disposeVehicleMats(v);
@@ -1354,14 +1365,13 @@ export class WorldEngine {
   }
   private syncWorldVehicles(initial = false): void {
     const sim = this.simulation;
+    // Appearance reconciliation is not animation: scan at 10 Hz, with immediate
+    // handling for list-size changes. Positions still update every render frame.
+    const now = performance.now();
+    if (!initial && now < this.nextVehicleSyncAt && this.traffic.length === sim.traffic.length && this.parked.length === sim.parked.length) return;
+    this.nextVehicleSyncAt = now + 100;
     const trafficVariant = (kind: string, i: number): number => (i * 3 + kind.length + kind.charCodeAt(0)) % 8;
     const parkedVariant = (kind: string, i: number): number => (i * 5 + 2 + kind.charCodeAt(0)) % 8;
-    while (this.traffic.length < sim.traffic.length) {
-      const kind = sim.traffic[this.traffic.length]?.kind ?? 'car';
-      const v = this.kit.car(kind, false, trafficVariant(kind, this.traffic.length));
-      this.applyHeadlightMat(v);
-      this.scene.add(v.group); this.traffic.push(v); this.trafficKinds.push(null);
-    }
     while (this.traffic.length > sim.traffic.length) {
       const v = this.traffic.pop()!; this.scene.remove(v.group); this.disposeVehicleMats(v); this.trafficKinds.pop();
     }
@@ -1374,12 +1384,6 @@ export class WorldEngine {
       this.applyHeadlightMat(v);
       this.scene.add(v.group); this.traffic[i] = v; this.trafficKinds[i] = key;
     });
-    while (this.parked.length < sim.parked.length) {
-      const kind = sim.parked[this.parked.length]?.kind ?? 'car';
-      const v = this.kit.car(kind, false, parkedVariant(kind, this.parked.length));
-      this.applyHeadlightMat(v);
-      this.scene.add(v.group); this.parked.push(v); this.parkedKinds.push(null);
-    }
     while (this.parked.length > sim.parked.length) {
       const v = this.parked.pop()!; this.scene.remove(v.group); this.disposeVehicleMats(v); this.parkedKinds.pop();
     }
@@ -1390,6 +1394,8 @@ export class WorldEngine {
       if (old) { this.scene.remove(old.group); this.disposeVehicleMats(old); }
       const v = this.kit.car(p.kind, false, parkedVariant(p.kind, i));
       applyCustomization(v, p.kind, p.customization);
+      v.update(0, 0, 0, false);
+      v.setOccupancy(false);
       this.applyHeadlightMat(v);
       this.scene.add(v.group); this.parked[i] = v; this.parkedKinds[i] = key;
     });
@@ -2153,8 +2159,6 @@ export class WorldEngine {
       if (pdx * pdx + pdz * pdz > vehCull2) { vehicle.group.visible = false; return; }
       vehicle.group.visible = true;
       vehicle.group.position.set(p.x, 0.08, p.z); vehicle.group.rotation.y = -p.yaw;
-      vehicle.update(0, 0, 0, false);
-      vehicle.setOccupancy(false);
     });
     // AI role agents (police cruisers): bodies resolve via CharacterFactory.
     this.syncAgentPeople(dt);

@@ -71,9 +71,13 @@ export class SceneryVisibility {
     this.projection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
     this.frustum.setFromProjectionMatrix(this.projection);
     for (const { gate, bounds } of this.entries) {
-      const range = bounds.distanceToPoint(camera.position);
+      const p = camera.position;
+      const dx = Math.max(bounds.min.x - p.x, 0, p.x - bounds.max.x);
+      const dy = Math.max(bounds.min.y - p.y, 0, p.y - bounds.max.y);
+      const dz = Math.max(bounds.min.z - p.z, 0, p.z - bounds.max.z);
+      const rangeSquared = dx * dx + dy * dy + dz * dz;
       // Keep nearby off-screen casters: objects outside the view can cast into it.
-      gate.visible = range <= distance && (range <= shadowReach || this.frustum.intersectsBox(bounds));
+      gate.visible = rangeSquared <= distance * distance && (rangeSquared <= shadowReach * shadowReach || this.frustum.intersectsBox(bounds));
     }
   }
 }
