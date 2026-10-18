@@ -114,14 +114,17 @@ export class AssetKit {
   stickman(player = false, appearance: number | Appearance = 0): Stickman {
     const variation = typeof appearance === 'number' ? appearance : 0;
     const group = new THREE.Group(); const material: MaterialName = player ? 'ink' : variation % 3 === 0 ? 'wall2' : variation % 3 === 1 ? 'ink' : 'wall1';
+    // Metre-based adult proportions: ~1.79 m standing, shared by every pedestrian.
+    // Keep scale on an inner rig so crowd variation on group does not overwrite it.
+    const rig = new THREE.Group(); rig.scale.setScalar(0.9); group.add(rig);
     // Hips root -> pelvis, torso chain, jointed arms/legs with knees + elbows.
-    const hips = new THREE.Group(); hips.position.set(0, 0.95, 0); group.add(hips);
+    const hips = new THREE.Group(); hips.position.set(0, 0.95, 0); rig.add(hips);
     this.mesh(hips, 'cylinder', material, 0, 0.02, 0, 0.16, 0.22, 0.13);
     const torso = new THREE.Group(); torso.position.set(0, 0.08, 0); hips.add(torso);
     this.mesh(torso, 'cylinder', material, 0, 0.32, 0, 0.17, 0.6, 0.13);
     const head = new THREE.Group(); head.position.set(0, 0.62, 0); torso.add(head);
     this.mesh(head, 'cylinder', material, 0, 0.04, 0, 0.06, 0.12, 0.06);
-    this.mesh(head, 'sphere', material, 0, 0.24, 0, 0.23, 0.26, 0.23);
+    this.mesh(head, 'sphere', material, 0, 0.19, 0, 0.13, 0.15, 0.13);
     const arms: THREE.Group[] = [], elbows: THREE.Group[] = [], legs: THREE.Group[] = [], knees: THREE.Group[] = [], feet: THREE.Mesh[] = [];
     for (const side of [-1, 1]) {
       const shoulder = new THREE.Group(); shoulder.position.set(side * 0.235, 0.52, 0); torso.add(shoulder); arms.push(shoulder);
@@ -140,7 +143,7 @@ export class AssetKit {
       paint(hips, appearance.pants); paint(torso, appearance.shirt); paint(head, appearance.skin);
       for (const elbow of elbows) paint(elbow, appearance.skin);
       if (appearance.hat && appearance.hat !== 'none') {
-        const hat = this.mesh(head, 'box', 'ink', 0, 0.46, -0.03, 0.49, 0.12, 0.49);
+        const hat = this.mesh(head, 'box', 'ink', 0, 0.33, -0.015, 0.29, 0.08, 0.29);
         hat.material = this.colorMaterial(appearance.hat === 'helmet' ? 0xffcf38 : appearance.shirt);
       }
       if (appearance.vest || appearance.apron) {
@@ -150,7 +153,7 @@ export class AssetKit {
     }
     if (player) {
       this.mesh(torso, 'box', 'white', 0, 0.35, -0.075, 0.2, 0.3, 0.02);
-      this.mesh(head, 'box', 'white', 0, 0.38, -0.08, 0.26, 0.05, 0.18);
+      this.mesh(head, 'box', 'white', 0, 0.27, -0.08, 0.19, 0.035, 0.13);
     }
     return { group, hips, torso, head, arms, elbows, legs, knees, feet, animate: s => {
       const I = Math.max(0, Math.min(1.2, s.intensity));

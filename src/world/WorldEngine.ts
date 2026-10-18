@@ -2335,7 +2335,7 @@ export class WorldEngine {
       if (sim.driving) {
         this.car.group.updateMatrixWorld(true);
         this.camera.position.copy(this.car.eye); this.car.body.localToWorld(this.camera.position);
-      } else this.camera.position.set(x, y + 1.84, z);
+      } else this.camera.position.set(x, y + 1.70, z);
       this.target.copy(this.camera.position).add(this.direction.set(Math.sin(sim.driving ? cameraYaw : sim.yaw) * 10, -Math.sin(sim.pitch) * 10, -Math.cos(sim.driving ? cameraYaw : sim.yaw) * 10));
       this.camera.lookAt(this.target);
     } else {
