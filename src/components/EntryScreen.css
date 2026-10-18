@@ -1,0 +1,60 @@
+.world-intro.entry-landscape{position:absolute;inset:0;z-index:25;display:flex;align-items:center;justify-content:center;padding:clamp(12px,3vw,40px);overflow:hidden;background:linear-gradient(100deg,#080d12f5,#101820ba);backdrop-filter:blur(5px);color:#f5f5f0}
+.entry-landscape .intro-card{display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,.85fr);width:min(1050px,100%);height:min(640px,100%);max-height:100%;padding:0;margin:0;overflow:hidden;background:#141a20f5;color:#f5f5f0;border:1px solid #ffffff24;border-radius:3px;box-shadow:0 24px 90px #0007}
+.entry-identity{display:flex;flex-direction:column;justify-content:space-between;min-width:0;padding:clamp(24px,4vw,56px);background:linear-gradient(155deg,#34434440,transparent 65%),#111820;border-right:1px solid #ffffff20;position:relative}
+.entry-wordmark{font-size:25px;font-weight:900;letter-spacing:4px}.entry-wordmark>span{font:8px monospace;color:#9da9b0;letter-spacing:1px}
+.entry-title .eyebrow{font:10px monospace;color:#c3cebd;letter-spacing:3px}
+.entry-title h1{font-size:clamp(32px,5vw,64px);font-weight:900;line-height:.96;letter-spacing:-2px;margin:18px 0 22px;font-style:italic}
+.entry-title>p:last-child{font-size:12px;line-height:1.8;color:#a8b2b9}
+.entry-edition{font:8px monospace;letter-spacing:1px;color:#99a5ad;line-height:2}.entry-edition span{margin:0 8px;color:#55626b}
+.entry-form{min-width:0;min-height:0;overflow-y:auto;padding:clamp(22px,3vw,42px);scrollbar-width:thin;scrollbar-color:#56616a #141a20}
+.entry-form-heading>span{font:9px monospace;letter-spacing:2px;color:#a8b69f}.entry-form-heading h2{font-size:26px;letter-spacing:-.8px;margin:9px 0 24px}
+.entry-landscape .mode-tabs{display:flex;padding:0;border:0;border-bottom:1px solid #ffffff24;background:none;border-radius:0;gap:0;margin:0 0 24px}
+.entry-landscape .mode-tabs button{flex:1;min-height:40px;border:0;border-radius:0;background:transparent;color:#8f9ba3;font-size:10px;font-weight:700;letter-spacing:1.5px;padding:12px}
+.entry-landscape .mode-tabs button.on{background:#e3e9de;color:#182018}
+.entry-landscape .name-row{display:grid;grid-template-columns:1fr;gap:9px;margin:0 0 18px}
+.entry-landscape .name-row>span{font:9px monospace;letter-spacing:1px;color:#b3bdc4}
+.entry-landscape .name-row input{width:100%;min-width:0;min-height:44px;padding:12px 14px;font-size:16px;background:#0d1218;border:1px solid #ffffff29;border-radius:2px;color:#fff;outline-offset:2px}
+.entry-landscape input::placeholder{color:#687680}
+.entry-landscape button:focus-visible,.entry-landscape input:focus-visible{outline:2px solid #c8d5b9;outline-offset:3px}
+.entry-landscape .primary-button{display:flex;align-items:center;justify-content:space-between;width:100%;min-height:46px;padding:14px 18px;background:#d5dfc9;color:#172015;border:1px solid #d5dfc9;border-radius:2px;font-size:11px;font-weight:800;letter-spacing:1px;margin:10px 0 0;box-shadow:none}
+.entry-landscape .control{background:#202a32;border:1px solid #ffffff26;border-radius:2px;color:#dce2e5;font-size:10px;min-height:38px}
+.entry-landscape .form-note{font-size:11px;line-height:1.6;color:#9caab4;margin:12px 0}
+.entry-landscape .button-row{display:flex;gap:8px;flex-wrap:wrap}.entry-landscape .button-row>*{flex:1}.entry-landscape .button-row .primary-button{margin:0}
+.entry-landscape .seg{background:#0d1218;border-color:#ffffff24;margin-bottom:18px}.entry-landscape .seg button{color:#aab4bc}.entry-landscape .seg button.on{background:#d5dfc9;color:#172015}
+.entry-landscape .browser-head{gap:10px;align-items:center;margin-top:24px}.entry-landscape .browser-head .eyebrow{font-size:8px;color:#a9b7c0;line-height:1.6}
+.entry-landscape .server-list{max-height:200px;overflow:auto}.entry-landscape .server-row,.entry-landscape .server-preview,.entry-landscape .room-code-panel{border-color:#ffffff24;background:#0e151c;color:#e4e9ec;border-radius:2px}.entry-landscape .server-row small,.entry-landscape .code-sub{color:#99a6b0}.entry-landscape .room-code-panel>b{color:#d5dfc9}
+.entry-loading{display:flex;align-items:center;gap:10px;font-size:10px;color:#c0c9ce;margin-top:18px}.entry-loading i{width:14px;height:14px;border:2px solid #ffffff25;border-top-color:#d5dfc9;border-radius:50%;animation:entry-spin 1s linear infinite}@keyframes entry-spin{to{transform:rotate(360deg)}}
+@media(max-height:550px) and (orientation:landscape){.world-intro.entry-landscape{padding:12px}.entry-landscape .intro-card{height:100%;grid-template-columns:minmax(220px,.85fr) minmax(300px,1fr)}.entry-identity{padding:24px}.entry-form{padding:20px 26px}.entry-title h1{font-size:38px;margin:10px 0}.entry-form-heading h2{font-size:22px;margin:6px 0 14px}.entry-landscape .mode-tabs{margin-bottom:14px}.entry-landscape .name-row{margin-bottom:12px}.entry-wordmark{font-size:21px}}
+/* Keep the opening menu horizontal even before the phone is physically rotated. */
+@media(orientation:portrait) and (max-width:1000px){.world-intro.entry-landscape{position:fixed;inset:auto;left:50%;top:50%;width:100dvh;height:100dvw;transform:translate(-50%,-50%) rotate(90deg);padding:12px}.entry-landscape .intro-card{width:100%;height:100%;grid-template-columns:minmax(180px,.8fr) minmax(280px,1fr)}.entry-identity{padding:20px}.entry-form{padding:18px 24px}.entry-title h1{font-size:clamp(28px,8vw,44px);margin:10px 0}.entry-title>p:last-child{font-size:10px;line-height:1.5}.entry-wordmark{font-size:20px}.entry-wordmark>span{font-size:7px}.entry-edition{font-size:7px;letter-spacing:0}.entry-form-heading h2{font-size:21px;margin:6px 0 12px}.entry-landscape .mode-tabs{margin-bottom:12px}.entry-landscape .mode-tabs button{min-height:36px;padding:9px}.entry-landscape .name-row{gap:6px;margin-bottom:12px}.entry-landscape .primary-button{min-height:42px;padding:12px}.entry-landscape .form-note{margin:8px 0;font-size:10px}}
+@media(prefers-reduced-motion:reduce){.entry-loading i{animation:none}}
+/* Original entry identity, horizontal glass panel over the live district. */
+.world-intro.entry-landscape{background:linear-gradient(110deg,#07101925,#07101908);backdrop-filter:none;-webkit-backdrop-filter:none}
+.entry-landscape .intro-card{background:rgb(245 248 248 / 55%);color:#192329;border:1px solid #ffffffa6;border-radius:14px;box-shadow:0 18px 60px #07101930,inset 0 1px 0 #ffffffb3;backdrop-filter:blur(14px) saturate(125%);-webkit-backdrop-filter:blur(14px) saturate(125%)}
+.entry-identity{background:linear-gradient(140deg,#ffffff24,#ffffff05);border-right:1px solid #ffffff80}
+.entry-wordmark{color:#192329}.entry-wordmark>span{color:#45565f}
+.entry-title .eyebrow{color:#45565f;font-size:9px;letter-spacing:1.5px}
+.entry-title h1{font-style:normal;font-weight:700;color:#172128;letter-spacing:-2px}
+.entry-title>p:last-child,.entry-edition{color:#43545e}.entry-edition span{color:#73818a}
+.entry-form{background:#ffffff12}.entry-form-heading>span{color:#52636b}.entry-form-heading h2{color:#192329;font-weight:600}
+.entry-landscape .mode-tabs{border-bottom:1px solid #24343d26;gap:4px}
+.entry-landscape .mode-tabs button{color:#45545d;border-radius:5px 5px 0 0}.entry-landscape .mode-tabs button.on{background:#192329;color:#fff}
+.entry-landscape .name-row>span{color:#40515b}.entry-landscape .name-row input{background:#ffffff59;border:1px solid #ffffffa6;border-radius:6px;color:#172128;box-shadow:inset 0 1px 3px #10202a08}
+.entry-landscape input::placeholder{color:#667983}
+.entry-landscape .primary-button{background:#192329;color:#fff;border-color:#192329;border-radius:6px}
+.entry-landscape .control{background:#ffffff57;color:#25343d;border:1px solid #ffffff99;border-radius:5px}
+.entry-landscape .form-note,.entry-landscape .browser-head .eyebrow,.entry-landscape .server-row small,.entry-landscape .code-sub,.entry-loading{color:#41555f}
+.entry-landscape .seg{background:#ffffff3d;border-color:#ffffff80}.entry-landscape .seg button{color:#45565f}.entry-landscape .seg button.on{background:#192329;color:#fff}
+.entry-landscape .server-row,.entry-landscape .server-preview,.entry-landscape .room-code-panel{background:#ffffff40;border-color:#ffffff80;color:#192329;border-radius:6px}.entry-landscape .room-code-panel>b{color:#192329}
+.entry-landscape button:focus-visible,.entry-landscape input:focus-visible{outline-color:#304d60}.entry-loading i{border-color:#19232930;border-top-color:#192329}
+.dark .entry-landscape .intro-card{background:rgb(17 25 32 / 58%);color:#edf3f5;border-color:#ffffff35;box-shadow:0 18px 60px #0005,inset 0 1px 0 #ffffff25}
+.dark .entry-identity{border-color:#ffffff24;background:#ffffff03}.dark .entry-form{background:#ffffff03}
+.dark .entry-wordmark,.dark .entry-title h1,.dark .entry-form-heading h2{color:#f0f4f6}
+.dark .entry-wordmark>span,.dark .entry-title .eyebrow,.dark .entry-title>p:last-child,.dark .entry-edition,.dark .entry-form-heading>span,.dark .entry-landscape .name-row>span,.dark .entry-landscape .form-note,.dark .entry-landscape .browser-head .eyebrow,.dark .entry-landscape .server-row small,.dark .entry-landscape .code-sub,.dark .entry-loading{color:#c0cdd5}
+.dark .entry-landscape .name-row input{background:#11192350;border-color:#ffffff35;color:#f4f6f7}.dark .entry-landscape input::placeholder{color:#9baeb9}
+.dark .entry-landscape .mode-tabs{border-color:#ffffff25}.dark .entry-landscape .mode-tabs button,.dark .entry-landscape .seg button{color:#c0cdd5}
+.dark .entry-landscape .mode-tabs button.on,.dark .entry-landscape .seg button.on,.dark .entry-landscape .primary-button{background:#edf2f3;color:#172128;border-color:#edf2f3}
+.dark .entry-landscape .control,.dark .entry-landscape .seg,.dark .entry-landscape .server-row,.dark .entry-landscape .server-preview,.dark .entry-landscape .room-code-panel{background:#ffffff0c;border-color:#ffffff30;color:#edf3f5}.dark .entry-landscape .room-code-panel>b{color:#fff}
+.dark .entry-landscape button:focus-visible,.dark .entry-landscape input:focus-visible{outline-color:#c5deed}.dark .entry-loading i{border-color:#ffffff30;border-top-color:#fff}
+@media(max-height:550px) and (orientation:landscape){.entry-title .eyebrow{font-size:8px;line-height:1.6}.entry-title h1{font-size:38px}}
+@media(orientation:portrait) and (max-width:1000px){.entry-title .eyebrow{font-size:7px;line-height:1.6;letter-spacing:1px}.entry-title>p:last-child{font-size:10px}}

@@ -1,5 +1,6 @@
-export type ControlIconName = 'left' | 'right' | 'gas' | 'brake' | 'drift' | 'boost' | 'horn' | 'wiper' | 'jump' | 'sprint' | 'aim' | 'fire' | 'reload' | 'weapon' | 'camera';
+export type ControlIconName = 'left' | 'right' | 'gas' | 'brake' | 'drift' | 'boost' | 'horn' | 'wiper' | 'jump' | 'sprint' | 'aim' | 'fire' | 'reload' | 'weapon' | 'camera' | 'door';
 const paths: Record<ControlIconName, string> = {
+  door: 'M4 21V8l5-5h10v18H4zM7 9l3-3h6v7H7V9zm7 8h2',
   left: 'M15 5l-7 7 7 7', right: 'M9 5l7 7-7 7',
   gas: 'M8 21V7a4 4 0 018 0v14H8zm3-13h2m-2 4h2m-2 4h2',
   brake: 'M5 8h14v12H5zM8 11v6m4-6v6m4-6v6',

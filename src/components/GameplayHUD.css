@@ -1,0 +1,75 @@
+/* Gameplay has three stable anchors: navigation, equipment, and vehicle instruments. */
+.world-stage{--hud-edge:clamp(16px,2.4vw,32px);--hud-white:#f5f5f1;--hud-shadow:0 2px 5px #000b}
+.world-stage .canvas-corner{top:var(--hud-edge);right:var(--hud-edge);gap:12px;align-items:flex-start}
+.world-stage .canvas-corner>.control{min-width:48px;min-height:32px;border:0;border-radius:2px;padding:8px 12px;background:#16191bc9;color:var(--hud-white);font-size:10px;font-weight:700;letter-spacing:1.5px;box-shadow:none}
+.world-stage .hud-map-br{left:var(--hud-edge);bottom:var(--hud-edge);top:auto;right:auto;width:180px;height:156px;padding:0;border:2px solid #1119;border-radius:2px;background:#181c1dcc;box-shadow:0 4px 20px #0004;overflow:hidden}
+.world-stage .atlas-radar{width:100%;height:100%;border-radius:0}
+.world-stage .atlas-radar-status{font-size:9px;letter-spacing:.5px;background:#101415d9;color:#eee}
+.world-stage .atlas-vitals{height:5px;background:#252a26}.world-stage .atlas-vitals i{background:#89b77b}
+.hud-speedometer{position:absolute;right:var(--hud-edge);bottom:var(--hud-edge);z-index:6;min-width:120px;text-align:right;color:var(--hud-white);text-shadow:var(--hud-shadow);pointer-events:none}
+.hud-speedometer>span{font-size:10px;letter-spacing:1px;text-transform:uppercase;opacity:.8}
+.hud-speedometer>div{display:flex;align-items:baseline;justify-content:flex-end;gap:8px}
+.hud-speedometer b{font-size:52px;line-height:1.1;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-2px}
+.hud-speedometer small{font-size:10px;text-transform:uppercase;letter-spacing:1px}
+.hud-speedometer>small{display:block;margin-top:6px}.hud-speedometer .hud-damage{color:#efbb83}
+.world-stage .weapon-dock{background:#131719bb;border:0;border-radius:2px;box-shadow:none;gap:0;color:#fff}
+.world-stage .weapon-dock .dock-main{background:transparent;color:#fff;border:0;min-width:110px;padding:6px 10px}
+.world-stage .weapon-dock .dock-main b{font-size:9px;letter-spacing:.6px}
+.world-stage .weapon-dock .dock-ammo{font-size:24px;font-variant-numeric:tabular-nums}
+.world-stage .weapon-dock .dock-ammo small{font-size:10px;opacity:.55}
+.world-stage .weapon-dock .dock-arrow,.world-stage .weapon-dock .dock-x{border:0;background:transparent;color:#ccc;width:25px;min-width:25px;font-size:12px}
+.world-stage .hud-wanted{top:90px;right:var(--hud-edge);left:auto;color:#fff;font-size:19px;letter-spacing:4px;text-shadow:var(--hud-shadow)}
+.world-stage .context-actions{position:absolute;left:50%;bottom:38px;transform:translateX(-50%);z-index:10;display:flex;flex-direction:column;gap:6px;max-width:calc(100% - 440px);pointer-events:none}
+.world-stage .context-actions .interact-button,.world-stage .garage-entry button{position:static;transform:none;margin:0;min-height:36px;border:0;border-radius:2px;background:#15191cbb;color:#fff;padding:10px 14px;font-size:10px;letter-spacing:.7px;box-shadow:none;pointer-events:auto}
+.world-stage .context-actions kbd,.world-stage .garage-entry kbd{border:1px solid #ffffff55;background:#ffffff12;color:#fff;padding:3px 6px;font-size:10px}
+.world-stage .garage-entry{left:50%;bottom:38px;transform:translateX(-50%)}
+.world-stage .nitro-bottom{left:auto;right:var(--hud-edge);bottom:calc(var(--hud-edge) + 100px);transform:none;width:125px;min-width:0;padding:0;background:none;border:0;box-shadow:none;gap:5px}
+.world-stage .nitro-label,.world-stage .nitro-pct{font-size:8px}.world-stage .nitro-track{height:3px}
+.world-stage .gun-hint{top:auto;bottom:100px;left:50%;transform:translateX(-50%);padding:9px 14px;border:0;border-radius:2px;background:#16191bd9;color:#fff;font-size:10px;max-width:70%;text-align:center}
+.district-shell>.notice{position:absolute;top:80px;left:50%;transform:translateX(-50%);z-index:220;max-width:min(480px,85vw);background:#15191eed;color:#fff;border:1px solid #ffffff25;border-radius:3px;padding:12px 16px;font-size:12px;box-shadow:0 6px 30px #0005}
+.world-stage.hud-obscured>.canvas-corner,.world-stage.hud-obscured>.hud-map-br,.world-stage.hud-obscured>.hud-speedometer,.world-stage.hud-obscured>.context-actions,.world-stage.hud-obscured>.garage-entry,.world-stage.hud-obscured>.hud-wanted,.world-stage.hud-obscured>.nitro-bottom,.world-stage.hud-obscured>.phone-controls{visibility:hidden;pointer-events:none}
+@media(hover:none),(pointer:coarse),(max-width:820px){
+ .world-stage{--hud-edge:12px}
+ .world-stage .hud-map-br{left:max(12px,env(safe-area-inset-left));top:max(12px,env(safe-area-inset-top));bottom:auto;width:110px;height:92px}
+ .world-stage .hud-speedometer{left:136px;right:auto;top:14px;bottom:auto;min-width:70px;text-align:left}
+ .world-stage .hud-speedometer>div{justify-content:flex-start}.world-stage .hud-speedometer b{font-size:32px}.world-stage .hud-speedometer>span{font-size:8px;max-width:125px;display:block}.world-stage .hud-speedometer small{font-size:8px}
+ .world-stage .canvas-corner{top:12px;right:max(12px,env(safe-area-inset-right));gap:6px}.world-stage .canvas-corner>.control{min-height:40px}
+ .world-stage .hud-wanted{top:68px;right:16px;font-size:14px}
+ .world-stage .context-actions{bottom:24px;max-width:none;width:clamp(110px,24vw,210px)}
+ .world-stage .context-actions .interact-button{min-height:40px;padding:8px;font-size:9px}
+ .world-stage .garage-entry{bottom:24px}.world-stage .garage-entry button{min-height:40px}
+ .world-stage .nitro-bottom{top:80px;bottom:auto;left:136px;right:auto;width:90px}
+ .world-stage .phone-controls .touch-button{background:#171d2299;border:1px solid #ffffff40;box-shadow:none;backdrop-filter:none;color:#fff}
+ .world-stage .phone-controls .touch-button.is-held,.world-stage .phone-controls .touch-button.is-selected{background:#ffffffb8;color:#101519}
+ .world-stage .phone-joystick{background:#171d2255;border-color:#ffffff40}
+ .world-stage .gun-hint{bottom:80px;font-size:9px;max-width:48%}
+}
+@media(prefers-reduced-motion:reduce){.world-stage .weapon-dock,.world-stage .hud-map-br{transition:none}}
+.world-stage.hud-obscured>.aim-crosshair,.world-stage.hud-obscured>.crosshair,.world-stage.hud-obscured>.scope-overlay,.world-stage.hud-obscured>.gun-hint{visibility:hidden;pointer-events:none}
+.world-stage .menu-sheet{border-radius:3px;box-shadow:0 20px 80px #0006}
+.world-stage .menu-heading h2{letter-spacing:2px;font-size:20px}
+.world-stage .menu-tabs button{border-radius:0;font-size:10px;letter-spacing:1px}
+.world-stage .menu-actions{display:flex;flex-wrap:wrap;gap:8px}
+.world-stage .menu-actions .control{min-height:40px;font-size:10px}
+.world-stage .canvas-corner>.mobile-vehicle-switch{display:none}
+@media(hover:none),(pointer:coarse),(max-width:820px){
+ .world-stage .canvas-corner>.mobile-vehicle-switch{display:flex;align-items:center;justify-content:center;gap:7px;min-height:44px;padding:8px 12px;font-size:9px;letter-spacing:.6px}
+ .world-stage .mobile-vehicle-switch>span{font-size:22px;line-height:1}
+ .world-stage .context-actions,.world-stage .garage-entry{left:50%;right:auto;top:50%;bottom:auto;transform:translate(-50%,-50%);width:clamp(140px,28vw,230px);max-width:calc(100% - 32px);align-items:stretch}
+ .world-stage .context-actions .interact-button,.world-stage .garage-entry button{width:100%;min-height:46px;padding:12px 16px;text-align:center;font-size:10px;background:#15191cda;border:1px solid #ffffff40;border-radius:5px}
+ .world-stage .tt-exit{left:50%;right:auto;top:auto;bottom:18px;transform:translateX(-50%);min-height:44px}
+}
+@media(hover:none),(pointer:coarse),(max-width:820px){
+ .world-stage .context-actions .desktop-vehicle-interact{display:none}
+ .world-stage .phone-controls .touch-door{width:48px;height:48px;min-height:48px;border-radius:12px;pointer-events:auto}
+ .world-stage .phone-controls .touch-door svg{width:27px;height:27px}
+ .world-stage .phone-controls .touch-door span{display:none}
+ .world-stage .phone-actions>.touch-door{position:absolute;right:0;bottom:calc(100% + 10px)}
+}
+@media(hover:none),(pointer:coarse),(max-width:820px){
+ .world-stage .canvas-corner{top:max(12px,env(safe-area-inset-top));right:max(12px,env(safe-area-inset-right));z-index:15;gap:10px;align-items:center}
+ .world-stage .canvas-corner>.mobile-vehicle-switch{display:inline-flex;flex:0 0 48px;width:48px;height:48px;min-width:48px;min-height:48px;padding:10px;border:1px solid #ffffff95;border-radius:10px;background:#121a24ed;color:#fff;box-shadow:0 2px 10px #0006;opacity:1;pointer-events:auto}
+ .world-stage .mobile-vehicle-switch>svg{display:block;width:28px;height:28px;flex-shrink:0}
+ .world-stage .canvas-corner>.mobile-vehicle-switch:disabled{opacity:1;color:#a4afba;border-color:#ffffff40;background:#17202bea;cursor:default}
+ .world-stage .canvas-corner>.mobile-vehicle-switch:not(:disabled):active{background:#e7eef5;color:#15202b}
+}

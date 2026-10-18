@@ -72,6 +72,9 @@ interface Props {
   onLeaveServer: () => void;
   snapshot: WorldSnapshot | null;
   onClose: () => void;
+  onGarageRoute: () => void;
+  onCycleVehicle: () => void;
+  onEquip: () => void;
 }
 
 function Segmented<T extends string | number>({ label, options, value, onPick, namePrefix }: {
@@ -103,7 +106,7 @@ function Segmented<T extends string | number>({ label, options, value, onPick, n
 }
 
 export function GameMenu(props: Props) {
-  const [tab, setTab] = useState<MenuTab>('display');
+  const [tab, setTab] = useState<MenuTab>('game');
   const snap = props.snapshot;
   const stage = snap?.mode === 'table' ? 'GAME CENTER — TABLE TENNIS' : snap?.mode === 'basket' ? 'GAME CENTER — HOOPS' : 'STAGE 01 — THE NEIGHBORHOOD';
   return (
@@ -198,6 +201,9 @@ export function GameMenu(props: Props) {
             </> : <p className="menu-hint">Solo world. Create or join a server from the intro screen to play together.</p>}
           </>}
           {tab === 'game' && <>
+            <div className="menu-section">QUICK ACTIONS</div>
+            <div className="menu-actions"><button className="control" onClick={props.onOpenMap}>MAP</button><button className="control" onClick={props.onGarageRoute}>ROUTE TO GARAGE</button>{snap?.driving ? <button className="control" disabled={Math.abs(snap.car.speed) > 0.2} onClick={props.onCycleVehicle}>CHANGE VEHICLE</button> : <button className="control" disabled={snap?.mode !== 'roam'} onClick={props.onEquip}>{snap?.armed ? 'NEXT WEAPON' : 'EQUIP WEAPON'}</button>}</div>
+            <p className="menu-hint">{snap?.location} / {props.season} / {props.weather}{snap?.driving ? ' / Wipers: ' + snap.wiperMode : ''}</p>
             <div className="menu-row">
               <span className="menu-label">{props.paused ? 'Paused' : 'Running'}</span>
               <button className="control" disabled={props.pauseDisabled} onClick={props.onTogglePause} aria-label={props.paused ? 'Resume' : 'Pause'}>
@@ -216,8 +222,8 @@ export function GameMenu(props: Props) {
                 : snap?.mode === 'basket'
                 ? <><li><span>Pump</span><i>TAP SPACE</i></li><li><span>Throw</span><i>TAP AGAIN</i></li></>
                 : snap?.driving
-                ? <><li><span>Gas / Brake</span><i>W / S</i></li><li><span>Steer</span><i>A / D</i></li><li><span>Drift</span><i>SPACE</i></li><li><span>Cockpit</span><i>V</i></li><li><span>Exit</span><i>E</i></li><li><span>Wipers</span><i>T</i></li><li><span>16 rides</span><i>N</i></li></>
-                : <><li><span>Move</span><i>W A S D</i></li><li><span>Sprint</span><i>SHIFT</i></li><li><span>Jump</span><i>SPACE</i></li><li><span>Steal any car</span><i>E</i></li></>}
+                ? <><li><span>Gas / Brake</span><i>W / S</i></li><li><span>Steer</span><i>A / D</i></li><li><span>Drift</span><i>SPACE</i></li><li><span>Cockpit</span><i>V</i></li><li><span>Exit</span><i>E</i></li><li><span>Wipers</span><i>T</i></li><li><span>Change vehicle</span><i>N</i></li></>
+                : <><li><span>Move</span><i>W A S D</i></li><li><span>Sprint</span><i>SHIFT</i></li><li><span>Jump</span><i>SPACE</i></li><li><span>Enter vehicle / interact</span><i>E</i></li><li><span>Equip / switch weapon</span><i>G</i></li><li><span>Fire / aim</span><i>MOUSE</i></li><li><span>Reload</span><i>R</i></li></>}
             </ul>
           </>}
         </div>

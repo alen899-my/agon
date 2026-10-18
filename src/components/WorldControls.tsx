@@ -4,6 +4,7 @@ import { ControlIcon, type ControlIconName } from './ControlIcon';
 interface Props {
   disabled: boolean; driving: boolean; speed: number; wiperMode: WiperMode;
   boost: number; boosting: boolean; racing: boolean; armed: boolean; aiming: boolean;
+  vehicleInteraction?: boolean; onVehicleInteract?: () => void;
   onStick: (x: number, y: number) => void;
   onInput: (action: WorldAction, down: boolean, source: string) => void;
   onWipers: () => void; onReload: () => void; onArm?: () => void; onCamera?: () => void;
@@ -11,7 +12,7 @@ interface Props {
 
 /** Thumb zones share one input lifecycle, including capture loss and interruptions. */
 export function WorldControls(props: Props) {
-  const { disabled, driving, speed, wiperMode, boost, boosting, racing, armed, aiming, onWipers, onReload, onArm, onCamera } = props;
+  const { disabled, driving, speed, wiperMode, boost, boosting, racing, armed, aiming, vehicleInteraction, onVehicleInteract, onWipers, onReload, onArm, onCamera } = props;
   const callbacks = useRef(props); callbacks.current = props;
   const held = useRef(new Map<string, WorldAction>());
   const pointer = useRef<number | null>(null);
@@ -109,6 +110,7 @@ export function WorldControls(props: Props) {
       </div>
       <div className="phone-right-zone">
         <div className="phone-driving-actions">
+          {vehicleInteraction && onVehicleInteract && tap('door', 'Exit vehicle', onVehicleInteract, false, 'touch-door')}
           {hold('handbrake', 'drift', 'Drift', 'touch-drift')}
           {racing && <div className={'phone-boost' + (boosting ? ' boosting' : '')}>
             {hold('sprint', 'boost', 'Boost', 'touch-boost', boost <= 1)}
@@ -121,6 +123,7 @@ export function WorldControls(props: Props) {
         </div>
       </div>
     </> : <div className="phone-right-zone phone-actions" role="group" aria-label="Character actions">
+      {vehicleInteraction && onVehicleInteract && tap('door', 'Enter vehicle', onVehicleInteract, false, 'touch-door')}
       {armed && tap('aim', aiming ? 'Aim on' : 'Aim', () => callbacks.current.onInput('aim', !aiming, 'aim-toggle'), aiming, 'touch-aim')}
       {hold('jump', 'jump', 'Jump', 'touch-jump')}
       {armed ? <>

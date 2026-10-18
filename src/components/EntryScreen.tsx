@@ -63,7 +63,7 @@ async function ensureToken(display: string): Promise<string> {
 
 function errorMessage(error: unknown): string {
   if (error instanceof ApiRequestError && error.status === 404) {
-    return 'The server is running old code (no browser endpoint). Restart it with `npm run dev` in server/ and refresh this page.';
+    return 'The server browser is unavailable. Try again later or join with an invite code.';
   }
   return error instanceof Error ? error.message : 'Could not reach the servers. Please try again.';
 }
@@ -134,12 +134,15 @@ export function EntryScreen(props: Props) {
   const joinDisabled = entering || !canAuth || !CODE_PATTERN.test(props.roomCode.trim().toUpperCase());
 
   return (
-    <div className="world-intro">
+    <div className="world-intro entry-landscape">
       <div className="intro-card" role="form" aria-label="Enter the district">
-        <p className="eyebrow">THE FIRST BLOCK OF SOMETHING BIGGER</p>
-        <h1>OUTSIDE.<br />IS YOURS.</h1>
-        <p className="intro-sub">A living little district, built from simple things.<br />Walk its streets. Meet its rhythm. Find your place.</p>
-
+        <section className="entry-identity" aria-label="Agon">
+          <span className="entry-wordmark">AGON<span> / THE NEIGHBORHOOD</span></span>
+          <div className="entry-title"><p className="eyebrow">THE FIRST BLOCK OF SOMETHING BIGGER</p><h1>OUTSIDE.<br />IS YOURS.</h1><p>A living little district, built from simple things.<br />Walk its streets. Meet its rhythm. Find your place.</p></div>
+          <div className="entry-edition">EXPLORE <span>/</span> F1 CIRCUIT <span>/</span> NO RUSH</div>
+        </section>
+        <section className="entry-form" aria-label="Start a session" aria-busy={entering}>
+        <header className="entry-form-heading"><span>PLAY</span><h2>{tab === 'solo' ? 'Enter the district' : tab === 'host' ? 'Create a session' : 'Find your crew'}</h2></header>
         <div className="mode-tabs" role="tablist" aria-label="Play mode">
           {(['solo', 'host', 'join'] as const).map((t) => (
             <button
@@ -162,7 +165,7 @@ export function EntryScreen(props: Props) {
             maxLength={24}
             autoComplete="off"
             spellCheck={false}
-            placeholder="e.g. Ava"
+            placeholder="Enter player name"
             aria-label="Your display name"
             disabled={entering}
             onChange={(event) => props.onName(event.target.value)}
@@ -272,7 +275,7 @@ export function EntryScreen(props: Props) {
             {roomsError && <p className="form-note" role="alert">{roomsError}</p>}
             {canAuth && !roomsError && rooms.length === 0 && !roomsLoading && (
               <p className="form-note">{lastChecked
-                ? `Checked at ${lastChecked}: no public servers saved in the database. Host one from the HOST tab, then press refresh.`
+                ? 'No public sessions available. Create a session to invite your crew.'
                 : 'No public servers right now — host one from the HOST tab.'}</p>
             )}
             <ul className="server-list" aria-label="Public servers">
@@ -316,7 +319,8 @@ export function EntryScreen(props: Props) {
 
         {tab !== 'solo' && <p className="form-note">Use a different player name for each person joining.</p>}
         {enterNote && <p className="form-note" role="status">{enterNote}</p>}
-        <div className="intro-tags"><span>8 LOCATIONS</span><span>F1 CIRCUIT</span><span>NO RUSH</span></div>
+        {entering && <div className="entry-loading" role="status"><i aria-hidden="true" /><span>Connecting to your world...</span></div>}
+        </section>
       </div>
     </div>
   );

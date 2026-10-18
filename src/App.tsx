@@ -1,5 +1,4 @@
 import { Garage } from './components/Garage';
-import { GARAGE_BAY } from './world/GarageLocation';
 import { readLookSettings } from './game/CameraInput';
 import { VEHICLES } from './world/Vehicles';
 import { GUNS } from './world/Guns';
@@ -92,27 +91,6 @@ export default function App() {
     window.clearTimeout(gunHintTimer.current);
     gunHintTimer.current = window.setTimeout(() => setGunHint(''), 2200);
   };
-  const [gunIntroOff, setGunIntroOff] = useState(false);
-  const dismissGunIntro = () => {
-    setGunIntroOff(true);
-    try { localStorage.setItem('agon-gun-hint', '1'); } catch { /* Optional storage. */ }
-  };
-  const showGunIntro = (() => {
-    if (gunIntroOff || state?.mode !== 'roam' || state?.driving || state?.armed) return false;
-    if (state?.phase !== 'playing' || state?.paused) return false;
-    try { if (localStorage.getItem('agon-gun-hint') === '1') return false; } catch { /* Optional storage. */ }
-    return true;
-  })();
-  const gunIntroTouch = (() => {
-    try {
-      if (matchMedia('(hover: hover) and (pointer: fine)').matches) return false;
-      if (matchMedia('(any-hover: hover) and (any-pointer: fine)').matches) return false;
-      if (matchMedia('(min-width: 1025px), (min-width: 768px) and (min-height: 550px)').matches) return false;
-      return true;
-    } catch {
-      return false;
-    }
-  })();
   const pendingToken = useRef<Session | null>(null);
   const entryLock = useRef(false);
   const restoreTried = useRef(false);
@@ -420,7 +398,7 @@ export default function App() {
     }
   };
   return <main className={`district-shell${fullscreen ? ' is-fullscreen' : ''}`}>
-    <section className={`world-stage${state?.driving ? ' is-driving' : ''}${state?.armed ? ' is-armed' : ''}${engine.current?.raceGuidanceActive ? ' is-racing' : ''}`} aria-label="Open world neighborhood">
+    <section className={`world-stage${menuOpen || mapOpen || garageOpen || physicsOpen || state?.paused ? ' hud-obscured' : ''}${state?.driving ? ' is-driving' : ''}${state?.armed ? ' is-armed' : ''}${engine.current?.raceGuidanceActive ? ' is-racing' : ''}`} aria-label="Open world neighborhood">
       <WorldViewport engineRef={engine} onSnapshot={setState} onMap={toggleMap} theme={theme} weather={weather} season={season} intensity={intensity} quality={quality} portrait={portrait} blocked={mapOpen || physicsOpen || menuOpen || raceOpen || f1RaceOpen || garageOpen}
         onDismissOverlay={() => { if (physicsOpen) setPhysicsOpen(false); else if (menuOpen) { toggleMenu(false); focus(); } else if (mapOpen) toggleMap(); }}
         lookSettings={lookSettings} lookEnabled={active && state?.mode === 'roam'} />
@@ -445,7 +423,8 @@ export default function App() {
         />
       )}
       <div className="canvas-corner">
-        {!ready && state?.mode === 'roam' && !state?.driving && (
+        {!ready && state?.mode === 'roam' && state.driving && engine.current?.race.phase === 'idle' && <button className="control mobile-vehicle-switch" disabled={!active || Math.abs(state.car.speed) > 0.2} onClick={() => { engine.current?.cycleVehicle(); focus(); }} aria-label="Switch vehicle" title={Math.abs(state.car.speed) > 0.2 ? 'Stop to switch vehicle' : 'Switch vehicle'}><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M5 10l2-4h10l2 4M4 10h16v7H4zM7 13h1m8 0h1M6 17v2m12-2v2M3 3h7m-2-2l2 2-2 2M21 21h-7m2-2l-2 2 2 2" /></svg></button>}
+        {!ready && state?.mode === 'roam' && !state?.driving && state?.armed && (
           <WeaponDock
             armed={state?.armed ?? false}
             gunIndex={state?.gunIndex ?? 0}
@@ -460,15 +439,14 @@ export default function App() {
             onDisarm={() => { engine.current?.disarm(); focus(); }}
           />
         )}
-        <button className="control" onClick={enterFullscreen} aria-label={fullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}>⛶</button>
         <button className="control" onClick={() => toggleMenu(true)} aria-label="Open menu" aria-expanded={menuOpen}>☰</button>
       </div>
       {garageOpen && engine.current && <Garage engine={engine.current} onCreateServer={createServerFromSolo} onClose={() => { setGarageOpen(false); if (engine.current) { engine.current.simulation.paused = false; engine.current.setSuspended(false); } focus(); }} />}
-      {!ready && !garageOpen && state?.mode === 'roam' && state.driving && engine.current?.race.phase === 'idle' && <div className="garage-entry">
-        <button disabled={!active} onClick={() => { if (engine.current?.garageAvailable) engine.current.openGarage(); else { engine.current?.waypoint('garage'); setNotice('Apex Motor Works: follow the map to the west avenue. Drive into the open bay and stop.'); } }}>{engine.current?.garageAvailable ? 'E ? ENTER CUSTOM SHOP' : '? APEX GARAGE ? ' + Math.round(Math.hypot(state.car.x - GARAGE_BAY.x, state.car.z - GARAGE_BAY.z)) + ' m'}</button>
-        {Math.hypot(state.car.x - GARAGE_BAY.x, state.car.z - GARAGE_BAY.z) < 15 && !engine.current?.garageAvailable && <small>Stop inside the bay to customize</small>}
-      </div>}
+      {!ready && !garageOpen && state?.mode === 'roam' && state.driving && engine.current?.garageAvailable && <div className="garage-entry"><button disabled={!active} onClick={() => engine.current?.openGarage()}>Enter garage <kbd>E</kbd></button></div>}
       {menuOpen && <GameMenu
+        onGarageRoute={() => { engine.current?.waypoint('garage'); toggleMenu(false); focus(); }}
+        onCycleVehicle={() => engine.current?.cycleVehicle()}
+        onEquip={() => { engine.current?.cycleGun(); toggleMenu(false); focus(); }}
         theme={theme} onTheme={setTheme}
         weather={weather} onWeather={setWeather}
         season={season} onSeason={setSeason}
@@ -505,10 +483,7 @@ export default function App() {
           <button className="control" disabled={entering} onClick={() => { const saved = loadSession(); if (saved) void restoreServer(saved); }}>REJOIN</button>
           <button className="control" disabled={entering} onClick={() => void leaveServer()}>LEAVE SERVER</button>
         </div>}
-        <div className="hud-top" role="status" aria-label="Weather and speed">
-          {state && <div className="hud-weather" role="status" aria-label={`${state.season}${state.weather === 'rain' ? ', raining — slippery roads' : state.weather === 'snow' ? ', snowing — very slippery roads' : ''}`}>{state.season === 'spring' ? '🌸 SPRING' : state.season === 'summer' ? '☀ SUMMER' : state.season === 'autumn' ? '🍂 AUTUMN' : '❄ WINTER'}{state.weather === 'rain' ? ' · 🌧 RAIN' : state.weather === 'snow' ? ' · ❄ SNOW' : ''}</div>}
-          {state?.driving && <div className="hud-speed" aria-label="Speed"><b>{state?.speed ?? 0}<small>KM/H</small></b><span>{VEHICLES[state.vehicleKind].name} · {state.acceleration.toFixed(1)} m/s^2{(state?.damage ?? 0) > 0 ? ` · DMG ${state?.damage}%` : ''}</span><button className="hud-cycle" disabled={!active || Math.abs(state?.car.speed ?? 0) > 0.2} onClick={() => { engine.current?.cycleVehicle(); focus(); }} aria-label="Next vehicle">⇄</button></div>}
-        </div>
+        {state?.driving && !(engine.current?.race.track === 'f1' && engine.current?.race.phase === 'racing') && <div className="hud-speedometer" aria-label={`Speed ${state.speed} kilometers per hour`}><span>{VEHICLES[state.vehicleKind].name}</span><div><b>{state.speed}</b><small>km/h</small></div>{state.damage >= 30 && <small className="hud-damage">Vehicle damage {state.damage}%</small>}{state.blinkerManual && state.blinker !== 0 && <small>{state.blinker === 1 ? 'LEFT' : state.blinker === 2 ? 'RIGHT' : 'HAZARDS'}</small>}</div>}
         {(engine.current?.race.track !== 'f1' || engine.current?.race.phase === 'idle') && <button className="hud-map-br" onClick={toggleMap} aria-label="Open district map"><DistrictMap state={state} theme={theme} raceActive={engine.current?.raceGuidanceActive ?? false} raceTrack={engine.current?.race.track} /></button>}
         {state?.armed && !state?.driving && state?.mode === 'roam' && (
           <div
@@ -532,13 +507,6 @@ export default function App() {
           </div>
         )}
         {gunHint && <div className="gun-hint" role="status">{gunHint}</div>}
-        {showGunIntro && (
-          <div className="gun-intro" role="status">
-            <b>🔫 ARM UP</b>
-            <span>{gunIntroTouch ? 'Tap the weapon dock to arm · FIRE to shoot · AIM to steady' : 'Press G to arm · LMB fire · RMB locks scope · R reload · 1-0 pick'}</span>
-            <button className="control" onClick={dismissGunIntro} aria-label="Dismiss weapon hint">GOT IT</button>
-          </div>
-        )}
         {(state?.wanted ?? 0) > 0 && (
           <div className="hud-wanted" role="status" aria-label={`Wanted level ${state?.wanted} of 5`}>
             {'★'.repeat(Math.min(5, state?.wanted ?? 0))}{'☆'.repeat(5 - Math.min(5, state?.wanted ?? 0))}
@@ -556,7 +524,7 @@ export default function App() {
             <p>the cops impounded your ride…</p>
           </div>
         )}
-        {state?.view === 'first' && <div className="crosshair" aria-hidden="true">+</div>}
+        {state?.view === 'first' && !state.driving && !state.armed && <div className="crosshair" aria-hidden="true">+</div>}
         {state != null && state.pedBloodSeq > 0 && state.time - state.pedBloodAt < 1.5 &&
           <div key={state.pedBloodSeq} className="blood-splash" aria-hidden="true"><div className="blood-splash-drip" /></div>}
         {state?.mode === 'table' && state.table && <div className="tt-score" role="status" aria-label={`Table tennis score you ${state.table.you} AI ${state.table.aiScore}`}>
@@ -576,7 +544,7 @@ export default function App() {
         {state?.mode === 'basket' && <button className="tt-exit" onClick={() => { engine.current?.exitBasket(); focus(); }} aria-label="Exit hoops">✕ EXIT <kbd>X</kbd></button>}
         <div className="context-actions" role="group" aria-label="Nearby interactions">
         {state?.mode === 'roam' && state?.nearHoop && !state?.driving && <button className="interact-button bb-play" onClick={() => { engine.current?.enterBasket(); focus(); }}>SHOOT HOOPS <kbd>E</kbd></button>}
-        {state?.mode !== 'table' && state?.mode !== 'basket' && (state?.nearbyCar || state?.driving || (state?.nearTable && !state?.driving)) && <button className="interact-button" onClick={() => { if (state?.nearTable && !state?.driving) engine.current?.enterTable(); else engine.current?.interact(); focus(); }}>{state.driving ? 'EXIT VEHICLE' : state?.nearTable && !state?.nearbyCar ? 'PLAY TABLE TENNIS' : (state?.enterHint ?? 'DRIVE')} <kbd>E</kbd></button>}
+        {state?.mode !== 'table' && state?.mode !== 'basket' && (state?.nearbyCar || (state?.driving && Math.abs(state.car.speed) < 0.5 && !engine.current?.garageAvailable) || (state?.nearTable && !state?.driving)) && <button className={state?.nearTable && !state.driving ? 'interact-button' : 'interact-button desktop-vehicle-interact'} onClick={() => { if (state?.nearTable && !state?.driving) engine.current?.enterTable(); else engine.current?.interact(); focus(); }}>{state.driving ? 'EXIT VEHICLE' : state?.nearTable && !state?.nearbyCar ? 'PLAY TABLE TENNIS' : (state?.enterHint ?? 'DRIVE')} <kbd>E</kbd></button>}
         {state?.mode === 'roam' && state?.nearArena && engine.current?.race.phase === 'idle' && !raceOpen && (
           <>
 
@@ -644,9 +612,7 @@ export default function App() {
         <F1Hud engine={engine.current} state={state} drsOpen={!!state?.drsOpen} inPitLane={!!state?.inPitLane} racing={engine.current?.race.track === 'f1' && engine.current?.race.phase === 'racing'} />
         <RaceFinishToast engine={engine.current} />
         <RaceResults engine={engine.current} onRematch={() => { const e = engine.current; if (!e || !e.race.isHost) return; e.rematchRace(); focus(); }} onExit={() => { engine.current?.leaveRace(); setRaceOpen(false); setF1RaceOpen(false); focus(); }} />
-        {state?.driving && state?.blinkerManual && (state?.blinker ?? 0) !== 0 && <div className="blinker-hud" role="status" aria-label="Turn signal">{state.blinker === 1 ? '◀ LEFT' : state.blinker === 2 ? 'RIGHT ▶' : '◀ HAZARD ▶'}</div>}
-        {state?.driving && state?.wiperMode !== 'auto' && <div className="blinker-hud" role="status" aria-label={`Wipers ${state?.wiperMode}`}>💧 WIPERS {state?.wiperMode?.toUpperCase()}</div>}
-        {state?.driving && state?.boostEnabled && (
+        {state?.driving && state?.boostEnabled && (state.boosting || state.boost < 99) && (
           <div className={`nitro-bottom${state?.boosting ? ' hot' : ''}${(state?.boost ?? 100) >= 99 && !state?.boosting ? ' full' : ''}`} role="progressbar" aria-label={`Nitro ${state?.boost ?? 100} percent`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={state?.boost ?? 100}>
             <span className="nitro-label" aria-hidden="true">⚡ NITRO</span>
             <div className="nitro-track" aria-hidden="true"><i style={{ width: `${state?.boost ?? 100}%` }} /></div>
@@ -657,7 +623,7 @@ export default function App() {
           ? <TableTennisControls disabled={!active} onSwing={shot => engine.current?.tableSwing(shot)} />
           : state?.mode === 'basket'
           ? <BasketballControls disabled={!active} pumping={state?.basket?.pumping ?? false} onTap={() => engine.current?.basketTap()} />
-          : <WorldControls disabled={!active} driving={state?.driving ?? false} speed={state?.car.speed ?? 0} wiperMode={state?.wiperMode ?? 'auto'} boost={state?.boost ?? 100} boosting={state?.boosting ?? false} racing={state?.boostEnabled ?? false} armed={state?.armed ?? false} aiming={state?.aiming ?? false} onStick={(x, y) => engine.current?.joystick(x, y)} onInput={(action, down, source) => engine.current?.input(action, down, source)} onWipers={() => { engine.current?.cycleWipers(); focus(); }} onReload={() => { engine.current?.reloadGun(); focus(); }} onArm={() => { engine.current?.cycleGun(); focus(); }} onCamera={() => { engine.current?.toggleView(); focus(); }} />}
+          : <WorldControls vehicleInteraction={!!state && !state.dead && (state.driving || (!!state.nearbyCar && !state.nearTable && !state.nearHoop))} onVehicleInteract={() => { engine.current?.interact(); focus(); }} disabled={!active} driving={state?.driving ?? false} speed={state?.car.speed ?? 0} wiperMode={state?.wiperMode ?? 'auto'} boost={state?.boost ?? 100} boosting={state?.boosting ?? false} racing={state?.boostEnabled ?? false} armed={state?.armed ?? false} aiming={state?.aiming ?? false} onStick={(x, y) => engine.current?.joystick(x, y)} onInput={(action, down, source) => engine.current?.input(action, down, source)} onWipers={() => { engine.current?.cycleWipers(); focus(); }} onReload={() => { engine.current?.reloadGun(); focus(); }} onArm={() => { engine.current?.cycleGun(); focus(); }} onCamera={() => { engine.current?.toggleView(); focus(); }} />}
       </>}
       {state?.paused && !mapOpen && !physicsOpen && !menuOpen && <div className="pause-cover"><div><p className="eyebrow">THE CITY CAN WAIT</p><h2>A moment to yourself.</h2><button className="primary-button" onClick={() => { engine.current?.togglePause(); focus(); }}>KEEP EXPLORING <span>→</span></button></div></div>}
       {mapOpen && <WorldMap state={state} raceActive={engine.current?.raceGuidanceActive ?? false} raceTrack={engine.current?.race.track} onClose={() => { toggleMap(); focus(); }} onPlace={id => engine.current?.waypoint(id)} onWaypoint={point => engine.current?.mapWaypoint(point)} />}
