@@ -22,7 +22,7 @@ const LEGACY_OPTIONS = {
 const SERIES = ['street', 'club', 'rally', 'endurance', 'extreme'] as const;
 type WorkshopOption = `${typeof SERIES[number]}-${1 | 2 | 3 | 4}`;
 const upgrades = SERIES.flatMap(series => [1, 2, 3, 4].map(stage => `${series}-${stage}` as WorkshopOption));
-export const PART_OPTIONS = Object.fromEntries(Object.entries(LEGACY_OPTIONS).map(([key, options]) => [key, [...options, ...upgrades]])) as {
+export const PART_OPTIONS = Object.fromEntries(Object.entries(LEGACY_OPTIONS).map(([key, options]) => [key, [...options, ...upgrades]])) as unknown as {
   [K in keyof typeof LEGACY_OPTIONS]: readonly ((typeof LEGACY_OPTIONS)[K][number] | WorkshopOption)[]
 };
 export function partProfile(option: string) {

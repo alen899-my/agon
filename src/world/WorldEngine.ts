@@ -1,3 +1,5 @@
+import { applyCharacterLook, clearCharacterLook } from './CharacterWardrobe';
+import { readCharacterLook } from './CharacterLook';
 import { VEHICLE_KINDS, VEHICLES, type VehicleKind } from './Vehicles';
 import * as THREE from 'three';
 import { RealtimeClient, type RaceDirEntry, type RemoteDot, type RemotePos } from '../api/realtime';
@@ -403,6 +405,7 @@ export class WorldEngine {
     Object.assign(this.sun.shadow.camera, { left: -ext0, right: ext0, top: ext0, bottom: -ext0, near: 1, far: 120 });
     this.sun.shadow.bias = -0.0004; this.sun.shadow.normalBias = 0.1;
     this.avatar = this.kit.stickman(true); this.scene.add(this.avatar.group);
+    window.addEventListener('agon:character', this.refreshCharacterLook);
     // Floating name tag shown above your head while walking (GTA-style player tag).
     this.nameCanvas = document.createElement('canvas'); this.nameCanvas.width = 256; this.nameCanvas.height = 72;
     this.nameTexture = new THREE.CanvasTexture(this.nameCanvas); this.nameTexture.colorSpace = THREE.SRGBColorSpace;
@@ -2399,7 +2402,10 @@ export class WorldEngine {
     this.sceneryVisibility.update(this.camera, QUALITY_VIEW[this.quality], this.sun.castShadow ? 100 : 0);
     this.renderer.render(this.scene, this.camera);
   };
+  private refreshCharacterLook = () => { applyCharacterLook(this.avatar, readCharacterLook()); };
   destroy(): void {
+    window.removeEventListener('agon:character', this.refreshCharacterLook);
+    clearCharacterLook(this.avatar);
     this.agents.dispose();
     for (const p of this.agentPeds.values()) { p.texture.dispose(); (p.tag.material as THREE.Material).dispose(); }
     this.agentPeds.clear();

@@ -1,3 +1,4 @@
+import { CharacterCustomizer } from './CharacterCustomizer';
 import { useCallback, useEffect, useState } from 'react';
 import {
   ApiRequestError,
@@ -319,6 +320,7 @@ export function EntryScreen(props: Props) {
 
         {tab !== 'solo' && <p className="form-note">Use a different player name for each person joining.</p>}
         {enterNote && <p className="form-note" role="status">{enterNote}</p>}
+        {!entering && <details className="entry-character"><summary>Customize character / close</summary><CharacterCustomizer /></details>}
         {entering && <div className="entry-loading" role="status"><i aria-hidden="true" /><span>Connecting to your world...</span></div>}
         </section>
       </div>

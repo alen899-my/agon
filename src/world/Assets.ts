@@ -1,3 +1,5 @@
+import { applyCharacterLook } from './CharacterWardrobe';
+import { readCharacterLook } from './CharacterLook';
 import type { Appearance, BuildSite } from '../../server/src/agents/livingWorld';
 import { type VehicleKind } from './Vehicles';
 import { buildVehicle } from './VehicleFactory';
@@ -155,7 +157,7 @@ export class AssetKit {
       this.mesh(torso, 'box', 'white', 0, 0.35, -0.075, 0.2, 0.3, 0.02);
       this.mesh(head, 'box', 'white', 0, 0.27, -0.08, 0.19, 0.035, 0.13);
     }
-    return { group, hips, torso, head, arms, elbows, legs, knees, feet, animate: s => {
+    const actor: Stickman = { group, hips, torso, head, arms, elbows, legs, knees, feet, animate: s => {
       const I = Math.max(0, Math.min(1.2, s.intensity));
       hips.position.y = 0.95 - s.dip * 0.09;
       if (s.airborne) {
@@ -230,6 +232,8 @@ export class AssetKit {
         }
       }
     } };
+    if (player) applyCharacterLook(actor, readCharacterLook());
+    return actor;
   }
   car(kind: VehicleKind = 'car', _dark = false, variant = 0): Vehicle {
     return buildVehicle(this, kind, variant);

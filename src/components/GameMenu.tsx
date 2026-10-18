@@ -1,3 +1,4 @@
+import { CharacterCustomizer } from './CharacterCustomizer';
 import { useState } from 'react';
 import { DEFAULT_LOOK, type LookSettings } from '../game/CameraInput';
 import type { Theme } from '../game/State';
@@ -5,13 +6,14 @@ import type { WorldSnapshot } from '../world/Simulation';
 import type { IntensityLevel, Season, Weather } from '../world/Weather';
 import type { QualityLevel } from '../world/WorldEngine';
 
-export type MenuTab = 'display' | 'camera' | 'world' | 'game';
+export type MenuTab = 'display' | 'camera' | 'world' | 'game' | 'character';
 
 const TABS: { id: MenuTab; label: string }[] = [
   { id: 'display', label: 'DISPLAY' },
   { id: 'camera', label: 'CAMERA' },
   { id: 'world', label: 'WORLD' },
   { id: 'game', label: 'GAME' },
+  { id: 'character', label: 'CHARACTER' },
 ];
 
 const THEMES: { id: Theme; label: string; icon: string }[] = [
@@ -124,6 +126,7 @@ export function GameMenu(props: Props) {
           ))}
         </div>
         <div className="menu-body" role="tabpanel">
+          {tab === 'character' && <CharacterCustomizer />}
           {tab === 'display' && <>
             <Segmented label="Theme" options={THEMES} value={props.theme} onPick={props.onTheme} namePrefix="theme" />
             <Segmented label="Weather" options={WEATHERS} value={props.weather} onPick={props.onWeather} namePrefix="weather" />
