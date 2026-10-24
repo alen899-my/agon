@@ -67,7 +67,7 @@ export class AssetKit {
       const mesh = new THREE.InstancedMesh(this.geometry[shape], this.materials[material], matrices.length);
       matrices.forEach((matrix, index) => mesh.setMatrixAt(index, matrix));
       // Small / emissive / ground mats never cast (saves a full shadow pass over foliage+windows).
-      mesh.castShadow = !['road', 'pavement', 'glass', 'leaf', 'windowLit', 'lampGlow', 'white'].includes(material);
+      mesh.castShadow = !['road', 'pavement', 'glass', 'leaf', 'windowLit', 'lampGlow', 'white', 'metal'].includes(material);
       mesh.receiveShadow = true;
       mesh.computeBoundingSphere(); scene.add(mesh);
     }
@@ -281,6 +281,25 @@ export function buildMap(scene: THREE.Scene, kit: AssetKit): void {
     box('white', b.x, b.h + 0.15, b.z, b.w + 0.5, 0.3, b.d + 0.5);
     box('ink', b.x, 0.45, b.z, b.w + 0.2, 0.9, b.d + 0.2);
     box('metal', b.x - b.w * 0.22, b.h + 0.65, b.z, 2.8, 1, 2.3);
+    // Parapets, rooftop services and recessed facade joints add architectural depth.
+    for (const side of [-1, 1]) {
+      box('wall2', b.x, b.h + 0.5, b.z + side * (b.d / 2 - 0.15), b.w, 0.7, 0.3);
+      box('wall2', b.x + side * (b.w / 2 - 0.15), b.h + 0.5, b.z, 0.3, 0.7, b.d);
+      for (let y = 6.5; y < b.h - 1; y += 3.7) {
+        box('pavement', b.x, y, b.z + side * (b.d / 2 + 0.07), b.w, 0.13, 0.18);
+        box('pavement', b.x + side * (b.w / 2 + 0.07), y, b.z, 0.18, 0.13, b.d);
+      }
+      for (let x = -b.w / 2 + 2.5; x < b.w / 2 - 1.5; x += 3.8) {
+        for (let y = 3.6; y < b.h - 1; y += 3.7) {
+          box('metal', b.x + x, y, b.z + side * (b.d / 2 + 0.09), 0.055, 2, 0.07);
+          box('metal', b.x + x, y + 0.25, b.z + side * (b.d / 2 + 0.09), 1.7, 0.055, 0.07);
+        }
+      }
+    }
+    for (let vent = 0; vent < 4; vent++) {
+      box('ink', b.x - b.w * 0.22, b.h + 1.16, b.z - 0.75 + vent * 0.5, 2.4, 0.025, 0.12);
+    }
+
     for (const side of [-1, 1]) {
       let row = 0;
       for (let y = 3.6; y < b.h - 1; y += 3.7, row++) {
@@ -339,7 +358,7 @@ export function buildMap(scene: THREE.Scene, kit: AssetKit): void {
   for (const [x, z] of [[-30, 68], [-44, 68], [-60, 68]]) {
     box('wall1', x, 1.5, z, 10, 3, 4); box('white', x, 3.05, z, 10.1, 0.1, 4.1);
   }
-  box('metal', -166, 0.55, 0, 0.3, 1.1, 332);
+  for (const z of [-87, 87]) box('metal', -166, 0.55, z, 0.3, 1.1, 158);
   // Leave both access lanes and their shoulders clear of the old city fence.
   const entranceZ = F1_ACCESS_SAMPLES[0].z;
   const openingHalf = F1_ACCESS_HALF + 3;
@@ -656,13 +675,16 @@ export function buildBasketballCourt(scene: THREE.Scene, kit: AssetKit, box?: (m
   const put = box ?? ((m, x, y, z, w, h, d) => kit.stamp('box', m, x, y, z, w, h, d));
   const cx = hx, cz = hz - 5.2; // court center
   // Asphalt slab + border.
-  put('white', cx, 0.03, cz, 11, 0.08, 13);
-  put('road', cx, 0.06, cz, 10.2, 0.06, 12.2);
-  const ly = 0.1;
+  put('ink', cx, 0.03, cz, 17, 0.08, 16);
+  put('wall1', cx, 0.06, cz, 15, 0.06, 14);
+  // Timber-like alternating strips, painted key and generous sideline runoff.
+  for(let i=0;i<30;i++) put(i%2?'wall1':'wall0',cx-7.25+i*0.5,0.095,cz,0.48,0.008,14);
+  put('glass',cx,0.103,hz-1.6,4.9,0.008,5.2);
+  const ly = 0.12;
   const line = (x: number, z: number, w: number, d: number) => put('white', x, ly, z, w, 0.012, d);
   // Border rect (10.2 x 12.2).
-  line(cx, cz - 6.1 + 0.05, 10.2, 0.1); line(cx, cz + 6.1 - 0.05, 10.2, 0.1);
-  line(cx - 5.1 + 0.05, cz, 0.1, 12.2); line(cx + 5.1 - 0.05, cz, 0.1, 12.2);
+  line(cx, cz - 6.1 + 0.05, 15, 0.1); line(cx, cz + 6.1 - 0.05, 15, 0.1);
+  line(cx - 7.5 + 0.05, cz, 0.1, 12.2); line(cx + 7.5 - 0.05, cz, 0.1, 12.2);
   // Painted key: 4.9 wide from baseline (hz+1) to free-throw line (hz-4.2).
   const base = hz + 1, ft = hz - FREE_THROW_DIST;
   line(cx - 2.45, (base + ft) / 2, 0.1, base - ft); line(cx + 2.45, (base + ft) / 2, 0.1, base - ft);
@@ -671,16 +693,16 @@ export function buildBasketballCourt(scene: THREE.Scene, kit: AssetKit, box?: (m
   line(cx, ft, 5.0, 0.12);
   line(cx, ft - 0.5, 0.3, 0.3);
   // Three-point arc (radius 6.25 from rim) approximated with segments.
-  const R = 6.25;
+  const R = 6.75;
   let prevA = -1.1;
-  for (let i = 1; i <= 10; i++) {
-    const a = -1.1 + (2.2 * i) / 10;
+  for (let i = 1; i <= 32; i++) {
+    const a = -1.1 + (2.2 * i) / 32;
     const x1 = hx + Math.sin(prevA) * R, z1 = hz - Math.cos(prevA) * R;
     const x2 = hx + Math.sin(a) * R, z2 = hz - Math.cos(a) * R;
     const mx = (x1 + x2) / 2, mz = (z1 + z2) / 2;
     const len = Math.hypot(x2 - x1, z2 - z1);
     const yaw = Math.atan2(x2 - x1, z2 - z1);
-    kit.stamp('box', 'white', mx, ly, mz, 0.1, 0.012, len, yaw);
+    kit.stamp('box', 'white', mx, ly, mz, 0.06, 0.012, len, yaw);
     prevA = a;
   }
   // Stanchion pole + arm + backboard (rim itself is dynamic in WorldEngine for shake).
@@ -750,10 +772,19 @@ export function buildGarden(scene: THREE.Scene, kit: AssetKit, box?: (m: Materia
   const put = box ?? ((m, x, y, z, w, h, d) => kit.stamp('box', m, x, y, z, w, h, d));
   // Court apron + surrounding pad.
   put('white', gx, 0.03, gz, 11, 0.08, 9);
-  put('glass', gx, 0.06, gz, 8.4, 0.06, 6.6);
+  put('glass', gx, 0.06, gz, 9.5, 0.06, 10);
+  for(const side of [-1,1]) {
+    put('white',gx+side*4.7,0.1,gz,0.04,0.01,10);
+    put('white',gx,0.1,gz+side*5,9.5,0.01,0.04);
+  }
+  // Shared arena concourse, reception and low seating. Reuses instanced assets.
+  put('pavement',gx-11,0.02,gz+1,8,0.04,27);
+  kit.sign(scene,'AGON GAME ARENA',gx-11,3.8,gz-8,12,0);
+  for(const dx of [-14,-8]) put('ink',gx+dx,1.8,gz-8,0.16,3.6,0.16);
+  for(const z of [-4,1,6]) {put('wall1',gx-11,0.45,gz+z,3,0.9,0.8);put('leaf',gx-14,0.5,gz+z,1,1,1);}
   // Table top: length (2.74) runs along play axis Z, width (1.525) across X.
   // NOTE: TABLE.w = width (X), TABLE.d = length (Z) — matches the physics in TableTennis.ts.
-  put('wall2', gx, TABLE.h - 0.03, gz, TABLE.w, 0.06, TABLE.d);
+  put('glass', gx, TABLE.h - 0.03, gz, TABLE.w, 0.06, TABLE.d);
   // White edge lines + center line (along play axis Z).
   const ly = TABLE.h + 0.005;
   put('white', gx - TABLE.w / 2 + 0.02, ly, gz, 0.04, 0.012, TABLE.d);
@@ -768,7 +799,8 @@ export function buildGarden(scene: THREE.Scene, kit: AssetKit, box?: (m: Materia
   put('metal', gx, TABLE.h - 0.12, gz, TABLE.w - 0.3, 0.06, TABLE.d - 0.4);
   // Net: spans 1.83m across X at z=gz, 15.25cm above table.
   const netTop = TABLE.h + TABLE.netH;
-  put('ink', gx, TABLE.h + TABLE.netH / 2, gz, 1.83, TABLE.netH, 0.02);
+  for(let i=0;i<=36;i++) put('ink',gx-0.915+i*1.83/36,TABLE.h+TABLE.netH/2,gz,0.008,TABLE.netH,0.008);
+  for(let i=0;i<=4;i++) put('ink',gx,TABLE.h+i*TABLE.netH/4,gz,1.83,0.008,0.008);
   put('white', gx, netTop + 0.008, gz, 1.83, 0.016, 0.03);
   for (const sx of [-1, 1]) put('metal', gx + sx * 0.915, TABLE.h + TABLE.netH / 2, gz, 0.03, TABLE.netH + 0.06, 0.03);
   // Low barriers around court (visual only, walk-through).

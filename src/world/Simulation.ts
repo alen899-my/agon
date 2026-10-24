@@ -1,3 +1,4 @@
+import { forestDistance, nearbyForestTrees } from './ForestIsland';
 import { tuning, type VehicleCustomization } from './VehicleCustomization';
 import type { BuiltBox, PedAgent, BuildSite } from '../../server/src/agents/livingWorld';
 import { dialogueLines, type DialogueGenerator } from '../../server/src/agents/dialogueTypes';
@@ -319,6 +320,7 @@ export class Simulation {
   }
   // --- game center: table tennis + basketball modes ---
   mode: PlayMode = 'roam';
+  arenaInput: ((shot?: TTShot) => void) | null = null;
   table = new TableTennisSim();
   basket = new BasketballSim();
   private savedPos = { x: 12, z: 34, yaw: -0.25 };
@@ -378,7 +380,7 @@ export class Simulation {
     return true;
   }
   enterTable(): boolean {
-    if (!this.active || this.driving || this.mode === 'table' || !this.nearTable) return false;
+    if (!this.active || this.driving || this.mode !== 'roam' || !this.nearTable) return false;
     this.mode = 'table';
     this.savedPos = { x: this.x, z: this.z, yaw: this.yaw };
     this.table.reset();
@@ -396,6 +398,7 @@ export class Simulation {
   }
   tableSwing(kind?: TTShot): boolean {
     if (this.mode !== 'table') return false;
+    if (this.arenaInput) { this.arenaInput(kind ?? (this.held('sprint') ? 'smash' : this.held('forward') ? 'topspin' : this.held('back') ? 'chop' : 'drive')); return true; }
     if (kind) return this.table.swingPlayer(kind);
     // Modifier keys decide shot: forward=topspin, back=chop, sprint=smash.
     if (this.held('sprint')) return this.table.swingPlayer('smash');
@@ -571,7 +574,7 @@ export class Simulation {
   /** Inside the F1 pit-lane span (limit + service). */
   inPitLane = false;
   get snapshot(): WorldSnapshot {
-    let location = 'Civic Avenue', best = 23;
+    let location = this.x < -280 ? 'Evergreen Island' : this.x < -160 ? 'Evergreen Sea Bridge' : 'Civic Avenue', best = 23;
     for (const place of PLACES) {
       const distance = Math.hypot(this.x - place.x, this.z - place.z);
       if (distance < best) { best = distance; location = place.name; }
@@ -978,6 +981,25 @@ export class Simulation {
   }
 
   private contact(body: Body, ignore?: TrafficCar, includePlayer = false, y = 0, mired = false): (Contact & { label: string }) | null {
+    if (body.x < -150) {
+      const margin = Math.hypot(body.halfWidth, body.halfLength);
+      const clearance = forestDistance(body.x, body.z);
+      if (clearance < margin) {
+        const gx = forestDistance(body.x + 0.2, body.z) - forestDistance(body.x - 0.2, body.z);
+        const gz = forestDistance(body.x, body.z + 0.2) - forestDistance(body.x, body.z - 0.2);
+        const length = Math.hypot(gx, gz) || 1;
+        return { nx: gx / length, nz: gz / length, depth: margin - clearance, label: 'forest coast' };
+      }
+      for (const tree of nearbyForestTrees(body.x, body.z)) {
+        const hit = circleContact(body, tree.x, tree.z, tree.radius);
+        if (hit) return { ...hit, label: 'tree' };
+      }
+      if (includePlayer) {
+        const hit = bodyContact(body, vehicleBody(this.car.x, this.car.z, this.car.yaw, this.vehicleKind));
+        if (hit) return { ...hit, label: 'player car' };
+      }
+      return null;
+    }
     // Query the same finite wall segments used by the renderer, including real pit ends.
     if (body.x > F1_ORIGIN.x - 350) {
       const wall = f1WallContact(body);
@@ -1095,6 +1117,10 @@ export class Simulation {
     return null;
   }
   private walkBlocked(x: number, z: number, y = this.y): boolean {
+    if (x < -150) return forestDistance(x, z) < 0.5 ||
+      nearbyForestTrees(x, z).some(t => Math.hypot(x - t.x, z - t.z) < t.radius + 0.48) ||
+      !!circleContact(vehicleBody(this.car.x, this.car.z, this.car.yaw, this.vehicleKind), x, z, 0.48);
+
     if (x > 150 && onF1Access(x, z, 8.9)) {
       return !!circleContact(vehicleBody(this.car.x, this.car.z, this.car.yaw, this.vehicleKind), x, z, 0.48) ||
         this.parked.some(p => !!circleContact(vehicleBody(p.x, p.z, p.yaw, p.kind), x, z, 0.48));
@@ -1404,9 +1430,9 @@ export class Simulation {
     if (this.transition > 0) this.transition = Math.max(0, this.transition - dt);
     // Basketball mode: tap-tap power meter (tap to pump, tap again to throw).
     if (this.mode === 'basket') {
-      if (this.jumpPressed) this.basket.pressMeter();
+      if (this.jumpPressed) { if (this.arenaInput) this.arenaInput(); else this.basket.pressMeter(); }
       this.jumpPressed = false;
-      this.basket.update(dt);
+      if (!this.arenaInput) this.basket.update(dt);
       this.syncCrowd(dt);
       return;
     }
@@ -1416,7 +1442,7 @@ export class Simulation {
       this.table.movePlayer(tSide * 3.2 * dt);
       if (this.jumpPressed) this.tableSwing();
       this.jumpPressed = false;
-      this.table.update(dt);
+      if (!this.arenaInput) this.table.update(dt);
       this.syncCrowd(dt);
       return;
     }

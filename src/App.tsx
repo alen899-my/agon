@@ -1,3 +1,4 @@
+import { GameArena } from './components/GameArena';
 import { Garage } from './components/Garage';
 import { readLookSettings } from './game/CameraInput';
 import { VEHICLES } from './world/Vehicles';
@@ -12,7 +13,7 @@ import { WorldViewport } from './components/WorldViewport';
 import { WindshieldRain } from './components/WindshieldRain';
 import { WorldControls } from './components/WorldControls';
 import { TableTennisControls } from './components/TableTennisControls';
-import { BasketballControls } from './components/BasketballControls';
+import { BasketballControls, BasketballHud } from './components/BasketballControls';
 import { DistrictMap, WorldMap } from './components/DistrictMap';
 import { PhysicsChecklist } from './components/PhysicsChecklist';
 import { RaceCountdown, RaceDirectory, RaceFinishToast, RaceLeaderboard, RaceLobby, RaceResults, SoloRaceSetup, F1RaceDirectory, F1SoloSetup, F1Hud } from './components/RaceUI';
@@ -24,7 +25,7 @@ import { clampIntensity, type IntensityLevel, type Season, type Weather } from '
 
 function initialTheme(): Theme {
   try { const saved = localStorage.getItem('agon-theme'); if (saved === 'light' || saved === 'dark' || saved === 'color') return saved; } catch { /* Optional storage. */ }
-  return 'light';
+  return 'color';
 }
 function initialQuality(): QualityLevel {
   try {
@@ -530,21 +531,17 @@ export default function App() {
         {state?.mode === 'table' && state.table && <div className="tt-score" role="status" aria-label={`Table tennis score you ${state.table.you} AI ${state.table.aiScore}`}>
           <div><small>YOU</small><b>{state.table.you}</b>{state.table.server === 'you' && <i>●</i>}</div>
           <div className="tt-mid"><span>{state.table.phase === 'over' ? 'MATCH' : `RALLY ${state.table.rally}`}</span><small>{state.table.ballSpeedKmh} KM/H</small></div>
-          <div><small>AI</small><b>{state.table.aiScore}</b>{state.table.server === 'ai' && <i>●</i>}</div>
+          <div><small>{engine.current?.arenaState ? 'OPPONENT' : 'CPU'}</small><b>{state.table.aiScore}</b>{state.table.server === 'ai' && <i>●</i>}</div>
         </div>}
         {state?.mode === 'table' && state?.table && <div className="tt-message" role="status">{state.table.message}</div>}
-        {state?.mode === 'table' && state?.table?.matchOver && <button className="interact-button" onClick={() => { engine.current?.rematch(); focus(); }}>REMATCH <kbd>R</kbd></button>}
+        {state?.mode === 'table' && state?.table?.matchOver && !engine.current?.arenaState && <button className="interact-button" onClick={() => { engine.current?.rematch(); focus(); }}>REMATCH <kbd>R</kbd></button>}
         {state?.mode === 'table' && <button className="tt-exit" onClick={() => { engine.current?.exitTable(); focus(); }} aria-label="Exit table tennis">✕ EXIT <kbd>X</kbd></button>}
-        {state?.mode === 'basket' && state.basket && <div className="tt-score" role="status" aria-label={`Hoops ${state.basket.makes} of ${state.basket.attempts}`}>
-          <div><small>MAKES</small><b>{state.basket.makes}/{state.basket.attempts}</b></div>
-          <div className="tt-mid"><span>{state.basket.spotLabel}</span><small>STREAK {state.basket.streak} · BEST {state.basket.best}</small></div>
-          <div className="bb-meter" aria-label={`Power ${Math.round(state.basket.power * 100)} percent`}><i style={{ height: `${Math.round(state.basket.power * 100)}%` }} /><em className="bb-green" style={{ bottom: `${Math.round(state.basket.greenLo * 100)}%`, height: `${Math.max(2, Math.round((state.basket.greenHi - state.basket.greenLo) * 100))}%` }} /><span>{Math.round(state.basket.power * 100)}</span></div>
-        </div>}
+        {state?.mode === 'basket' && state.basket && <BasketballHud snapshot={state.basket} />}
         {state?.mode === 'basket' && state?.basket?.message && <div className="tt-message" role="status">{state.basket.message}</div>}
         {state?.mode === 'basket' && <button className="tt-exit" onClick={() => { engine.current?.exitBasket(); focus(); }} aria-label="Exit hoops">✕ EXIT <kbd>X</kbd></button>}
+        <GameArena engine={engine.current} state={state} />
         <div className="context-actions" role="group" aria-label="Nearby interactions">
-        {state?.mode === 'roam' && state?.nearHoop && !state?.driving && <button className="interact-button bb-play" onClick={() => { engine.current?.enterBasket(); focus(); }}>SHOOT HOOPS <kbd>E</kbd></button>}
-        {state?.mode !== 'table' && state?.mode !== 'basket' && (state?.nearbyCar || (state?.driving && Math.abs(state.car.speed) < 0.5 && !engine.current?.garageAvailable) || (state?.nearTable && !state?.driving)) && <button className={state?.nearTable && !state.driving ? 'interact-button' : 'interact-button desktop-vehicle-interact'} onClick={() => { if (state?.nearTable && !state?.driving) engine.current?.enterTable(); else engine.current?.interact(); focus(); }}>{state.driving ? 'EXIT VEHICLE' : state?.nearTable && !state?.nearbyCar ? 'PLAY TABLE TENNIS' : (state?.enterHint ?? 'DRIVE')} <kbd>E</kbd></button>}
+        {state?.mode !== 'table' && state?.mode !== 'basket' && (state?.nearbyCar || (state?.driving && Math.abs(state.car.speed) < 0.5 && !engine.current?.garageAvailable)) && <button className={state?.nearTable && !state.driving ? 'interact-button' : 'interact-button desktop-vehicle-interact'} onClick={() => { if (state?.nearTable && !state?.driving) engine.current?.enterTable(); else engine.current?.interact(); focus(); }}>{state.driving ? 'EXIT VEHICLE' : state?.nearTable && !state?.nearbyCar ? 'PLAY TABLE TENNIS' : (state?.enterHint ?? 'DRIVE')} <kbd>E</kbd></button>}
         {state?.mode === 'roam' && state?.nearArena && engine.current?.race.phase === 'idle' && !raceOpen && (
           <>
 
@@ -620,9 +617,9 @@ export default function App() {
           </div>
         )}
         {state?.mode === 'table'
-          ? <TableTennisControls disabled={!active} onSwing={shot => engine.current?.tableSwing(shot)} />
+          ? <TableTennisControls disabled={!active} snapshot={state?.table ?? null} onAim={aim => engine.current?.tableAim(aim)} onSwing={shot => engine.current?.tableSwing(shot)} />
           : state?.mode === 'basket'
-          ? <BasketballControls disabled={!active} pumping={state?.basket?.pumping ?? false} onTap={() => engine.current?.basketTap()} />
+          ? <BasketballControls disabled={!active || (!!engine.current?.arenaState && (engine.current.arenaState.phase !== 'playing' || engine.current.arenaState.players[engine.current.arenaState.turn]?.id !== engine.current.arenaPlayerId))} snapshot={state?.basket ?? null} online={!!engine.current?.arenaState} onConfigure={(style,aim) => engine.current?.basketConfigure(style,aim)} onChallenge={() => engine.current?.basketChallenge()} onTap={() => engine.current?.basketTap()} />
           : <WorldControls vehicleInteraction={!!state && !state.dead && (state.driving || (!!state.nearbyCar && !state.nearTable && !state.nearHoop))} onVehicleInteract={() => { engine.current?.interact(); focus(); }} disabled={!active} driving={state?.driving ?? false} speed={state?.car.speed ?? 0} wiperMode={state?.wiperMode ?? 'auto'} boost={state?.boost ?? 100} boosting={state?.boosting ?? false} racing={state?.boostEnabled ?? false} armed={state?.armed ?? false} aiming={state?.aiming ?? false} onStick={(x, y) => engine.current?.joystick(x, y)} onInput={(action, down, source) => engine.current?.input(action, down, source)} onWipers={() => { engine.current?.cycleWipers(); focus(); }} onReload={() => { engine.current?.reloadGun(); focus(); }} onArm={() => { engine.current?.cycleGun(); focus(); }} onCamera={() => { engine.current?.toggleView(); focus(); }} />}
       </>}
       {state?.paused && !mapOpen && !physicsOpen && !menuOpen && <div className="pause-cover"><div><p className="eyebrow">THE CITY CAN WAIT</p><h2>A moment to yourself.</h2><button className="primary-button" onClick={() => { engine.current?.togglePause(); focus(); }}>KEEP EXPLORING <span>→</span></button></div></div>}

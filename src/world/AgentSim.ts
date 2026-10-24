@@ -51,6 +51,7 @@ export class AgentSim {
   private now = 0;
   private lastSirenAt = -999;
   private wasSolo = false;
+  private nextSoloTick = 0;
   private serverToken: string | null = null;
   private soloDirector = this.createDirector();
   /** Auth token for solo AI (set by WorldEngine from the login session; null = offline scripted). */
@@ -116,11 +117,16 @@ export class AgentSim {
     const crimes = sim.drainCrimeEvents();
     if (forward) for (const c of crimes) this.outbox.push({ type: c.type, x: c.x, z: c.z });
     if (!solo) { this.wasSolo = false; return; }
-    if (sim.phase !== 'playing' || sim.mode !== 'roam') return;
+    if (!sim.active || sim.mode !== 'roam') return;
     this.now = sim.time * 1000;
-    if (!this.wasSolo) { this.soloDirector.dispose(); this.soloDirector = this.createDirector(); this.wasSolo = true; }
+    if (!this.wasSolo) { this.soloDirector.dispose(); this.soloDirector = this.createDirector(); this.wasSolo = true; this.nextSoloTick = 0; }
     this.soloDirector.setMemberPos('solo', 'You', sim.x, sim.z, sim.driving ? Math.abs(sim.car.speed) : Math.hypot(sim.pvx, sim.pvz), sim.driving);
     for (const crime of crimes) this.soloDirector.reportCrime('solo', 'You', { ...crime, at: this.now });
+    // Keep crime intake immediate; the director integrates elapsed time at 20 Hz.
+    // Rendering interpolates agent positions independently of this snapshot cadence.
+    if (this.nextSoloTick > this.now + 100) this.nextSoloTick = 0;
+    if (this.now < this.nextSoloTick && crimes.length === 0) return;
+    this.nextSoloTick = this.now + 50;
     this.soloDirector.tick();
     this.applyServerState(this.soloDirector.getSnapshot(), 'solo', sim);
     this.soloDirector.world.construction.drainDeltas();

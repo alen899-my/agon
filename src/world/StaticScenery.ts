@@ -10,10 +10,11 @@ export function partitionScenery(root: THREE.Object3D, cellSize = 64): void {
   const color = new THREE.Color();
   for (const source of batches) {
     if (!source.parent) continue;
+    const chunkSize = source.userData.forest ? 48 : cellSize;
     const cells = new Map<string, number[]>();
     for (let i = 0; i < source.count; i++) {
       source.getMatrixAt(i, matrix);
-      const key = Math.floor(matrix.elements[12] / cellSize) + ':' + Math.floor(matrix.elements[14] / cellSize);
+      const key = Math.floor(matrix.elements[12] / chunkSize) + ':' + Math.floor(matrix.elements[14] / chunkSize);
       const bucket = cells.get(key);
       if (bucket) bucket.push(i); else cells.set(key, [i]);
     }
@@ -43,7 +44,7 @@ export function partitionScenery(root: THREE.Object3D, cellSize = 64): void {
  * Simulation/collision data is deliberately independent of rendering.
  */
 export class SceneryVisibility {
-  private readonly entries: { gate: THREE.Group; bounds: THREE.Box3 }[] = [];
+  private readonly entries: { gate: THREE.Group; bounds: THREE.Box3; forest: boolean; casts: boolean }[] = [];
   private readonly frustum = new THREE.Frustum();
   private readonly projection = new THREE.Matrix4();
 
@@ -62,7 +63,7 @@ export class SceneryVisibility {
       parent.add(gate);
       gate.add(mesh);
       gate.updateMatrixWorld(true);
-      this.entries.push({ gate, bounds });
+      this.entries.push({ gate, bounds, forest: !!mesh.userData.forest, casts: mesh.castShadow });
     }
   }
 
@@ -70,14 +71,15 @@ export class SceneryVisibility {
     camera.updateMatrixWorld();
     this.projection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
     this.frustum.setFromProjectionMatrix(this.projection);
-    for (const { gate, bounds } of this.entries) {
+    for (const { gate, bounds, forest, casts } of this.entries) {
       const p = camera.position;
       const dx = Math.max(bounds.min.x - p.x, 0, p.x - bounds.max.x);
       const dy = Math.max(bounds.min.y - p.y, 0, p.y - bounds.max.y);
       const dz = Math.max(bounds.min.z - p.z, 0, p.z - bounds.max.z);
       const rangeSquared = dx * dx + dy * dy + dz * dz;
       // Keep nearby off-screen casters: objects outside the view can cast into it.
-      gate.visible = rangeSquared <= distance * distance && (rangeSquared <= shadowReach * shadowReach || this.frustum.intersectsBox(bounds));
+      const range = forest ? Math.min(distance, 125) : distance;
+      gate.visible = rangeSquared <= range * range && ((casts && rangeSquared <= shadowReach * shadowReach) || this.frustum.intersectsBox(bounds));
     }
   }
 }

@@ -1,3 +1,4 @@
+import { ArenaRoom } from './arena.js';
 import { loadBuildings, saveBuilding } from '../agents/buildings.js';
 import type { WebSocket } from 'ws';
 import {
@@ -76,6 +77,17 @@ function validPos(p: unknown): p is PosPayload {
 }
 
 export class RoomHub {
+  private arenas = new Map<string, ArenaRoom>();
+  onArena(state: MemberState, payload: unknown): void {
+    const code=state.roomCode;
+    if (!code || !state.helloed || this.rooms.get(code)?.get(state.playerId) !== state) return;
+    const now=Date.now(); state.msgStamps=state.msgStamps.filter(t=>now-t<1000);
+    if(state.msgStamps.length>=60) return; state.msgStamps.push(now);
+    let arena=this.arenas.get(code);
+    if(!arena) { arena=new ArenaRoom((id,s)=>{ const peer=this.rooms.get(code)?.get(id); if(peer) send(peer.ws,{t:'arena_state',s}); }, lobbies=>{ for(const peer of this.rooms.get(code)?.values() ?? []) send(peer.ws,{t:'arena_dir',lobbies}); }); this.arenas.set(code,arena); }
+    arena.action(state,payload);
+  }
+
   private readonly pendingHellos = new WeakSet<MemberState>();
   private readonly raceSnapshots = new Map<string, RaceSnapshotMsg>();
   private readonly raceTargets = new Map<string, string>();
@@ -471,6 +483,7 @@ export class RoomHub {
     const code = state.roomCode;
     const room = this.rooms.get(code);
     if (!room || room.get(state.playerId)?.ws !== state.ws) return;
+    this.arenas.get(code)?.leave(state.playerId);
     room.delete(state.playerId);
     this.directors.get(code)?.director.removeMember(state.playerId);
     this.raceSnapshots.delete(state.playerId);
@@ -480,6 +493,7 @@ export class RoomHub {
     const dir = this.raceDir.get(code);
     if (dir?.delete(state.playerId)) this.broadcastRaceDir(code);
     if (room.size === 0) {
+      this.arenas.delete(code);
       this.rooms.delete(code);
       this.raceDir.delete(code);
     } else {

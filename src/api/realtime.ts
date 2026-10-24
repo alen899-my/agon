@@ -1,3 +1,4 @@
+import type { ArenaAction, ArenaLobby, ArenaState } from '../../server/src/shared/arena';
 import type { PedAgent, BuildSite, BuildDelta } from '../../server/src/agents/livingWorld';
 import { realtimeUrl } from './client';
 
@@ -116,6 +117,8 @@ export interface AgentEventMsg {
 }
 
 export interface RealtimeEvents {
+  onArenaState?: (s: ArenaState | null) => void;
+  onArenaDir?: (lobbies: ArenaLobby[]) => void;
   onWelcome: (room: string, you: string, roster: RosterEntry[]) => void;
   onRoster: (roster: RosterEntry[]) => void;
   onPos: (id: string, name: string, pos: RemotePos) => void;
@@ -161,6 +164,8 @@ export class RealtimeClient {
   get connected(): boolean {
     return !!this.ws && this.ws.readyState === WebSocket.OPEN && this.welcomed;
   }
+
+  sendArena(a: ArenaAction): void { if(this.connected) this.ws!.send(JSON.stringify({t:'arena',a})); }
 
   sendPos(pos: RemotePos): void {
     if (this.connected) this.ws!.send(JSON.stringify({ t: 'pos', p: pos }));
@@ -252,6 +257,8 @@ export class RealtimeClient {
         case 'race_dir':
           this.events.onRaceDir?.(message.races as RaceDirEntry[]);
           break;
+        case 'arena_state': this.events.onArenaState?.(message.s as ArenaState | null); break;
+        case 'arena_dir': this.events.onArenaDir?.(message.lobbies as ArenaLobby[]); break;
         case 'dots':
           this.events.onDots(message.players as RemoteDot[]);
           break;

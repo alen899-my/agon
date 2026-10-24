@@ -1,3 +1,4 @@
+import type { ArenaAction, ArenaLobby, ArenaState } from '../shared/arena.js';
 import type { PedAgent, BuildSite, BuildDelta, RideState } from '../agents/livingWorld.js';
 
 export interface RideMsg {
@@ -133,6 +134,7 @@ export interface AgentEventMsg {
 }
 
 export type ClientMessage =
+  | { t: 'arena'; a: ArenaAction }
   | { t: 'hello'; v: number; roomCode: string }
   | { t: 'pos'; p: PosPayload }
   | { t: 'race_state'; s: RaceSnapshotMsg }
@@ -142,6 +144,8 @@ export type ClientMessage =
   | { t: 'ping' };
 
 export type ServerMessage =
+  | { t: 'arena_state'; s: ArenaState | null }
+  | { t: 'arena_dir'; lobbies: ArenaLobby[] }
   | { t: 'welcome'; room: string; you: string; roster: RosterEntry[] }
   | { t: 'roster'; roster: RosterEntry[] }
   | { t: 'pos'; id: string; name: string; p: PosPayload }

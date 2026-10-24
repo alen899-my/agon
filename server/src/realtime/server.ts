@@ -69,6 +69,7 @@ export function attachRealtime(server: HttpServer): RoomHub {
         console.error('[realtime] hello failed', error);
         sendError(ws, 'hello_failed', 'Could not join that server.');
       });
+      else if (message.t === 'arena') hub.onArena(state, message.a);
       else if (message.t === 'pos') hub.onPos(state, message.p);
       else if (message.t === 'race_pos') hub.onRacePos(state, (message as { r: unknown }).r);
       else if (message.t === 'race_state') hub.onRaceState(state, (message as { s: unknown }).s);

@@ -1,3 +1,6 @@
+import { CityVehicleLOD } from './CityVehicleLOD';
+import { buildForestIsland, createSkyEnvironment, upgradeCityMaterials } from './RealisticWorld';
+import type { ArenaAction, ArenaLobby, ArenaState } from '../../server/src/shared/arena';
 import { applyCharacterLook, clearCharacterLook } from './CharacterWardrobe';
 import { readCharacterLook } from './CharacterLook';
 import { VEHICLE_KINDS, VEHICLES, type VehicleKind } from './Vehicles';
@@ -36,7 +39,7 @@ import { CharacterFactory } from './characters/CharacterFactory';
 export type { RacerState };
 
 export type QualityLevel = 'low' | 'balanced' | 'high' | 'ultra';
-const QUALITY_PIXEL: Record<QualityLevel, number> = { low: 1, balanced: 1.25, high: 1.5, ultra: 2 };
+const QUALITY_PIXEL: Record<QualityLevel, number> = { low: 0.85, balanced: 1, high: 1.25, ultra: 1.5 };
 const QUALITY_VIEW: Record<QualityLevel, number> = { low: 150, balanced: 200, high: 250, ultra: 300 };
 const QUALITY_SHADOW: Record<QualityLevel, number> = { low: 512, balanced: 1024, high: 2048, ultra: 2048 };
 /** Effective ghost caps per tier (visual parity on high, cheap on low). */
@@ -181,6 +184,48 @@ export class WorldEngine {
   /** Static paddock spectators: positioned once, cheering every frame. */
   private readonly crowd: { actor: Stickman; phase: number }[] = [];
   /** Private-server presence. Null in solo. Remotes render as ghosts (Phase 4). */
+  private arenaBBSound=0;
+  private arenaTTSound=0;
+  arenaState: ArenaState | null = null;
+  arenaDirectory: ArenaLobby[] = [];
+  get arenaConnected(): boolean { return !!this.realtime?.connected; }
+  get arenaPlayerId(): string { return this.localRaceId; }
+  arenaAction(a: ArenaAction): void {
+    if (a.action !== 'list' && a.action !== 'leave' && this.race.phase !== 'idle') return;
+    this.realtime?.sendArena(a);
+  }
+  private receiveArena(s: ArenaState | null): void {
+    this.arenaState=s;
+    if(!s) {
+      this.arenaBBSound=0;this.arenaTTSound=0;
+      this.simulation.arenaInput=null;
+      this.simulation.exitTable(); this.simulation.exitBasket(); this.emit(); return;
+    }
+    const sim=this.simulation;
+    sim.arenaInput=shot=>{ if(this.arenaState?.phase==='playing') this.arenaAction({action:'shot',shot}); };
+    if(s.phase !== 'lobby' && sim.mode === 'roam') {
+      sim.x=s.game==='table'?GAME_CENTER.x:HOOP.x;
+      sim.z=s.game==='table'?GAME_CENTER.z+3:HOOP.z-4.2;
+      if(s.game==='table') sim.enterTable(); else sim.enterBasket();
+    }
+    if(s.table) {
+      if(s.table.sound && s.table.sound.id!==this.arenaTTSound) {this.simulation.table.events.push(s.table.sound);this.arenaTTSound=s.table.sound.id;}
+      const t=s.table, guest=s.players[1]?.id===this.localRaceId;
+      const flip=(v: {x:number;y:number;z:number})=>guest?{x:-v.x,y:v.y,z:-v.z}:{...v};
+      sim.table.ball=flip(t.ball);
+      sim.table.trail.push({...sim.table.ball});if(sim.table.trail.length>14) sim.table.trail.shift(); sim.table.player=flip(guest?t.ai:t.player); sim.table.ai=flip(guest?t.player:t.ai);
+      sim.table.you=guest?t.aiScore:t.you; sim.table.aiScore=guest?t.you:t.aiScore;
+      sim.table.server=guest?(t.server==='you'?'ai':'you'):t.server;
+      sim.table.vel={x:t.ballSpeedKmh/3.6,y:0,z:0};
+      sim.table.contact=guest?(t.phase==='serve'?(t.server==='ai'?'YOUR SERVE':'RECEIVE SERVE'):t.phase==='rally'?'WATCH THE BOUNCE ? TIME YOUR RETURN':s.message):t.contact;
+      sim.table.phase=t.phase; sim.table.rally=t.rally; sim.table.message=s.phase==='finished'?s.message:s.message.replaceAll('AI','Opponent');
+      sim.table.winner=guest?(t.winner==='you'?'ai':t.winner==='ai'?'you':null):t.winner;
+      sim.table.swingYou=guest?t.swingAi:t.swingYou; sim.table.swingAi=guest?t.swingYou:t.swingAi;
+    }
+    if(s.basket?.sound && s.basket.sound.id!==this.arenaBBSound) {sim.basket.events.push(s.basket.sound);this.arenaBBSound=s.basket.sound.id;}
+    if(s.basket) Object.assign(sim.basket,s.basket,{vel:{x:s.basket.speedKmh/3.6,y:0,z:0},message:s.basket.phase==='done'?s.basket.message:s.message,greenCenter:(s.basket.greenLo+s.basket.greenHi)/2,greenHalf:(s.basket.greenHi-s.basket.greenLo)/2});
+    this.emit();
+  }
   private realtime: RealtimeClient | null = null;
   private realtimeRoom: string | null = null;
   connectionNotice = '';
@@ -275,6 +320,7 @@ export class WorldEngine {
   private readonly _aimScreenVec = new THREE.Vector3();
   private quality: QualityLevel = 'balanced'; private pixelCap = QUALITY_PIXEL.balanced;
   private readonly sceneryVisibility = new SceneryVisibility();
+  private readonly cityVehicleLOD: CityVehicleLOD;
   private nextVehicleSyncAt = 0;
   private readonly liveAgentIds = new Set<string>();
   private readonly liveSiteIds = new Set<string>();
@@ -294,8 +340,10 @@ export class WorldEngine {
       if (!mesh.isMesh) return;
       const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
       for (const material of materials) {
-        const map = (material as THREE.MeshStandardMaterial).map;
-        if (map) this.textureQuality.add(map);
+        const surface = material as THREE.MeshStandardMaterial;
+        for (const map of [surface.map, surface.bumpMap, surface.normalMap, surface.roughnessMap]) {
+          if (map) this.textureQuality.add(map);
+        }
       }
     });
     this.updateTextureQuality();
@@ -376,7 +424,7 @@ export class WorldEngine {
 
   constructor(private canvas: HTMLCanvasElement, private publish: (value: WorldSnapshot) => void) {
     this.lowPower = isLowPowerDevice();
-    const useAA = !this.lowPower;
+    const useAA = false;
     this.renderer = new THREE.WebGLRenderer({
       canvas, antialias: useAA, stencil: false,
       powerPreference: this.lowPower ? 'low-power' : 'high-performance',
@@ -385,14 +433,20 @@ export class WorldEngine {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.05;
-    this.renderer.shadowMap.enabled = !this.lowPower;
-    this.renderer.shadowMap.autoUpdate = true;
+    this.renderer.shadowMap.enabled = false;
+    this.renderer.shadowMap.autoUpdate = false;
     this.renderer.shadowMap.type = this.lowPower ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
-    this.kit = new AssetKit(); buildMap(this.scene, this.kit);
+    this.kit = new AssetKit();
+    upgradeCityMaterials(this.kit);
+    const skyEnvironment = createSkyEnvironment(this.renderer);
+    this.scene.environment = skyEnvironment.texture; this.scene.environmentIntensity = 0.55;
+    this.kit.extra.push(skyEnvironment);
+    buildMap(this.scene, this.kit); buildForestIsland(this.scene, this.kit);
     const garageBuilding = createGarageBuilding(); this.scene.add(garageBuilding.group); this.kit.extra.push(garageBuilding);
-    partitionScenery(this.scene, 48);
+    partitionScenery(this.scene, 80);
     for (const root of this.scene.children) this.prepareScenery(root);
     this.sceneryVisibility.register(this.scene);
+    this.cityVehicleLOD = new CityVehicleLOD(this.scene);
     this.scene.traverse((obj) => {
       if ((obj as THREE.Mesh).userData?.showCarGlow) this.showCarGlows.push(obj as THREE.Mesh);
     });
@@ -400,7 +454,7 @@ export class WorldEngine {
     const initial: QualityLevel = this.lowPower ? 'low' : 'balanced';
     this.quality = initial; this.pixelCap = QUALITY_PIXEL[initial];
     this.updateTextureQuality();
-    this.sun.castShadow = initial !== 'low'; this.sun.shadow.mapSize.set(QUALITY_SHADOW[initial], QUALITY_SHADOW[initial]);
+    this.sun.castShadow = false; this.sun.shadow.mapSize.set(QUALITY_SHADOW[initial], QUALITY_SHADOW[initial]);
     const ext0 = QUALITY_SHADOW_EXTENT[initial];
     Object.assign(this.sun.shadow.camera, { left: -ext0, right: ext0, top: ext0, bottom: -ext0, near: 1, far: 120 });
     this.sun.shadow.bias = -0.0004; this.sun.shadow.normalBias = 0.1;
@@ -684,7 +738,7 @@ export class WorldEngine {
     return this.localRaceId;
   }
   createRace(laps: number, vehicleKind = this.simulation.vehicleKind): boolean {
-    if (!this.realtime?.connected || this.race.phase !== 'idle' || this.simulation.mode !== 'roam') return false;
+    if (this.arenaState || !this.realtime?.connected || this.race.phase !== 'idle' || this.simulation.mode !== 'roam') return false;
     this.raceNotice = '';
     const id = this.ensureRaceId();
     this.race.create(id, this.playerName || 'YOU', vehicleKind, laps, 'city');
@@ -978,6 +1032,8 @@ export class WorldEngine {
       };
       this.cancelRoomJoin = () => done(() => reject(new Error('Server connection cancelled.')));
       const client = new RealtimeClient(token, code, {
+        onArenaState: s => this.receiveArena(s),
+        onArenaDir: lobbies => { this.arenaDirectory=lobbies; this.emit(); },
         onWelcome: (_room, you, roster) => {
           this.connectionNotice = '';
           this.realtimeRoom = code;
@@ -985,6 +1041,7 @@ export class WorldEngine {
           // Stable race id per socket: server player id.
           this.localRaceId = you;
           this.realtime?.requestRaceDir();
+          this.arenaAction({action:'list'});
           this.emit();
           done(resolve);
         },
@@ -1064,6 +1121,7 @@ export class WorldEngine {
         },
         onReconnecting: () => {
           this.connectionNotice = 'Connection interrupted. Reconnecting to your server...';
+          if(this.arenaState) this.receiveArena(null); this.arenaDirectory=[];
           this.realtimeRoom = null; this.realtimeMembers = 0; this.realtimeDots = [];
           this.remotes.clear(); this.race.reset(); this.raceDir = []; this.raceJoinDeadline = 0;
           this.agents.clearRoomState(this.simulation);
@@ -1088,6 +1146,7 @@ export class WorldEngine {
   }
   /** Leaves presence (stays in the world solo). Membership rows are left for REST /leave. */
   leaveRoomSession(): void {
+    if(this.arenaState) this.receiveArena(null); this.arenaDirectory=[];
     this.cancelRoomJoin?.();
     this.connectionNotice = '';
     this.raceJoinDeadline = 0;
@@ -1284,9 +1343,14 @@ export class WorldEngine {
     for (const [id, p] of this.agentPeds) if (!live.has(id)) {
       this.scene.remove(p.actor.group, p.tag); p.texture.dispose(); (p.tag.material as THREE.Material).dispose(); this.agentPeds.delete(id);
     }
+    let created = 0;
+    const agentRange = this.quality === 'low' ? 40 : this.quality === 'balanced' ? 65 : 100;
     for (const p of this.agents.walkers) {
+      const distance = Math.hypot(p.x - sim.x, p.z - sim.z);
       let mesh = this.agentPeds.get(p.id);
+      if (!mesh && (p.hidden || distance >= agentRange || created >= 2)) continue;
       if (!mesh) {
+        created++;
         const actor = this.kit.stickman(false, p.outfit);
         const canvas = document.createElement('canvas'); canvas.width = 256; canvas.height = 72;
         const texture = new THREE.CanvasTexture(canvas);
@@ -1296,14 +1360,15 @@ export class WorldEngine {
         actor.group.position.set(p.x, 0, p.z);
         actor.group.rotation.y = -p.yaw;
       }
-      const distance = Math.hypot(p.x - sim.x, p.z - sim.z);
-      mesh.actor.group.visible = !p.hidden && distance < (this.quality === 'low' ? 90 : 130);
+      mesh.actor.group.visible = !p.hidden && distance < agentRange;
       mesh.tag.visible = !p.hidden && distance < (this.quality === 'low' ? 30 : 50);
       if (!mesh.actor.group.visible) {
+        mesh.actor.group.removeFromParent();
         mesh.actor.group.position.set(p.x, 0, p.z);
         mesh.actor.group.rotation.y = -p.yaw;
         continue;
       }
+      if (!mesh.actor.group.parent) this.scene.add(mesh.actor.group);
       const k = 1 - Math.exp(-dt * 12);
       const oldX = mesh.actor.group.position.x, oldZ = mesh.actor.group.position.z;
       mesh.actor.group.position.x += (p.x - mesh.actor.group.position.x) * k;
@@ -1318,7 +1383,7 @@ export class WorldEngine {
       mesh.tag.scale.set(p.say ? 3.4 : 1.9, p.say ? 0.96 : 0.53, 1);
       const label = p.say || p.name;
       if (label !== mesh.label) { drawNameTag(mesh.canvas, mesh.texture, label, !!p.say); mesh.label = label; }
-      if (distance < 90) mesh.actor.animate({
+      if (distance < 25 || this.renderCount % 2 === 0) mesh.actor.animate({
         phase: p.task === 'dance' || p.task === 'watch' ? sim.time * 3 : mesh.stride, intensity: Math.min(1, mesh.speed / 2), airborne: false,
         dip: p.task === 'build' || p.task === 'repair' ? 0.4 : p.task === 'treat' ? 0.3 : p.task === 'sit' ? 0.8 : 0,
         idle: sim.time,
@@ -1582,13 +1647,23 @@ export class WorldEngine {
   exitToIntro(): void {
     this.leaveRace(); this.clearInput(); this.simulation.exitToIntro(); this.emit();
   }
-  enterTable(): void { if (this.race.phase !== 'idle') return; unlockAudio(); this.simulation.enterTable(); this.lastTTEvents = this.simulation.table.events.length; this.emit(); }
-  rematch(): void { unlockAudio(); this.simulation.table.reset(); this.lastTTEvents = this.simulation.table.events.length; this.emit(); }
-  enterBasket(): void { if (this.race.phase !== 'idle') return; unlockAudio(); this.simulation.enterBasket(); this.lastBBEvents = this.simulation.basket.events.length; this.emit(); }
-  exitBasket(): void { this.simulation.exitBasket(); this.emit(); }
+  enterTable(): void { if (this.arenaState || this.race.phase !== 'idle') return; unlockAudio(); this.simulation.enterTable(); this.lastTTEvents = this.simulation.table.events.length; this.emit(); }
+  rematch(): void { if(this.arenaState) { this.arenaAction({action:'start'}); return; } unlockAudio(); this.simulation.table.reset(); this.lastTTEvents = this.simulation.table.events.length; this.emit(); }
+  enterBasket(): void { if (this.arenaState || this.race.phase !== 'idle') return; unlockAudio(); this.simulation.enterBasket(); this.lastBBEvents = this.simulation.basket.events.length; this.emit(); }
+  exitBasket(): void { if(this.arenaState) this.arenaAction({action:'leave'}); this.simulation.exitBasket(); this.emit(); }
   resetBasket(): void { unlockAudio(); this.simulation.basket.resetStats(); this.lastBBEvents = this.simulation.basket.events.length; this.emit(); }
-  basketTap(): void { unlockAudio(); if (this.simulation.mode === 'basket') this.simulation.basket.pressMeter(); }
-  exitTable(): void { this.simulation.exitTable(); this.emit(); }
+  basketConfigure(style: import('./Basketball').BBStyle, aim:number): void {
+    if(this.arenaState) this.arenaAction({action:'configure',style,aim});
+    else this.simulation.basket.configure(style,aim);
+    this.emit();
+  }
+  basketChallenge(): void { if(!this.arenaState) {this.simulation.basket.startChallenge();this.emit();} }
+  tableAim(aim:number): void {
+    if(this.arenaState) this.arenaAction({action:'configure',aim});
+    this.simulation.table.setAim(aim);this.emit();
+  }
+  basketTap(): void { unlockAudio(); if (this.simulation.mode === 'basket') { if(this.simulation.arenaInput) this.simulation.arenaInput(); else this.simulation.basket.pressMeter(); } }
+  exitTable(): void { if(this.arenaState) this.arenaAction({action:'leave'}); this.simulation.exitTable(); this.emit(); }
   tableSwing(kind?: TTShot): void { this.simulation.tableSwing(kind); }
   setTableX(x: number): void { if (this.simulation.mode === 'table') this.simulation.table.setPlayerX(x); }
   swipeShot(dx: number, dy: number): void {
@@ -1618,7 +1693,7 @@ export class WorldEngine {
   mapWaypoint(point: { x: number; z: number } | null): void {
     if (point && (!Number.isFinite(point.x) || !Number.isFinite(point.z))) return;
     this.simulation.waypoint = null;
-    this.simulation.mapWaypoint = point ? { x: Math.max(-160, Math.min(F1_ORIGIN.x + 300, point.x)), z: Math.max(-180, Math.min(180, point.z)) } : null;
+    this.simulation.mapWaypoint = point ? { x: Math.max(-740, Math.min(F1_ORIGIN.x + 300, point.x)), z: Math.max(-180, Math.min(180, point.z)) } : null;
     this.emit();
   }
   input(action: WorldAction, down: boolean, source: string): void {
@@ -1723,6 +1798,7 @@ export class WorldEngine {
   applyLook(): void {
     const mats = this.kit.materials;
     const night = this._nightFactor;
+    this.scene.environmentIntensity = 0.55 * (1 - night * 0.88);
     const preset = WEATHER_PRESETS[this.weather];
     if (this.theme === 'color') {
       // Real-life palette: asphalt, concrete, brick, glass blue, green trees.
@@ -1730,13 +1806,13 @@ export class WorldEngine {
       mats.pavement.color.setHex(0xb8b2a4);
       mats.white.color.setHex(0xf7f4ec);
       mats.ink.color.setHex(0x22252a);
-      mats.glass.color.setHex(0x5ea9dd);
+      mats.glass.color.setHex(0x66838d);
       mats.glass.roughness = 0.12; mats.glass.metalness = 0.45;
       mats.metal.color.setHex(0x9aa1a9);
-      mats.wall0.color.setHex(0xe4c188);
-      mats.wall1.color.setHex(0xb65a41);
-      mats.wall2.color.setHex(0x6f87a3);
-      mats.leaf.color.setHex(0x43a047);
+      mats.wall0.color.setHex(0xc9c1ae);
+      mats.wall1.color.setHex(0x976f5b);
+      mats.wall2.color.setHex(0x849096);
+      mats.leaf.color.setHex(0x45633b);
       const sky = this.tmpSky.set(0x87bfe8);
       let fogNear = 100, fogFar = 280;
       let sunI = 3, ambI = 1.6, exposure = 1.1;
@@ -1899,16 +1975,20 @@ export class WorldEngine {
   resize(width: number, height: number): void {
     this.lastW = Math.max(1, width); this.lastH = Math.max(1, height);
     const eff = Math.min(window.devicePixelRatio || 1, this.pixelCap) * this.dynScale;
-    this.renderer.setPixelRatio(Math.max(0.75, eff));
+    this.renderer.setPixelRatio(Math.max(0.5, eff));
     this.renderer.setSize(this.lastW, this.lastH, false);
     this.camera.aspect = this.lastW / this.lastH; this.camera.updateProjectionMatrix();
   }
   /** Graphics quality (auto-scaled on weak devices). Live-applied: pixel, shadow, frustum, fog. */
   applyQuality(q: QualityLevel): void {
     this.quality = q; this.pixelCap = QUALITY_PIXEL[q]; this.dynScale = 1;
+    for (const material of Object.values(this.kit.materials)) {
+      const bump = q === 'high' || q === 'ultra' ? material.userData.detailBump ?? null : null;
+      if (material.bumpMap !== bump) { material.bumpMap = bump; material.needsUpdate = true; }
+    }
     this.slowFrames = 0; this.fastFrames = 0;
     this.frameEMA = 16.7; this.lastRenderMs = 0;
-    this.sun.castShadow = q !== 'low';
+    this.sun.castShadow = q === 'high' || q === 'ultra';
     this.renderer.shadowMap.needsUpdate = true;
     this.updateTextureQuality();
     this.precip?.setQuality(q);
@@ -1924,7 +2004,7 @@ export class WorldEngine {
       cam.updateProjectionMatrix();
     }
     this.renderer.shadowMap.type = q === 'low' ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
-    const enable = q !== 'low';
+    const enable = q === 'high' || q === 'ultra';
     if (this.renderer.shadowMap.enabled !== enable) {
       this.renderer.shadowMap.enabled = enable;
       const seen = new Set<THREE.Material>();
@@ -1951,36 +2031,75 @@ export class WorldEngine {
     this.resize(this.lastW, this.lastH);
     this.applyLook();
   }
-  /** Dynamic resolution: hold 50-60fps by scaling pixelRatio 0.75x..1x of the tier cap. */
+  /** Dynamic resolution: hold 50-60fps by scaling pixelRatio 0.55x..1x of the tier cap. */
   private autoResolution(now: number): void {
     if (this.lastRenderMs === 0) { this.lastRenderMs = now; return; }
     const ms = now - this.lastRenderMs;
     this.lastRenderMs = now;
-    if (ms <= 0 || ms > 100) return;
+    if (ms <= 0 || ms > 250 || !this.simulation.active) return;
     this.frameEMA += (ms - this.frameEMA) * 0.06;
-    if (now - this.lastDynAdjust < 1500) return;
-    if (this.frameEMA > 20 && this.dynScale > 0.75) {
+    if (now - this.lastDynAdjust < 1000) return;
+    if (this.frameEMA > 19 && this.dynScale > 0.55) {
       this.slowFrames++;
       this.fastFrames = 0;
       if (this.slowFrames >= 2) {
         this.slowFrames = 0; this.lastDynAdjust = now;
-        this.dynScale = Math.max(0.75, this.dynScale - 0.15);
+        this.dynScale = Math.max(0.55, this.dynScale - 0.1);
         this.resize(this.lastW, this.lastH);
       }
-    } else if (this.frameEMA < 12 && this.dynScale < 1) {
+    } else if (this.frameEMA < 17.2 && this.dynScale < 1) {
       this.fastFrames++;
       this.slowFrames = 0;
-      if (this.fastFrames >= 8) {
+      if (this.fastFrames >= 180) {
         this.fastFrames = 0; this.lastDynAdjust = now;
-        this.dynScale = Math.min(1, this.dynScale + 0.1);
+        this.dynScale = Math.min(1, this.dynScale + 0.05);
         this.resize(this.lastW, this.lastH);
       }
     } else { this.slowFrames = 0; this.fastFrames = 0; }
+  }
+  private readonly forestFogColor = new THREE.Color(0x283b38);
+  private readonly savedFogColor = new THREE.Color();
+  private readonly savedSkyColor = new THREE.Color();
+  private forestBlend = 0;
+  /** Apply the forest atmosphere only for this draw, leaving weather state intact. */
+  private drawScene(): void {
+    this.cityVehicleLOD.flush();
+    const x = this.camera.position.x;
+    const target = THREE.MathUtils.smoothstep(-x, 275, 345);
+    this.forestBlend += (target - this.forestBlend) * 0.045;
+    const blend = this.forestBlend;
+    const fog = this.scene.fog instanceof THREE.Fog ? this.scene.fog : null;
+    const sky = this.scene.background instanceof THREE.Color ? this.scene.background : null;
+    const near = fog?.near ?? 0, far = fog?.far ?? 0;
+    const exposure = this.renderer.toneMappingExposure, ambient = this.ambient.intensity;
+    const sunlight = this.sun.intensity, environment = this.scene.environmentIntensity;
+    if (fog) {
+      this.savedFogColor.copy(fog.color); fog.color.lerp(this.forestFogColor, blend);
+      fog.near = THREE.MathUtils.lerp(near, Math.min(near, 20), blend);
+      fog.far = THREE.MathUtils.lerp(far, Math.min(far, 112), blend);
+    }
+    if (sky) { this.savedSkyColor.copy(sky); sky.lerp(this.forestFogColor, blend); }
+    this.renderer.toneMappingExposure *= 1 - blend * 0.19;
+    this.ambient.intensity *= 1 - blend * 0.32;
+    this.sun.intensity *= 1 - blend * 0.72;
+    this.scene.environmentIntensity *= 1 - blend * 0.55;
+    const shadowStride = this.quality === 'ultra' ? 1 : 2;
+    this.renderer.shadowMap.needsUpdate ||= this.sun.castShadow && this.renderCount % shadowStride === 0;
+    const view = QUALITY_VIEW[this.quality] * (0.8 + this.dynScale * 0.2);
+    this.sceneryVisibility.update(this.camera, view, this.sun.castShadow ? 55 : 0);
+    try { this.renderer.render(this.scene, this.camera); }
+    finally {
+      if (fog) { fog.color.copy(this.savedFogColor); fog.near = near; fog.far = far; }
+      if (sky) sky.copy(this.savedSkyColor);
+      this.renderer.toneMappingExposure = exposure; this.ambient.intensity = ambient;
+      this.sun.intensity = sunlight; this.scene.environmentIntensity = environment;
+    }
   }
   private render = (alpha: number): void => {
     if (this.disposed) return;
     this.autoResolution(performance.now());
     this.renderCount++;
+    this.cityVehicleLOD.begin(this.quality === 'low' ? 4 : this.quality === 'balanced' ? 8 : 16);
     const sim = this.simulation; if (!sim.active) alpha = 1;
     const raceGuidance = this.raceGuidanceActive;
     if (raceGuidance && this.race.track === 'city' && !this.raceRoute) {
@@ -2086,13 +2205,15 @@ export class WorldEngine {
     for (const [i, door] of this.car.doors.entries()) door.rotation.y = (i === 0 ? 1 : -1) * doorOpen;
     // Ped + traffic + parked positions are owned by the simulation (braking / collisions).
     // Distance-skip: far peds keep position but skip skeletal animate (cheap LOD).
-    const cullDist = this.quality === 'low' ? 70 : 110;
+    const cullDist = this.quality === 'low' ? 40 : this.quality === 'balanced' ? 65 : 100;
     const px = sim.driving ? sim.car.x : sim.x, pz = sim.driving ? sim.car.z : sim.z;
     this.people.forEach((person, i) => {
       const point = sim.peds[i]; if (!point) return;
       const dx = point.x - px, dz = point.z - pz;
       const far = dx * dx + dz * dz > cullDist * cullDist;
       person.actor.group.visible = !far;
+      if (far) person.actor.group.removeFromParent();
+      else if (!person.actor.group.parent) this.scene.add(person.actor.group);
       if (point.say && !person.tag) {
         person.canvas = document.createElement('canvas'); person.canvas.width = 256; person.canvas.height = 72;
         person.texture = new THREE.CanvasTexture(person.canvas);
@@ -2109,11 +2230,11 @@ export class WorldEngine {
       if (point.ragdoll) {
         person.actor.group.position.set(point.x, 0.08 + point.ry, point.z);
         person.actor.group.rotation.set(point.rpitch, -point.rollYaw, 0, 'YXZ');
-        if (!far) person.actor.animate({ phase: point.phase, intensity: 0, airborne: point.ry > 0.05, dip: 0, idle: sim.time + i * 1.7 });
+        if (!far && (dx * dx + dz * dz < 625 || this.renderCount % 2 === 0)) person.actor.animate({ phase: point.phase, intensity: 0, airborne: point.ry > 0.05, dip: 0, idle: sim.time + i * 1.7 });
       } else {
         person.actor.group.position.set(point.x, 0.08, point.z);
         person.actor.group.rotation.set(0, -point.yaw, 0);
-        if (!far) person.actor.animate({ phase: point.phase, intensity: point.move, airborne: false, dip: 0, idle: sim.time + i * 1.7, activity: point.activity });
+        if (!far && (dx * dx + dz * dz < 625 || this.renderCount % 2 === 0)) person.actor.animate({ phase: point.phase, intensity: point.move, airborne: false, dip: 0, idle: sim.time + i * 1.7, activity: point.activity });
       }
     });
     // Render the barrel state computed by fixed-step physics.
@@ -2127,12 +2248,17 @@ export class WorldEngine {
 
     // Paddock crowd: movie street-racing crowd cheering (excited jumping, waving arms overhead)
     const arenaDist = Math.hypot(px - RACE_ARENA.x, pz - RACE_ARENA.z);
-    for (const fan of this.crowd) fan.actor.group.visible = arenaDist < cullDist;
+    const crowdRange = this.quality === 'low' ? 30 : this.quality === 'balanced' ? 45 : 70;
+    for (const fan of this.crowd) {
+      fan.actor.group.visible = arenaDist < crowdRange;
+      if (!fan.actor.group.visible) fan.actor.group.removeFromParent();
+      else if (!fan.actor.group.parent) this.scene.add(fan.actor.group);
+    }
     const nearArena = arenaDist < 36;
     const isRacing = this.race.phase === 'countdown' || this.race.phase === 'racing';
     const cheerLevel = isRacing ? 1.0 : nearArena ? 0.85 : 0.45;
     // Far crowd: animate at 1/3 rate (same look nearby, ~66% cheaper far away).
-    const crowdTick = arenaDist < cullDist && (nearArena || isRacing || this.renderCount % 3 === 0);
+    const crowdTick = arenaDist < crowdRange && this.renderCount % (nearArena || isRacing ? 2 : 4) === 0;
     if (crowdTick) {
       for (let i = 0; i < this.crowd.length; i++) {
         const fan = this.crowd[i];
@@ -2153,7 +2279,8 @@ export class WorldEngine {
     this.traffic.forEach((vehicle, i) => {
       const p = sim.traffic[i]; if (!p) { vehicle.group.visible = false; return; }
       const tdx = p.x - px, tdz = p.z - pz;
-      if (tdx * tdx + tdz * tdz > vehCull2) { vehicle.group.visible = false; return; }
+      if (tdx * tdx + tdz * tdz > vehCull2) { this.cityVehicleLOD.hide(vehicle); return; }
+      if (!this.cityVehicleLOD.show(vehicle, p.kind, p.x, p.z, p.yaw, tdx * tdx + tdz * tdz, this.quality === 'low' ? 24 : this.quality === 'balanced' ? 38 : 60)) return;
       vehicle.group.visible = true;
       vehicle.group.position.set(p.x, 0.08, p.z); vehicle.group.rotation.y = -p.yaw;
       vehicle.update(p.speed, p.steer, dt, p.braking, undefined, 0, sim.time, wiperAngle(sim.time + i * 0.53, this.intensity) * (sim.weather === 'rain' ? 1 : 0));
@@ -2162,7 +2289,8 @@ export class WorldEngine {
     this.parked.forEach((vehicle, i) => {
       const p = sim.parked[i]; if (!p) { vehicle.group.visible = false; return; }
       const pdx = p.x - px, pdz = p.z - pz;
-      if (pdx * pdx + pdz * pdz > vehCull2) { vehicle.group.visible = false; return; }
+      if (pdx * pdx + pdz * pdz > vehCull2) { this.cityVehicleLOD.hide(vehicle); return; }
+      if (!this.cityVehicleLOD.show(vehicle, p.kind, p.x, p.z, p.yaw, pdx * pdx + pdz * pdz, this.quality === 'low' ? 20 : this.quality === 'balanced' ? 30 : 50)) return;
       vehicle.group.visible = true;
       vehicle.group.position.set(p.x, 0.08, p.z); vehicle.group.rotation.y = -p.yaw;
     });
@@ -2219,14 +2347,10 @@ export class WorldEngine {
       }
     }
     // Table tennis sounds: play only fresh sim events.
-    const evts = sim.table.events;
-    if (evts.length !== this.lastTTEvents) {
-      for (let i = this.lastTTEvents; i < evts.length; i++) {
-        const e = evts[i];
-        if (e.kind === 'paddle' || e.kind === 'serve' || e.kind === 'table' || e.kind === 'net' || e.kind === 'edge' || e.kind === 'smash' || e.kind === 'topspin' || e.kind === 'point') ttSound(e.kind, e.speedKmh);
-      }
-      this.lastTTEvents = evts.length;
+    for(const e of sim.table.events.splice(0)) {
+      if(sim.mode==='table') ttSound(e.kind,e.speedKmh);
     }
+    this.lastTTEvents=0;
     // Table tennis actors: ball, paddles, trail, player + AI placement.
     const inTable = sim.mode === 'table';
     this.ttBall.visible = inTable; this.ttPaddleYou.visible = inTable; this.ttPaddleAi.visible = inTable; this.ttTrail.visible = inTable;
@@ -2255,20 +2379,17 @@ export class WorldEngine {
     }
     // Basketball sounds + actors.
     const inBasket = sim.mode === 'basket';
-    const bbEvts = sim.basket.events;
-    if (bbEvts.length !== this.lastBBEvents) {
-      for (let i = this.lastBBEvents; i < bbEvts.length; i++) {
-        const e = bbEvts[i];
-        bbSound(e.kind, e.speedKmh);
-      }
-      this.lastBBEvents = bbEvts.length;
-    }
-    this.bbBall.visible = inBasket; this.bbRim.visible = inBasket; this.bbNet.visible = inBasket;
+    for(const e of sim.basket.events.splice(0)) {if(inBasket) bbSound(e.kind,e.speedKmh);}
+    this.lastBBEvents=0;
+    this.bbBall.visible = inBasket; this.bbRim.visible = true; this.bbNet.visible = true;
     if (inBasket) {
       const b = sim.basket;
-      this.bbBall.position.set(HOOP.x + b.ball.x, b.ball.y, HOOP.z + b.ball.z);
-      this.bbBall.rotation.x += Math.max(0.02, b.snapshot.speedKmh * 0.002);
-      this.bbBall.rotation.z -= Math.max(0.01, b.snapshot.speedKmh * 0.001);
+      this.desired.set(HOOP.x+b.ball.x,b.ball.y,HOOP.z+b.ball.z);
+      if(this.arenaState && this.bbBall.position.distanceToSquared(this.desired)<16) this.bbBall.position.lerp(this.desired,1-Math.exp(-dt*30));
+      else this.bbBall.position.copy(this.desired);
+      const spinSpeed=Math.hypot(b.vel.x,b.vel.y,b.vel.z);
+      this.bbBall.rotation.x += dt * spinSpeed * 0.8;
+      this.bbBall.rotation.z -= dt * spinSpeed * 0.3;
       // Rim shake on contact, net sway on swish.
       this.bbRim.position.set(
         HOOP.x + Math.sin(sim.time * 55) * 0.03 * b.rimShake,
@@ -2305,11 +2426,12 @@ export class WorldEngine {
       const s = sim.basket.spot;
       const sd = Math.max(0.5, Math.hypot(s.x, s.z));
       const cd = sd + 2.2;
-      this.camera.position.set(HOOP.x + (s.x / sd) * cd, 2.0, HOOP.z + (s.z / sd) * cd);
-      this.target.set(HOOP.x, 2.5, HOOP.z);
+      this.camera.position.set(HOOP.x + (s.x / sd) * cd + (-s.z/sd)*0.85, 2.25, HOOP.z + (s.z / sd) * cd + (s.x/sd)*0.85);
+      const lift=sim.basket.phase==='flight'?Math.min(0.6,Math.max(0,sim.basket.ball.y-3)*0.15):0;
+      this.target.set(HOOP.x, 2.5+lift, HOOP.z);
       this.camera.lookAt(this.target);
       this.sun.position.set(HOOP.x + 20, 65, HOOP.z + 15); this.sun.target.position.set(HOOP.x, 0, HOOP.z); this.sun.target.updateMatrixWorld();
-      this.renderer.render(this.scene, this.camera);
+      this.drawScene();
       return;
     }
     if (inTable) {
@@ -2329,7 +2451,7 @@ export class WorldEngine {
       this.ttPaddleYou.lookAt(this.camera.position);
       this.ttPaddleYou.rotateX(-0.35 - t.swingYou * 0.9);
       this.sun.position.set(gx + 20, 65, gz + 15); this.sun.target.position.set(gx, 0, gz); this.sun.target.updateMatrixWorld();
-      this.renderer.render(this.scene, this.camera);
+      this.drawScene();
       return;
     }
     if (sim.phase === 'ready') {
@@ -2399,8 +2521,7 @@ export class WorldEngine {
       }
     }
     this.sun.position.set(x + 35, 65, z + 25); this.sun.target.position.set(x, 0, z); this.sun.target.updateMatrixWorld();
-    this.sceneryVisibility.update(this.camera, QUALITY_VIEW[this.quality], this.sun.castShadow ? 100 : 0);
-    this.renderer.render(this.scene, this.camera);
+    this.drawScene();
   };
   private refreshCharacterLook = () => { applyCharacterLook(this.avatar, readCharacterLook()); };
   destroy(): void {
@@ -2424,7 +2545,7 @@ export class WorldEngine {
     this.scene.traverse(object => { if (object instanceof THREE.InstancedMesh) object.dispose(); });
     this.marker.geometry.dispose(); (this.marker.material as THREE.Material).dispose();
     this.nameTexture.dispose(); (this.nameTag.material as THREE.Material).dispose();
-    this.skids.dispose(); this.vehicleAudio.dispose();
+    this.cityVehicleLOD.dispose(); this.skids.dispose(); this.vehicleAudio.dispose();
     stopRainLoop();
     this.precip?.dispose(); this.precip = null;
     for (const s of this.glowSprites) { this.scene.remove(s); (s.material as THREE.Material).dispose(); }

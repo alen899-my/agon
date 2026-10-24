@@ -37,10 +37,10 @@ export function WorldMap({ state, raceActive, raceTrack, onClose, onPlace, onWay
   const active = mapDestination(state);
   const places = PLACES.filter(p => isVisiblePlace(p.category, filter) && `${p.name} ${p.category}`.toLowerCase().includes(query.toLowerCase()));
   useEffect(() => { const previous = document.activeElement as HTMLElement | null; close.current?.focus(); return () => previous?.focus(); }, []);
-  const changeView = (v: MapView) => setView({ x: Math.max(-250, Math.min(1050, v.x)), z: Math.max(-300, Math.min(300, v.z)), scale: Math.max(0.35, Math.min(8, v.scale)) });
+  const changeView = (v: MapView) => setView({ x: Math.max(-780, Math.min(1050, v.x)), z: Math.max(-300, Math.min(300, v.z)), scale: Math.max(0.35, Math.min(8, v.scale)) });
   const overview = () => {
     const bounds = canvasArea.current?.getBoundingClientRect();
-    setView({ x: 382, z: 10, scale: Math.max(0.35, Math.min((bounds?.width ?? 800) / 1170, (bounds?.height ?? 500) / 440)) });
+    setView({ x: 140, z: 10, scale: Math.max(0.35, Math.min((bounds?.width ?? 800) / 1900, (bounds?.height ?? 500) / 440)) });
   };
   return <div className="atlas-overlay" ref={sheet} role="dialog" aria-modal="true" aria-labelledby="atlas-title" onKeyDown={event => {
     event.stopPropagation();

@@ -1,3 +1,4 @@
+import { forestHeight, onForestRoad } from './ForestIsland';
 export { BUILD_LOTS } from '../../server/src/agents/livingWorld';
 import { VEHICLES, VEHICLE_KINDS, type VehicleKind } from './Vehicles';
 import { F1_HALF, F1_ORIGIN, F1_PORTAL_CITY, f1HeightAt, f1OnTrack } from './F1Track';
@@ -31,11 +32,13 @@ export const ROAD_HALF = 8.5;
 export const RACE_CLEARANCE = 11;
 /** True when (x,z) sits on any road band (centerlines ROADS, half-width half). */
 export function onRoad(x: number, z: number, half = ROAD_HALF): boolean {
+  if (x < -150) return onForestRoad(x, z, half);
   if (onF1Access(x, z, half)) return true;
   if (x > LIMIT) return onF1Track(x, z);
   return ROADS.some((line) => Math.abs(x - line) < half || Math.abs(z - line) < half);
 }
 export const PLACES: Place[] = [
+  { id: 'forest', name: 'Evergreen Island', category: 'FOREST', x: -350, z: 0, description: 'Cross the west sea bridge to Darkwood Loop: a continuous two-lane circuit beneath dense, looming forest.' },
   { id: 'garage', name: 'Apex Motor Works', category: 'GARAGE', x: -118, z: -14, description: 'Drive into the west workshop. Paint, parts, performance and sound. Save your build for solo and servers.' },
   { id: 'plaza', name: 'Civic Square', category: 'PUBLIC SPACE', x: -27, z: 23, description: 'A quiet square at the heart of the district.' },
   { id: 'market', name: 'Market Street', category: 'SHOPS & CAFÉS', x: 22, z: -12, description: 'Small storefronts, long sidewalks, familiar faces.' },
@@ -43,7 +46,7 @@ export const PLACES: Place[] = [
   { id: 'homes', name: 'The Residences', category: 'NEIGHBORHOOD', x: -42, z: -27, description: 'Apartment blocks around a shared courtyard.' },
   { id: 'station', name: 'South Station', category: 'TRANSIT', x: 42, z: 27, description: 'The beginning of a journey. Platforms open to the sky.' },
   { id: 'works', name: 'The Foundry', category: 'INDUSTRIAL', x: -45, z: 65, description: 'Old workshops at the edge of the neighborhood.' },
-  { id: 'game-center', name: 'Game Center', category: 'SPORTS & ARCADE', x: -22, z: 48, description: 'Table tennis hall. Walk in to play a match.' },
+  { id: 'game-center', name: 'Agon Game Arena', category: 'SPORTS & ARCADE', x: -33, z: 48, description: 'Sports club: table tennis and basketball courts. Practice, host a match or challenge friends on your server.' },
   { id: 'race-arena', name: 'Neon Paddock', category: 'RACING ARENA', x: -45, z: 82, description: 'Tokyo-drift paddock. Host a race, line up 8 cars, run the city loop.' },
   { id: 'harbor', name: 'East Harbor', category: 'DOCKS', x: 108, z: -95, description: 'Warehouses and piers at the edge of the district.' },
   { id: 'heights', name: 'North Heights', category: 'NEIGHBORHOOD', x: -48, z: 105, description: 'New shops and homes above the old blocks.' },
@@ -59,7 +62,7 @@ export const RACE_ARENA = { x: -45, z: 82 };
 /** Game Center court anchor (off-road block between Civic Square and The Foundry). */
 export const GAME_CENTER = { x: -22, z: 48 };
 /** Basketball hoop anchor: side court north of the table hall. Shooter stands ~4.2m south of the rim. */
-export const HOOP = { x: -22, z: 64.5 };
+export const HOOP = { x: -46, z: 64.5 };
 export const FREE_THROW_DIST = 4.2;
 /** Rim/backboard dims in meters. */
 export const RIM = { h: 3.05, r: 0.225, tube: 0.02, boardW: 1.8, boardH: 1.05, boardBottom: 2.9, boardZ: 0.45 };
@@ -77,7 +80,7 @@ export function buildings(): Building[] {
   add(65, -45, 9, 24, 14, 'apartment', 2);
   add(39, 44, 29, 17, 11, 'station', 1, 'SOUTH STATION');
   add(64, 60, 11, 17, 16, 'apartment', 0);
-  add(-45, 53, 30, 18, 12, 'warehouse', 2, 'FOUNDRY');
+  // Former foundry footprint is now the dedicated sports arena.
   add(-65, 28, 12, 18, 8, 'warehouse', 1);
   // Perimeter blocks reuse the same three facade families.
   for (let i = 0; i < 4; i++) {
@@ -190,6 +193,7 @@ function bridgeHeightAt(x: number, z: number): number | null {
  *  feet strolling the promenade below never snap up onto the span.
  *  The F1 circuit east of the city reports its own spline elevation. */
 export function groundHeight(x: number, z: number, y = 0): number {
+  if (x < -160) return forestHeight(x, z);
   const access = f1AccessProgress(x, z);
   if (access.distance <= 10.5) return access.height;
   // Separate F1 island: spline elevation when far east of the city.

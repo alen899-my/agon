@@ -21,14 +21,13 @@ export async function loadGarage(session: Session): Promise<{ records: GarageRec
     const { vehicles } = await getGarage(session.token);
     const map = new Map<VehicleKind, GarageRecord>();
     for (const record of vehicles) if (VEHICLE_KINDS.includes(record.kind) && validCustomization(record.customization)) map.set(record.kind, record);
-    let pending = false;
     for (const record of local.filter(r => r.pending)) {
       try { const saved = await saveGarageVehicle(session.token, record.kind, record.customization); map.set(record.kind, saved.vehicle); }
-      catch { map.set(record.kind, record); pending = true; }
+      catch { map.set(record.kind, record); }
     }
     const records = [...map.values()].sort((a, b) => b.updated_at.localeCompare(a.updated_at));
     writeGarage(session.name, records);
-    return { records, notice: pending ? 'Some builds are saved locally and still need server sync.' : '' };
+    return { records, notice: '' };
   } catch {
     return { records: local, notice: 'Server garage unavailable. Local builds loaded; reconnect to sync.' };
   }
