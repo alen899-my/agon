@@ -51,7 +51,7 @@ export class SceneryVisibility {
   register(root: THREE.Object3D): void {
     root.updateWorldMatrix(true, true);
     const meshes: THREE.Mesh[] = [];
-    root.traverse(object => { if (object instanceof THREE.Mesh) meshes.push(object); });
+    root.traverse(object => { if (object instanceof THREE.Mesh && !object.userData.dynamicScenery) meshes.push(object); });
     for (const mesh of meshes) {
       const parent = mesh.parent;
       if (!parent) continue;

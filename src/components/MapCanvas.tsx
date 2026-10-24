@@ -1,3 +1,4 @@
+import { BEACH_ROAD, BEACH_COAST_ROAD } from '../world/BeachData';
 import { FOREST, FOREST_ROAD_PATHS } from '../world/ForestIsland';
 import { useEffect, useRef, useState } from 'react';
 import { BRIDGE, BUILDINGS, CANAL, PLACES, ROADS, type Point } from '../world/Map';
@@ -96,6 +97,7 @@ export function MapCanvas({ state, mini = false, view = { x: 360, z: 0, scale: 0
       if (!i) ctx.moveTo(point.x, point.y); else ctx.lineTo(point.x, point.y);
     }
     ctx.closePath(); ctx.fillStyle = '#283d2b'; ctx.fill();
+    rect(-622, 140, 224, 98, '#b2a079');
     rect(F1_ORIGIN.x - 290, -145, 580, 330, '#222b27');
     if (!mini) for (let x = -800; x <= 1000; x += 50) line([{ x, z: -250 }, { x, z: 250 }], '#293033', 0.5);
     if (!mini) for (let z = -250; z <= 250; z += 50) line([{ x: -800, z }, { x: 1000, z }], '#293033', 0.5);
@@ -103,7 +105,7 @@ export function MapCanvas({ state, mini = false, view = { x: 360, z: 0, scale: 0
     rect(GARAGE.x - GARAGE.w / 2, GARAGE.z - GARAGE.d / 2, GARAGE.w, GARAGE.d, '#36675b');
     (state?.buildSites ?? []).forEach(b => rect(b.x - b.w / 2, b.z - b.d / 2, b.w, b.d, b.stage === 4 ? '#4b5355' : '#796347'));
     const roads: Point[][] = ROADS.flatMap(r => [[{ x: -160, z: r }, { x: 160, z: r }], [{ x: r, z: -160 }, { x: r, z: 160 }]]);
-    roads.push(F1_ACCESS_SAMPLES, CIRCUIT_POINTS, ...FOREST_ROAD_PATHS);
+    roads.push(F1_ACCESS_SAMPLES, CIRCUIT_POINTS, ...FOREST_ROAD_PATHS, BEACH_ROAD, BEACH_COAST_ROAD);
     roads.forEach(points => line(points, '#111516', Math.max(3, 19 * scale)));
     roads.forEach(points => line(points, '#a9aeae', Math.max(1.5, 13 * scale)));
     rect(CANAL.x0, CANAL.z0, CANAL.x1 - CANAL.x0, CANAL.z1 - CANAL.z0, '#21383f');
@@ -156,7 +158,7 @@ export function MapCanvas({ state, mini = false, view = { x: 360, z: 0, scale: 0
     const point = { x: view.x + (clientX - bounds.left - size.width / 2) / scale, z: view.z + (clientY - bounds.top - size.height / 2) / scale };
     const nearest = PLACES.filter(p => isVisiblePlace(p.category, filter)).sort((a, b) => Math.hypot(a.x - point.x, a.z - point.z) - Math.hypot(b.x - point.x, b.z - point.z))[0];
     if (nearest && Math.hypot(nearest.x - point.x, nearest.z - point.z) * scale < 18) onPick?.(nearest, nearest.id);
-    else onPick?.({ x: Math.max(-740, Math.min(F1_ORIGIN.x + 300, point.x)), z: Math.max(-180, Math.min(180, point.z)) });
+    else onPick?.({ x: Math.max(-740, Math.min(F1_ORIGIN.x + 300, point.x)), z: Math.max(-180, Math.min(260, point.z)) });
   };
   return <canvas ref={ref} className="atlas-canvas" aria-label={mini ? 'Live radar' : 'Interactive city and circuit map'} tabIndex={mini ? -1 : 0}
     onPointerDown={event => { if (mini) return; event.currentTarget.focus(); event.currentTarget.setPointerCapture(event.pointerId); pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY }); gesture.current = { x: event.clientX, y: event.clientY, moved: pointers.current.size > 1 }; }}

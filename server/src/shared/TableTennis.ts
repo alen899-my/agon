@@ -368,14 +368,14 @@ export class TableTennisSim {
       const home = clamp(this.ball.x * 0.25, -0.5, 0.5);
       this.ai.x += clamp(home - this.ai.x, -1.4 * dt, 1.4 * dt);
     }
-    if (this.multiplayer || this.aiCooldown>0 || this.phase==='serve' || this.bouncesThisShot===0) return;
+    if (this.multiplayer || this.aiCooldown>0 || this.phase!=='rally' || this.bouncesThisShot===0) return;
     // Auto swing when close.
     const dx = this.ball.x - this.ai.x, dy = this.ball.y - this.ai.y, dz = this.ball.z - this.ai.z;
-    if (Math.hypot(dx, dy, dz) < 0.95 && this.vel.z < 0.5 && (this.phase === 'rally' || (this.phase === 'serve' && this.server === 'ai'))) {
+    if (Math.hypot(dx, dy, dz) < 0.95 && this.vel.z < 0.5) {
       if (Math.random() < 1-Math.exp(-dt*(14-cfg.react*20))) {
         const high = this.ball.y > 1.25;
         const r = Math.random();
-        const shot: TTShot = this.phase === 'serve' ? 'serve' : high && r < 0.4 ? 'smash' : r < 0.55 ? 'topspin' : r < 0.8 ? 'drive' : 'chop';
+        const shot: TTShot = high && r < 0.4 ? 'smash' : r < 0.55 ? 'topspin' : r < 0.8 ? 'drive' : 'chop';
         if(this.tryHit('ai', shot)) this.aiCooldown=0.18;
       }
     }

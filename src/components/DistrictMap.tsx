@@ -40,7 +40,7 @@ export function WorldMap({ state, raceActive, raceTrack, onClose, onPlace, onWay
   const changeView = (v: MapView) => setView({ x: Math.max(-780, Math.min(1050, v.x)), z: Math.max(-300, Math.min(300, v.z)), scale: Math.max(0.35, Math.min(8, v.scale)) });
   const overview = () => {
     const bounds = canvasArea.current?.getBoundingClientRect();
-    setView({ x: 140, z: 10, scale: Math.max(0.35, Math.min((bounds?.width ?? 800) / 1900, (bounds?.height ?? 500) / 440)) });
+    setView({ x: 140, z: 10, scale: Math.max(0.35, Math.min((bounds?.width ?? 800) / 1900, (bounds?.height ?? 500) / 530)) });
   };
   return <div className="atlas-overlay" ref={sheet} role="dialog" aria-modal="true" aria-labelledby="atlas-title" onKeyDown={event => {
     event.stopPropagation();

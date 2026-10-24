@@ -38,6 +38,7 @@ export function onRoad(x: number, z: number, half = ROAD_HALF): boolean {
   return ROADS.some((line) => Math.abs(x - line) < half || Math.abs(z - line) < half);
 }
 export const PLACES: Place[] = [
+  { id: 'beach', name: 'Sunset Beach', category: 'BEACH', x: -510, z: 182, description: 'Take the south exit from Darkwood Loop to the coastal drive. Waves, loungers, umbrellas and beach volleyball beside the sea.' },
   { id: 'forest', name: 'Evergreen Island', category: 'FOREST', x: -350, z: 0, description: 'Cross the west sea bridge to Darkwood Loop: a continuous two-lane circuit beneath dense, looming forest.' },
   { id: 'garage', name: 'Apex Motor Works', category: 'GARAGE', x: -118, z: -14, description: 'Drive into the west workshop. Paint, parts, performance and sound. Save your build for solo and servers.' },
   { id: 'plaza', name: 'Civic Square', category: 'PUBLIC SPACE', x: -27, z: 23, description: 'A quiet square at the heart of the district.' },

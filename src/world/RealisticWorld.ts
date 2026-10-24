@@ -73,8 +73,7 @@ export function buildForestIsland(scene: THREE.Scene, kit: AssetKit): void {
   const soil = new THREE.MeshStandardMaterial({ color: 0x303d2c, map: soilTexture, roughness: 1 });
   const bark = new THREE.MeshLambertMaterial({ color: 0x423c35 });
   const needles = new THREE.MeshLambertMaterial({ color: 0x233c31 });
-  const water = new THREE.MeshStandardMaterial({ color: 0x244e5e, roughness: 0.28, metalness: 0.25 });
-  kit.extra.push(soilTexture, soil, bark, needles, water);
+  kit.extra.push(soilTexture, soil, bark, needles);
   // Polar rings give the shore a smooth silhouette and keep the road terrain exact.
   const positions: number[] = [], uv: number[] = [], indices: number[] = [];
   const rings = 12, slices = 96;
@@ -92,8 +91,6 @@ export function buildForestIsland(scene: THREE.Scene, kit: AssetKit): void {
   const terrain = new THREE.BufferGeometry(); terrain.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   terrain.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); terrain.setIndex(indices); terrain.computeVertexNormals();
   const land = new THREE.Mesh(terrain, soil); land.receiveShadow = true; scene.add(land); kit.extra.push(terrain);
-  const seaGeo = new THREE.PlaneGeometry(1000, 850);
-  const sea = new THREE.Mesh(seaGeo, water); sea.rotation.x = -Math.PI / 2; sea.position.set(-620, -1.7, 0); scene.add(sea); kit.extra.push(seaGeo);
   const trunkGeometry = new THREE.CylinderGeometry(0.65, 1, 1, 5, 1, true);
   const crownGeometry = new THREE.ConeGeometry(1, 1, 7, 1, true);
   const trunks = new THREE.InstancedMesh(trunkGeometry, bark, FOREST_TREES.length);

@@ -1,3 +1,4 @@
+import { BeachScene } from './Beach';
 import { CityVehicleLOD } from './CityVehicleLOD';
 import { buildForestIsland, createSkyEnvironment, upgradeCityMaterials } from './RealisticWorld';
 import type { ArenaAction, ArenaLobby, ArenaState } from '../../server/src/shared/arena';
@@ -321,6 +322,7 @@ export class WorldEngine {
   private quality: QualityLevel = 'balanced'; private pixelCap = QUALITY_PIXEL.balanced;
   private readonly sceneryVisibility = new SceneryVisibility();
   private readonly cityVehicleLOD: CityVehicleLOD;
+  private readonly beach: BeachScene;
   private nextVehicleSyncAt = 0;
   private readonly liveAgentIds = new Set<string>();
   private readonly liveSiteIds = new Set<string>();
@@ -332,6 +334,7 @@ export class WorldEngine {
   private textureQuality = new Set<THREE.Texture>();
   /** Cache static transforms and improve oblique road texture clarity without postprocessing. */
   private prepareScenery(root: THREE.Object3D, partition = false): void {
+    if (root.userData.dynamicScenery) return;
     if (partition) partitionScenery(root);
     root.traverse(object => {
       object.updateMatrix();
@@ -442,6 +445,7 @@ export class WorldEngine {
     this.scene.environment = skyEnvironment.texture; this.scene.environmentIntensity = 0.55;
     this.kit.extra.push(skyEnvironment);
     buildMap(this.scene, this.kit); buildForestIsland(this.scene, this.kit);
+    this.beach = new BeachScene(this.scene, this.kit);
     const garageBuilding = createGarageBuilding(); this.scene.add(garageBuilding.group); this.kit.extra.push(garageBuilding);
     partitionScenery(this.scene, 80);
     for (const root of this.scene.children) this.prepareScenery(root);
@@ -1693,7 +1697,7 @@ export class WorldEngine {
   mapWaypoint(point: { x: number; z: number } | null): void {
     if (point && (!Number.isFinite(point.x) || !Number.isFinite(point.z))) return;
     this.simulation.waypoint = null;
-    this.simulation.mapWaypoint = point ? { x: Math.max(-740, Math.min(F1_ORIGIN.x + 300, point.x)), z: Math.max(-180, Math.min(180, point.z)) } : null;
+    this.simulation.mapWaypoint = point ? { x: Math.max(-740, Math.min(F1_ORIGIN.x + 300, point.x)), z: Math.max(-180, Math.min(260, point.z)) } : null;
     this.emit();
   }
   input(action: WorldAction, down: boolean, source: string): void {
@@ -2064,8 +2068,9 @@ export class WorldEngine {
   /** Apply the forest atmosphere only for this draw, leaving weather state intact. */
   private drawScene(): void {
     this.cityVehicleLOD.flush();
+    this.beach.update(this.simulation.time, this.camera.position.x, this.camera.position.z, this.quality === 'low', this._nightFactor);
     const x = this.camera.position.x;
-    const target = THREE.MathUtils.smoothstep(-x, 275, 345);
+    const target = THREE.MathUtils.smoothstep(-x, 275, 345) * (1 - THREE.MathUtils.smoothstep(this.camera.position.z, 120, 165));
     this.forestBlend += (target - this.forestBlend) * 0.045;
     const blend = this.forestBlend;
     const fog = this.scene.fog instanceof THREE.Fog ? this.scene.fog : null;

@@ -108,7 +108,7 @@ export class BasketballSim {
       }
       return x;
     };
-    let lo=BB.MIN_SPEED,hi=BB.MIN_SPEED+BB.SPEED_RANGE;
+    let lo: number = BB.MIN_SPEED, hi: number = BB.MIN_SPEED + BB.SPEED_RANGE;
     for(let i=0;i<22;i++) {const mid=(lo+hi)/2;if(range(mid)<distance) lo=mid;else hi=mid;}
     this.greenCenter=clamp(((lo+hi)/2-BB.MIN_SPEED)/BB.SPEED_RANGE,0.05,0.98);
     if(BasketballSim.greenCache.size>=256) BasketballSim.greenCache.clear();

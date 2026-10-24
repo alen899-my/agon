@@ -1,3 +1,4 @@
+import { beachClearing, beachDistance, beachHeight, onBeachRoad } from './BeachData';
 /** One deterministic source for road rendering, traction, navigation and tree clearance. */
 export const FOREST = { x: -510, z: 0, rx: 230, rz: 170, roadHalf: 6, start: -670, end: -150 };
 export const FOREST_LOOP_POINTS = Array.from({ length: 193 }, (_, i) => {
@@ -20,9 +21,10 @@ for (const path of FOREST_ROAD_PATHS) for (let i = 1; i < path.length; i++) {
 }
 export function forestDistance(x: number, z: number): number {
   const island = (1 - Math.hypot((x - FOREST.x) / FOREST.rx, z / FOREST.rz)) * 170;
-  return Math.max(island, Math.min(x + 350, -135 - x, 8 - Math.abs(z)));
+  return Math.max(island, beachDistance(x, z), Math.min(x + 350, -135 - x, 8 - Math.abs(z)));
 }
 export function onForestRoad(x: number, z: number, half = FOREST.roadHalf): boolean {
+  if (onBeachRoad(x, z, half)) return true;
   const segments = roadCells.get(`${Math.floor(x / 24)}:${Math.floor(z / 24)}`);
   if (!segments) return false;
   for (const s of segments) {
@@ -32,14 +34,14 @@ export function onForestRoad(x: number, z: number, half = FOREST.roadHalf): bool
   return false;
 }
 // A flat forest floor keeps the loop and bridge seamlessly drivable.
-export function forestHeight(_x: number, _z: number): number { return 0; }
+export function forestHeight(x: number, z: number): number { return beachHeight(x, z); }
 let seed = 7391;
 const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
 export const FOREST_TREES: { x: number; z: number; height: number; radius: number }[] = [];
 const cells = new Map<string, typeof FOREST_TREES>();
 for (let x = -732; x < -285; x += 5.5) for (let z = -164; z < 164; z += 5.5) {
   const tx = x + random() * 3.5, tz = z + random() * 3.5;
-  if (forestDistance(tx, tz) < 7 || onForestRoad(tx, tz, 8.5)) continue;
+  if (beachClearing(tx, tz) || forestDistance(tx, tz) < 7 || onForestRoad(tx, tz, 8.5)) continue;
   const tree = { x: tx, z: tz, height: 14 + random() * 13, radius: 0.35 + random() * 0.25 };
   FOREST_TREES.push(tree);
   const key = `${Math.floor(tx / 16)}:${Math.floor(tz / 16)}`;

@@ -1,3 +1,5 @@
+import { BEACH_PROPS, BEACH_PALMS } from './BeachData';
+const BEACH_OBSTACLES = [...BEACH_PROPS, ...BEACH_PALMS, { x: -531, z: 215, r: .15 }, { x: -519, z: 215, r: .15 }];
 import { FOREST_TRAFFIC_ROUTE, routeLength, routePoint } from './TrafficRoutes';
 export { routePoint } from './TrafficRoutes';
 import { forestDistance, nearbyForestTrees } from './ForestIsland';
@@ -588,7 +590,7 @@ export class Simulation {
   /** Inside the F1 pit-lane span (limit + service). */
   inPitLane = false;
   get snapshot(): WorldSnapshot {
-    let location = this.x < -280 ? 'Evergreen Island' : this.x < -160 ? 'Evergreen Sea Bridge' : 'Civic Avenue', best = 23;
+    let location = this.x < -398 && this.x > -622 && this.z > 140 ? 'Sunset Beach' : this.x < -280 ? 'Evergreen Island' : this.x < -160 ? 'Evergreen Sea Bridge' : 'Civic Avenue', best = 23;
     for (const place of PLACES) {
       const distance = Math.hypot(this.x - place.x, this.z - place.z);
       if (distance < best) { best = distance; location = place.name; }
@@ -1009,6 +1011,10 @@ export class Simulation {
         const hit = circleContact(body, tree.x, tree.z, tree.radius);
         if (hit) return { ...hit, label: 'tree' };
       }
+      for (const prop of BEACH_OBSTACLES) {
+        const hit = circleContact(body, prop.x, prop.z, prop.r);
+        if (hit) return { ...hit, label: 'beach furniture' };
+      }
       // Forest commuters and parked rides remain solid just like city traffic.
       for (const vehicle of this.traffic) {
         if (vehicle === ignore || Math.abs(vehicle.x - body.x) > 16 || Math.abs(vehicle.z - body.z) > 16) continue;
@@ -1148,6 +1154,7 @@ export class Simulation {
   }
   private walkBlocked(x: number, z: number, y = this.y): boolean {
     if (x < -150) return forestDistance(x, z) < 0.5 ||
+      BEACH_OBSTACLES.some(p => Math.hypot(x - p.x, z - p.z) < p.r + .48) ||
       nearbyForestTrees(x, z).some(t => Math.hypot(x - t.x, z - t.z) < t.radius + 0.48) ||
       !!circleContact(vehicleBody(this.car.x, this.car.z, this.car.yaw, this.vehicleKind), x, z, 0.48) ||
       this.traffic.some(t => Math.abs(t.x - x) < 12 && Math.abs(t.z - z) < 12 && !!circleContact(vehicleBody(t.x, t.z, t.yaw, t.kind), x, z, 0.48)) ||
