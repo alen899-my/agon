@@ -1,3 +1,5 @@
+import { FOREST_TRAFFIC_ROUTE, routeLength, routePoint } from './TrafficRoutes';
+export { routePoint } from './TrafficRoutes';
 import { forestDistance, nearbyForestTrees } from './ForestIsland';
 import { tuning, type VehicleCustomization } from './VehicleCustomization';
 import type { BuiltBox, PedAgent, BuildSite } from '../../server/src/agents/livingWorld';
@@ -18,7 +20,7 @@ import { BasketballSim, type BBSnapshot } from './Basketball';
 export type WorldAction = 'forward' | 'back' | 'left' | 'right' | 'sprint' | 'jump' | 'turnLeft' | 'turnRight' | 'handbrake' | 'signalLeft' | 'signalRight' | 'horn' | 'aim' | 'fire';
 export type View = 'third' | 'first';
 export interface Impact { speed: number; with: string; at: number }
-export interface TrafficCar { kind: VehicleKind; x: number; z: number; yaw: number; speed: number; offset: number; base: number; steer: number; wheelSpin: number; braking: boolean; prevYaw: number; hp: number; burning: boolean; burnT: number }
+export interface TrafficCar { route?: 'city' | 'forest'; kind: VehicleKind; x: number; z: number; yaw: number; speed: number; offset: number; base: number; steer: number; wheelSpin: number; braking: boolean; prevYaw: number; hp: number; burning: boolean; burnT: number }
 export interface ParkedVehicle { customization?: VehicleCustomization; kind: VehicleKind; x: number; z: number; yaw: number; hp?: number; burning?: boolean; burnT?: number }
 /** Map dot for a far-away room member (1 Hz, no full transform). */
 export interface RemoteDot { id: string; x: number; z: number; driving: boolean }
@@ -330,8 +332,17 @@ export class Simulation {
   constructor() {
     const rng = seeded(9001);
     // A living street: 8 looping cars spread evenly over the Grand Circuit.
-    const streetCast: VehicleKind[] = ['coupe', 'taxi', 'crossover', 'coach', 'track', 'raptor', 'patrol', 'wagon'];
+    const streetCast: VehicleKind[] = ['compact', 'taxi', 'crossover', 'shuttle', 'coupe', 'pickup', 'ambulance', 'van'];
     for (let i = 0; i < 8; i++) this.traffic.push({ kind: streetCast[i % streetCast.length], ...routePoint(TRAFFIC_ROUTE, i * TRACK_LENGTH / 8 + 25), speed: 7, offset: i * TRACK_LENGTH / 8 + 25, base: 7, steer: 0, wheelSpin: 0, braking: false, prevYaw: 0, hp: 100, burning: false, burnT: 0 });
+    // Six additional commuters, permanently bounded; no periodic traffic spawning.
+    const forestKinds: VehicleKind[] = ['wagon', 'jeep', 'minivan', 'hatch', 'pickup', 'van'];
+    const forestLength = routeLength(FOREST_TRAFFIC_ROUTE);
+    const offsets = [60, 145, forestLength * 0.34, forestLength * 0.55, forestLength - 310, forestLength - 235];
+    forestKinds.forEach((kind, i) => {
+      const offset = offsets[i], pose = routePoint(FOREST_TRAFFIC_ROUTE, offset);
+      this.traffic.push({ route: 'forest', kind, ...pose, speed: 7, offset, base: 7 + i % 3,
+        steer: 0, wheelSpin: 0, braking: false, prevYaw: pose.yaw, hp: 100, burning: false, burnT: 0 });
+    });
     for (let i = 0; i < 16; i++) {
       const speed = 0.9 + rng() * 0.6;
       this.peds.push({ x: 0, z: 0, yaw: 0, route: PED_ROUTES[i], dist: rng() * 240, speed, phase: rng() * 6.28, seed: rng(), move: 1, cur: speed, scaredUntil: 0, ragdoll: false, ry: 0, rvx: 0, rvz: 0, rvy: 0, rpitch: 0, rpitchRate: 0, rollYaw: 0, hp: 100, dead: false });
@@ -407,27 +418,30 @@ export class Simulation {
     return this.table.swingPlayer('drive');
   }
   get crashed(): boolean { return this.time < this.crashUntil; }
-  private spawnReplacementTraffic(): void {
+  private spawnReplacementTraffic(route: 'city' | 'forest' = 'city'): void {
+    const points = route === 'forest' ? FOREST_TRAFFIC_ROUTE : TRAFFIC_ROUTE;
+    const length = routeLength(points);
     // Keep the street alive after a steal: respawn far from the player so it never pops in.
     const kinds: VehicleKind[] = ['car', 'hatch', 'taxi', 'suv', 'sport', 'muscle', 'super', 'minivan', 'van', 'police', 'ambulance', 'boxTruck',
       'coupe', 'wagon', 'compact', 'esedan', 'crossover', 'shuttle', 'minibus', 'towtruck', 'tanker', 'rally', 'jeep', 'cruiser'];
+    if (route === 'forest') kinds.splice(0, kinds.length, 'wagon', 'jeep', 'minivan', 'hatch', 'pickup', 'van');
     const kind = kinds[Math.floor(((this.time * 13.7) % 1 + 1) % 1 * kinds.length) % kinds.length];
     let best = 0, bestDist = -1;
     for (let k = 0; k < 8; k++) {
-      const offset = ((this.time * 7 + k * 79 + this.traffic.length * 37) % TRACK_LENGTH + TRACK_LENGTH) % TRACK_LENGTH;
-      const p = routePoint(TRAFFIC_ROUTE, offset);
+      const offset = ((this.time * 7 + k * 79 + this.traffic.length * 37) % length + length) % length;
+      const p = routePoint(points, offset);
       const d = Math.hypot(p.x - this.x, p.z - this.z);
       if (d > bestDist) { bestDist = d; best = offset; }
     }
-    const p = routePoint(TRAFFIC_ROUTE, best);
+    const p = routePoint(points, best);
     // While a race is live, never respawn onto the cleared start/grid bubble.
     if (this.raceClearActive && this.nearGridBubble(p.x, p.z, GRID_BUBBLE_RADIUS)) {
-      const shifted = (best + 120) % TRACK_LENGTH;
-      const q = routePoint(TRAFFIC_ROUTE, shifted);
-      this.traffic.push({ kind, x: q.x, z: q.z, yaw: q.yaw, speed: 0, offset: shifted, base: 6 + (shifted % 3), steer: 0, wheelSpin: 0, braking: false, prevYaw: q.yaw, hp: 100, burning: false, burnT: 0 });
+      const shifted = (best + 120) % length;
+      const q = routePoint(points, shifted);
+      this.traffic.push({ route, kind, x: q.x, z: q.z, yaw: q.yaw, speed: 0, offset: shifted, base: 6 + (shifted % 3), steer: 0, wheelSpin: 0, braking: false, prevYaw: q.yaw, hp: 100, burning: false, burnT: 0 });
       return;
     }
-    this.traffic.push({ kind, x: p.x, z: p.z, yaw: p.yaw, speed: 0, offset: best, base: 6 + (best % 3), steer: 0, wheelSpin: 0, braking: false, prevYaw: p.yaw, hp: 100, burning: false, burnT: 0 });
+    this.traffic.push({ route, kind, x: p.x, z: p.z, yaw: p.yaw, speed: 0, offset: best, base: 6 + (best % 3), steer: 0, wheelSpin: 0, braking: false, prevYaw: p.yaw, hp: 100, burning: false, burnT: 0 });
   }
   /**
    * Race-clear mode: empty the paddock show-car row + any vehicle sitting on
@@ -834,7 +848,7 @@ export class Simulation {
       if (!t.burning || t.burnT <= 3) continue;
       this.explodeAt(t.x, 1, t.z);
       this.traffic.splice(this.traffic.indexOf(t), 1);
-      this.spawnReplacementTraffic();
+      this.spawnReplacementTraffic(t.route);
     }
     for (const p of this.parked) if (p.burning) p.burnT = (p.burnT ?? 0) + dt;
     for (const p of [...this.parked]) {
@@ -939,8 +953,9 @@ export class Simulation {
         const t = this.traffic[target.index];
         this.vehicleKind = t.kind;
         this.car = { x: t.x, z: t.z, yaw: t.yaw, speed: 0, steer: 0, wheelSpin: 0, braking: false };
+        const trafficRoute = this.traffic[target.index]?.route;
         this.traffic.splice(target.index, 1);
-        this.spawnReplacementTraffic();
+        this.spawnReplacementTraffic(trafficRoute);
       }
       this.driving = true; this.x = this.car.x; this.z = this.car.z; this.y = this.vy = 0;
       this.yaw = this.car.yaw; this.pitch = 0.12;
@@ -994,9 +1009,24 @@ export class Simulation {
         const hit = circleContact(body, tree.x, tree.z, tree.radius);
         if (hit) return { ...hit, label: 'tree' };
       }
-      if (includePlayer) {
+      // Forest commuters and parked rides remain solid just like city traffic.
+      for (const vehicle of this.traffic) {
+        if (vehicle === ignore || Math.abs(vehicle.x - body.x) > 16 || Math.abs(vehicle.z - body.z) > 16) continue;
+        const hit = bodyContact(body, vehicleBody(vehicle.x, vehicle.z, vehicle.yaw, vehicle.kind));
+        if (hit) return { ...hit, label: 'traffic' };
+      }
+      for (const vehicle of this.parked) {
+        if (Math.abs(vehicle.x - body.x) > 16 || Math.abs(vehicle.z - body.z) > 16) continue;
+        const hit = bodyContact(body, vehicleBody(vehicle.x, vehicle.z, vehicle.yaw, vehicle.kind));
+        if (hit) return { ...hit, label: 'parked car' };
+      }
+      if (includePlayer || !this.driving) {
         const hit = bodyContact(body, vehicleBody(this.car.x, this.car.z, this.car.yaw, this.vehicleKind));
         if (hit) return { ...hit, label: 'player car' };
+        if (includePlayer && !this.driving) {
+          const pedestrian = circleContact(body, this.x, this.z, 0.5);
+          if (pedestrian) return { ...pedestrian, label: 'player' };
+        }
       }
       return null;
     }
@@ -1119,7 +1149,9 @@ export class Simulation {
   private walkBlocked(x: number, z: number, y = this.y): boolean {
     if (x < -150) return forestDistance(x, z) < 0.5 ||
       nearbyForestTrees(x, z).some(t => Math.hypot(x - t.x, z - t.z) < t.radius + 0.48) ||
-      !!circleContact(vehicleBody(this.car.x, this.car.z, this.car.yaw, this.vehicleKind), x, z, 0.48);
+      !!circleContact(vehicleBody(this.car.x, this.car.z, this.car.yaw, this.vehicleKind), x, z, 0.48) ||
+      this.traffic.some(t => Math.abs(t.x - x) < 12 && Math.abs(t.z - z) < 12 && !!circleContact(vehicleBody(t.x, t.z, t.yaw, t.kind), x, z, 0.48)) ||
+      this.parked.some(p => Math.abs(p.x - x) < 12 && Math.abs(p.z - z) < 12 && !!circleContact(vehicleBody(p.x, p.z, p.yaw, p.kind), x, z, 0.48));
 
     if (x > 150 && onF1Access(x, z, 8.9)) {
       return !!circleContact(vehicleBody(this.car.x, this.car.z, this.car.yaw, this.vehicleKind), x, z, 0.48) ||
@@ -1262,7 +1294,13 @@ export class Simulation {
   private syncCrowd(dt: number): void {
     for (const t of this.traffic) {
       let want = t.base;
-      const p = routePoint(TRAFFIC_ROUTE, t.offset);
+      const points = t.route === 'forest' ? FOREST_TRAFFIC_ROUTE : TRAFFIC_ROUTE;
+      const p = routePoint(points, t.offset);
+      if (t.route === 'forest') {
+        const ahead = routePoint(points, t.offset + 8);
+        const turn = Math.abs(Math.atan2(Math.sin(ahead.yaw - p.yaw), Math.cos(ahead.yaw - p.yaw)));
+        if (turn > 0.25) want = Math.min(want, 4);
+      }
       const fx = Math.sin(p.yaw), fz = -Math.cos(p.yaw);
       const clearance = VEHICLES[t.kind].length / 2;
       // Chase & stop: traffic yields to your car AND to you on foot standing in the lane.
@@ -1280,7 +1318,7 @@ export class Simulation {
       t.speed += clamp(want - t.speed, -10 * dt, 4 * dt);
       // Offset is accumulated distance, never elapsed time multiplied by changing speed.
       const nextOffset = t.offset + t.speed * dt;
-      const q = routePoint(TRAFFIC_ROUTE, nextOffset);
+      const q = routePoint(points, nextOffset);
       // While a race is live, hold traffic outside the cleared grid bubble
       // instead of driving through the start line. Everything else flows normally.
       // Both endpoints are checked (no speed gate) so the car stops at the last
@@ -1675,17 +1713,3 @@ export class Simulation {
   }
 }
 
-/** Constant-speed closed routes used by traffic and sidewalk pedestrians. */
-export function routePoint(points: readonly Point[], distance: number): Point & { yaw: number } {
-  const lengths = points.map((p, i) => Math.hypot(points[(i + 1) % points.length].x - p.x, points[(i + 1) % points.length].z - p.z));
-  const total = lengths.reduce((a, b) => a + b, 0);
-  let remaining = ((distance % total) + total) % total;
-  for (let i = 0; i < points.length; i++) {
-    if (remaining <= lengths[i]) {
-      const p = points[i], q = points[(i + 1) % points.length], t = remaining / lengths[i];
-      return { x: p.x + (q.x - p.x) * t, z: p.z + (q.z - p.z) * t, yaw: Math.atan2(q.x - p.x, p.z - q.z) };
-    }
-    remaining -= lengths[i];
-  }
-  return { ...points[0], yaw: 0 };
-}
