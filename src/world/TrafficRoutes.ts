@@ -46,3 +46,33 @@ trip.push({ x: -77, z: -69 }); corner(-77, -69, -77, -77, -85, -77);
 trip.push({ x: -129, z: -77 }); corner(-129, -77, -137, -77, -137, -69);
 trip.push({ x: -137, z: -9 }); corner(-137, -9, -137, -3, -143, -3);
 export const FOREST_TRAFFIC_ROUTE: readonly Point[] = trip;
+
+// Mountain passage: a two-lane loop running from the city gateway (z≈-108) south through
+// the winding Ghats corridor to the mountain base (z≈-630) and back northward.
+// Southbound (city→mountain) uses x≈-512 lane; northbound (mountain→city) x≈-508.
+// The route gently follows the passage centreline with a natural 2 m lane split.
+const passagePoints: Point[] = [];
+const PASS_X = -510;
+const PASS_Z_START = -108;
+const PASS_Z_END = -630;
+const PASS_STEPS = 54;
+// Southbound lane (x offset -2, city to mountain)
+for (let i = 0; i <= PASS_STEPS; i++) {
+  const t = i / PASS_STEPS;
+  const z = PASS_Z_START + (PASS_Z_END - PASS_Z_START) * t;
+  // Gentle sinusoidal weave mimicking mountain switchback tendency
+  const sway = Math.sin(t * Math.PI * 3.5) * 1.8;
+  passagePoints.push({ x: PASS_X - 2 + sway, z });
+}
+// Turnaround at mountain base
+passagePoints.push({ x: PASS_X, z: PASS_Z_END - 6 });
+// Northbound lane (x offset +2, mountain to city)
+for (let i = PASS_STEPS; i >= 0; i--) {
+  const t = i / PASS_STEPS;
+  const z = PASS_Z_START + (PASS_Z_END - PASS_Z_START) * t;
+  const sway = Math.sin(t * Math.PI * 3.5) * 1.8;
+  passagePoints.push({ x: PASS_X + 2 - sway, z });
+}
+// Turnaround at city gateway
+passagePoints.push({ x: PASS_X, z: PASS_Z_START + 6 });
+export const MOUNTAIN_PASSAGE_ROUTE: readonly Point[] = passagePoints;

@@ -2,7 +2,7 @@ import { onMountain } from './offroad/MountainLocation';
 import type { DriveInput } from './offroad/OffroadPhysics';
 import { BEACH_PROPS, BEACH_PALMS } from './BeachData';
 const BEACH_OBSTACLES = [...BEACH_PROPS, ...BEACH_PALMS, { x: -531, z: 215, r: .15 }, { x: -519, z: 215, r: .15 }];
-import { FOREST_TRAFFIC_ROUTE, routeLength, routePoint } from './TrafficRoutes';
+import { FOREST_TRAFFIC_ROUTE, MOUNTAIN_PASSAGE_ROUTE, routeLength, routePoint } from './TrafficRoutes';
 export { routePoint } from './TrafficRoutes';
 import { forestDistance, nearbyForestTrees } from './ForestIsland';
 import { tuning, type VehicleCustomization } from './VehicleCustomization';
@@ -24,7 +24,7 @@ import { BasketballSim, type BBSnapshot } from './Basketball';
 export type WorldAction = 'forward' | 'back' | 'left' | 'right' | 'sprint' | 'jump' | 'turnLeft' | 'turnRight' | 'handbrake' | 'signalLeft' | 'signalRight' | 'horn' | 'aim' | 'fire';
 export type View = 'third' | 'first';
 export interface Impact { speed: number; with: string; at: number }
-export interface TrafficCar { route?: 'city' | 'forest'; kind: VehicleKind; x: number; z: number; yaw: number; speed: number; offset: number; base: number; steer: number; wheelSpin: number; braking: boolean; prevYaw: number; hp: number; burning: boolean; burnT: number }
+export interface TrafficCar { route?: 'city' | 'forest' | 'mountain'; kind: VehicleKind; x: number; z: number; yaw: number; speed: number; offset: number; base: number; steer: number; wheelSpin: number; braking: boolean; prevYaw: number; hp: number; burning: boolean; burnT: number }
 export interface ParkedVehicle { customization?: VehicleCustomization; kind: VehicleKind; x: number; z: number; yaw: number; hp?: number; burning?: boolean; burnT?: number }
 /** Map dot for a far-away room member (1 Hz, no full transform). */
 export interface RemoteDot { id: string; x: number; z: number; driving: boolean }
@@ -354,6 +354,27 @@ export class Simulation {
       this.traffic.push({ route: 'forest', kind, ...pose, speed: 7, offset, base: 7 + i % 3,
         steer: 0, wheelSpin: 0, braking: false, prevYaw: pose.yaw, hp: 100, burning: false, burnT: 0 });
     });
+    // Eight mountain passage vehicles: jeeps, SUVs, pickups and trucks driving the
+    // city-to-mountain corridor. Four descend (southbound) and four climb (northbound)
+    // so the pass always has two-way traffic visible from the road and the overlook.
+    const mountainKinds: VehicleKind[] = ['jeep', 'suv', 'pickup', 'gwagen', 'hummer', 'cruiser', 'raptor', 'van'];
+    const passageLength = routeLength(MOUNTAIN_PASSAGE_ROUTE);
+    const mountainOffsets = [
+      passageLength * 0.04,
+      passageLength * 0.16,
+      passageLength * 0.28,
+      passageLength * 0.44,
+      passageLength * 0.54,
+      passageLength * 0.66,
+      passageLength * 0.78,
+      passageLength * 0.90,
+    ];
+    mountainKinds.forEach((kind, i) => {
+      const offset = mountainOffsets[i], pose = routePoint(MOUNTAIN_PASSAGE_ROUTE, offset);
+      const base = 5 + (i % 3);
+      this.traffic.push({ route: 'mountain', kind, ...pose, speed: base, offset, base,
+        steer: 0, wheelSpin: 0, braking: false, prevYaw: pose.yaw, hp: 100, burning: false, burnT: 0 });
+    });
     for (let i = 0; i < 16; i++) {
       const speed = 0.9 + rng() * 0.6;
       this.peds.push({ x: 0, z: 0, yaw: 0, route: PED_ROUTES[i], dist: rng() * 240, speed, phase: rng() * 6.28, seed: rng(), move: 1, cur: speed, scaredUntil: 0, ragdoll: false, ry: 0, rvx: 0, rvz: 0, rvy: 0, rpitch: 0, rpitchRate: 0, rollYaw: 0, hp: 100, dead: false });
@@ -429,13 +450,14 @@ export class Simulation {
     return this.table.swingPlayer('drive');
   }
   get crashed(): boolean { return this.time < this.crashUntil; }
-  private spawnReplacementTraffic(route: 'city' | 'forest' = 'city'): void {
-    const points = route === 'forest' ? FOREST_TRAFFIC_ROUTE : TRAFFIC_ROUTE;
+  private spawnReplacementTraffic(route: 'city' | 'forest' | 'mountain' = 'city'): void {
+    const points = route === 'forest' ? FOREST_TRAFFIC_ROUTE : route === 'mountain' ? MOUNTAIN_PASSAGE_ROUTE : TRAFFIC_ROUTE;
     const length = routeLength(points);
     // Keep the street alive after a steal: respawn far from the player so it never pops in.
     const kinds: VehicleKind[] = ['car', 'hatch', 'taxi', 'suv', 'sport', 'muscle', 'super', 'minivan', 'van', 'police', 'ambulance', 'boxTruck',
       'coupe', 'wagon', 'compact', 'esedan', 'crossover', 'shuttle', 'minibus', 'towtruck', 'tanker', 'rally', 'jeep', 'cruiser'];
     if (route === 'forest') kinds.splice(0, kinds.length, 'wagon', 'jeep', 'minivan', 'hatch', 'pickup', 'van');
+    if (route === 'mountain') kinds.splice(0, kinds.length, 'jeep', 'suv', 'pickup', 'gwagen', 'hummer', 'cruiser', 'raptor', 'van');
     const kind = kinds[Math.floor(((this.time * 13.7) % 1 + 1) % 1 * kinds.length) % kinds.length];
     let best = 0, bestDist = -1;
     for (let k = 0; k < 8; k++) {
@@ -1312,12 +1334,19 @@ export class Simulation {
   private syncCrowd(dt: number): void {
     for (const t of this.traffic) {
       let want = t.base;
-      const points = t.route === 'forest' ? FOREST_TRAFFIC_ROUTE : TRAFFIC_ROUTE;
+      const points = t.route === 'forest' ? FOREST_TRAFFIC_ROUTE : t.route === 'mountain' ? MOUNTAIN_PASSAGE_ROUTE : TRAFFIC_ROUTE;
       const p = routePoint(points, t.offset);
       if (t.route === 'forest') {
         const ahead = routePoint(points, t.offset + 8);
         const turn = Math.abs(Math.atan2(Math.sin(ahead.yaw - p.yaw), Math.cos(ahead.yaw - p.yaw)));
         if (turn > 0.25) want = Math.min(want, 4);
+      }
+      if (t.route === 'mountain') {
+        // Mountain road: cap speed, slow further on hairpin bends.
+        want = Math.min(want, 6);
+        const mAhead = routePoint(points, t.offset + 6);
+        const mTurn = Math.abs(Math.atan2(Math.sin(mAhead.yaw - p.yaw), Math.cos(mAhead.yaw - p.yaw)));
+        if (mTurn > 0.2) want = Math.min(want, 3);
       }
       const fx = Math.sin(p.yaw), fz = -Math.cos(p.yaw);
       const clearance = VEHICLES[t.kind].length / 2;
