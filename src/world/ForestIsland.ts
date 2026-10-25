@@ -1,3 +1,4 @@
+import { onMountain, onMountainPassage, mountainClearing } from './offroad/MountainLocation';
 import { beachClearing, beachDistance, beachHeight, onBeachRoad } from './BeachData';
 /** One deterministic source for road rendering, traction, navigation and tree clearance. */
 export const FOREST = { x: -510, z: 0, rx: 230, rz: 170, roadHalf: 6, start: -670, end: -150 };
@@ -20,10 +21,13 @@ for (const path of FOREST_ROAD_PATHS) for (let i = 1; i < path.length; i++) {
   }
 }
 export function forestDistance(x: number, z: number): number {
+  if (onMountain(x,z)) return 10000;
+  const passage = onMountainPassage(x,z,10) ? 10-Math.abs(x+510) : -10000;
   const island = (1 - Math.hypot((x - FOREST.x) / FOREST.rx, z / FOREST.rz)) * 170;
-  return Math.max(island, beachDistance(x, z), Math.min(x + 350, -135 - x, 8 - Math.abs(z)));
+  return Math.max(passage, island, beachDistance(x, z), Math.min(x + 350, -135 - x, 8 - Math.abs(z)));
 }
 export function onForestRoad(x: number, z: number, half = FOREST.roadHalf): boolean {
+  if (onMountainPassage(x,z,half)) return true;
   if (onBeachRoad(x, z, half)) return true;
   const segments = roadCells.get(`${Math.floor(x / 24)}:${Math.floor(z / 24)}`);
   if (!segments) return false;
@@ -41,7 +45,7 @@ export const FOREST_TREES: { x: number; z: number; height: number; radius: numbe
 const cells = new Map<string, typeof FOREST_TREES>();
 for (let x = -732; x < -285; x += 5.5) for (let z = -164; z < 164; z += 5.5) {
   const tx = x + random() * 3.5, tz = z + random() * 3.5;
-  if (beachClearing(tx, tz) || forestDistance(tx, tz) < 7 || onForestRoad(tx, tz, 8.5)) continue;
+  if (mountainClearing(tx,tz) || beachClearing(tx, tz) || forestDistance(tx, tz) < 7 || onForestRoad(tx, tz, 8.5)) continue;
   const tree = { x: tx, z: tz, height: 14 + random() * 13, radius: 0.35 + random() * 0.25 };
   FOREST_TREES.push(tree);
   const key = `${Math.floor(tx / 16)}:${Math.floor(tz / 16)}`;
@@ -58,3 +62,4 @@ for (let cx = -48; cx <= -16; cx++) for (let cz = -12; cz <= 12; cz++) {
 export function nearbyForestTrees(x: number, z: number): readonly (typeof FOREST_TREES)[number][] {
   return neighborhoods.get(`${Math.floor(x / 16)}:${Math.floor(z / 16)}`) ?? empty;
 }
+

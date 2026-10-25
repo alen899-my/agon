@@ -1,3 +1,5 @@
+import { MOUNTAIN_ACCESS, mountainWorld } from '../world/offroad/MountainLocation';
+import { trailX, JUNCTION_Z } from '../world/offroad/Terrain';
 import { BEACH_ROAD, BEACH_COAST_ROAD } from '../world/BeachData';
 import { FOREST, FOREST_ROAD_PATHS } from '../world/ForestIsland';
 import { useEffect, useRef, useState } from 'react';
@@ -89,6 +91,7 @@ export function MapCanvas({ state, mini = false, view = { x: 360, z: 0, scale: 0
       ctx.beginPath(); [{ x, z }, { x: x + w, z }, { x: x + w, z: z + h }, { x, z: z + h }].forEach((p, i) => { const s = project(p); if (!i) ctx.moveTo(s.x, s.y); else ctx.lineTo(s.x, s.y); });
       ctx.closePath(); ctx.fillStyle = color; ctx.fill();
     };
+    rect(-2500, -6500, 4000, 5988, '#384637');
     rect(-165, -165, 330, 330, '#252a2c');
     ctx.beginPath();
     for (let i = 0; i <= 96; i++) {
@@ -105,9 +108,11 @@ export function MapCanvas({ state, mini = false, view = { x: 360, z: 0, scale: 0
     rect(GARAGE.x - GARAGE.w / 2, GARAGE.z - GARAGE.d / 2, GARAGE.w, GARAGE.d, '#36675b');
     (state?.buildSites ?? []).forEach(b => rect(b.x - b.w / 2, b.z - b.d / 2, b.w, b.d, b.stage === 4 ? '#4b5355' : '#796347'));
     const roads: Point[][] = ROADS.flatMap(r => [[{ x: -160, z: r }, { x: 160, z: r }], [{ x: r, z: -160 }, { x: r, z: 160 }]]);
-    roads.push(F1_ACCESS_SAMPLES, CIRCUIT_POINTS, ...FOREST_ROAD_PATHS, BEACH_ROAD, BEACH_COAST_ROAD);
+    roads.push(MOUNTAIN_ACCESS, F1_ACCESS_SAMPLES, CIRCUIT_POINTS, ...FOREST_ROAD_PATHS, BEACH_ROAD, BEACH_COAST_ROAD);
     roads.forEach(points => line(points, '#111516', Math.max(3, 19 * scale)));
     roads.forEach(points => line(points, '#a9aeae', Math.max(1.5, 13 * scale)));
+    for(const route of [0,1]) line(Array.from({length:601},(_,i)=>mountainWorld(trailX(i*10,route),i*10)), '#b2a079', Math.max(1.5,6*scale));
+    line([mountainWorld(trailX(JUNCTION_Z),JUNCTION_Z),mountainWorld(trailX(JUNCTION_Z,1),JUNCTION_Z)], '#b2a079', Math.max(1.5,6*scale));
     rect(CANAL.x0, CANAL.z0, CANAL.x1 - CANAL.x0, CANAL.z1 - CANAL.z0, '#21383f');
     rect(-BRIDGE.halfW, BRIDGE.zSGrade, BRIDGE.halfW * 2, BRIDGE.zNGrade - BRIDGE.zSGrade, '#a9aeae');
     if (raceActive) line(raceTrack === 'f1' ? CIRCUIT_POINTS : [...TRACK_POINTS, TRACK_POINTS[0]], '#f3c949', 3);
@@ -185,3 +190,4 @@ export function MapCanvas({ state, mini = false, view = { x: 360, z: 0, scale: 0
       if (event.key === 'Enter') { event.preventDefault(); onPick?.({ x: view.x, z: view.z }); }
     }} />;
 }
+

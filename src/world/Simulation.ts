@@ -1,3 +1,5 @@
+import { onMountain } from './offroad/MountainLocation';
+import type { DriveInput } from './offroad/OffroadPhysics';
 import { BEACH_PROPS, BEACH_PALMS } from './BeachData';
 const BEACH_OBSTACLES = [...BEACH_PROPS, ...BEACH_PALMS, { x: -531, z: 215, r: .15 }, { x: -519, z: 215, r: .15 }];
 import { FOREST_TRAFFIC_ROUTE, routeLength, routePoint } from './TrafficRoutes';
@@ -216,6 +218,10 @@ export class Simulation {
   car = { x: 9, z: 29, yaw: 0, speed: 0, steer: 0, wheelSpin: 0, braking: false };
   /** Bridge height: surface Y under the car (0 at grade, deckY on the span). */
   carY = 0;
+  terrainDrive?: (dt:number,input:DriveInput)=>boolean;
+  terrainFootHeight?: (x:number,z:number,y:number)=>number;
+  terrainBlocked?: (x:number,z:number,y:number)=>boolean;
+  get cameraAutoFollow(): boolean { return this.time > this.lookUntil; }
   /** Slope pitch under the car (radians, + climbing) for the body tilt. */
   carPitch = 0;
   // --- GTA combat: health, arsenal, wrecks ---
@@ -249,6 +255,9 @@ export class Simulation {
   /** Every parked car in the world is stealable. Includes your previously driven cars.
    *  Slots mirror Map PARKED_CARS + RACE_SHOW_CARS + MEETUP_CARS (all clear of driving lines). */
   parked: ParkedVehicle[] = [
+    {kind:'gypsy',x:-521,z:-650,yaw:0},
+    {kind:'thar',x:-521,z:-659,yaw:0},
+    {kind:'pajero',x:-521,z:-668,yaw:0},
     { kind: 'van', x: -14, z: -38, yaw: 0 },
     { kind: 'car', x: 14, z: -54, yaw: 0 },
     { kind: 'car', x: 55, z: 16, yaw: 0 },
@@ -962,7 +971,7 @@ export class Simulation {
       this.driving = true; this.x = this.car.x; this.z = this.car.z; this.y = this.vy = 0;
       this.yaw = this.car.yaw; this.pitch = 0.12;
       // Parked + traffic targets sit at grade; your own ride keeps its height.
-      if (target.type !== 'player') { this.carY = 0; this.carPitch = 0; this.y = 0; }
+      if (target.type !== 'player') { this.carY = Math.max(0,groundHeight(this.car.x,this.car.z)); this.carPitch = 0; this.y = this.carY; }
       else this.y = this.carY;
       this.boost = 100; this.boosting = false; this.boostDelay = 0;
       this.transition = 0.35;
@@ -998,6 +1007,7 @@ export class Simulation {
   }
 
   private contact(body: Body, ignore?: TrafficCar, includePlayer = false, y = 0, mired = false): (Contact & { label: string }) | null {
+    if (onMountain(body.x,body.z)) return null;
     if (body.x < -150) {
       const margin = Math.hypot(body.halfWidth, body.halfLength);
       const clearance = forestDistance(body.x, body.z);
@@ -1153,6 +1163,7 @@ export class Simulation {
     return null;
   }
   private walkBlocked(x: number, z: number, y = this.y): boolean {
+    if (onMountain(x,z)) return !!this.terrainBlocked?.(x,z,y) || !!circleContact(vehicleBody(this.car.x,this.car.z,this.car.yaw,this.vehicleKind),x,z,.48) || this.parked.some(p=>!!circleContact(vehicleBody(p.x,p.z,p.yaw,p.kind),x,z,.48));
     if (x < -150) return forestDistance(x, z) < 0.5 ||
       BEACH_OBSTACLES.some(p => Math.hypot(x - p.x, z - p.z) < p.r + .48) ||
       nearbyForestTrees(x, z).some(t => Math.hypot(x - t.x, z - t.z) < t.radius + 0.48) ||
@@ -1497,7 +1508,8 @@ export class Simulation {
     const forward = clamp(Number(this.held('forward')) - Number(this.held('back')) - this.stick.y, -1, 1);
     const side = clamp(Number(this.held('right')) - Number(this.held('left')) + this.stick.x, -1, 1);
     if (this.impact && this.time - this.impact.at > 1.4) this.impact = null;
-    if (this.driving) {
+    const terrainDriving=this.driving && !!this.terrainDrive?.(dt,{throttle:forward,steer:side,brake:this.held('handbrake')||this.held('jump')});
+    if (this.driving && !terrainDriving) {
       const baseSpec = VEHICLES[this.vehicleKind];
       const upgrades = tuning(this.vehicleBuilds[this.vehicleKind]);
       const spec = { ...baseSpec, topSpeed: baseSpec.topSpeed * upgrades.speed, acceleration: baseSpec.acceleration * upgrades.acceleration, grip: baseSpec.grip * upgrades.grip };
@@ -1611,7 +1623,7 @@ export class Simulation {
       else this.blinker = 0;
       if (this.view === 'first') this.yaw += this.car.yaw - oldYaw;
       else if (this.time > this.lookUntil) this.yaw += Math.atan2(Math.sin(this.car.yaw - this.yaw), Math.cos(this.car.yaw - this.yaw)) * dt * 2;
-    } else {
+    } else if (!this.driving) {
       this.frontDistance = 999; this.frontBlocked = false; this.skidding = false;
       this.blinker = 0; this.blinkerManual = false;
       this.boosting = false;
@@ -1643,12 +1655,13 @@ export class Simulation {
       }
       // On foot the canal is a wall and ramps are walkable (1m step-up limit).
       // Mired starts (teleport only) may always step back to dry land.
-      const groundHere = Math.max(0, groundHeight(this.x, this.z, this.y));
-      const inDrink = groundHeight(this.x, this.z, this.y) < 0;
-      const grounded = this.y <= groundHere + 0.02;
+      const footGround=(x:number,z:number,y:number)=>onMountain(x,z)&&this.terrainFootHeight ? this.terrainFootHeight(x,z,y) : groundHeight(x,z,y);
+      const groundHere = Math.max(0, footGround(this.x, this.z, this.y));
+      const inDrink = footGround(this.x, this.z, this.y) < 0;
+      const grounded = this.y <= groundHere + 0.10 && this.vy <= 0;
       const footBlocked = (px: number, pz: number): boolean => {
-        if (!inDrink && groundHeight(px, pz, this.y) < 0) return true;
-        if (groundHeight(px, pz, this.y) - this.y > 1.0) return true;
+        if (!inDrink && footGround(px, pz, this.y) < 0) return true;
+        if (footGround(px, pz, this.y) - this.y > 1.0) return true;
         return this.walkBlocked(px, pz);
       };
       const length = Math.max(1, Math.hypot(forward, side));
@@ -1669,8 +1682,9 @@ export class Simulation {
       if (!intersects(x, this.z, 0.48) && !blocks(x, this.z)) this.x = x; else this.pvx = 0;
       if (!intersects(this.x, z, 0.48) && !blocks(this.x, z)) this.z = z; else this.pvz = 0;
       // Ramps carry the feet up; walking off the deck edge means falling.
-      const groundNow = Math.max(0, groundHeight(this.x, this.z, this.y));
+      const groundNow = Math.max(0, footGround(this.x, this.z, this.y));
       if (this.y < groundNow && groundNow - this.y <= 1.0) { this.y = groundNow; this.vy = 0; }
+      if(onMountain(this.x,this.z) && grounded && !this.jumpPressed && groundNow < this.y && this.y-groundNow < .4) { this.y=groundNow; this.vy=0; }
       // Soft ped push so crowds part around you.
       for (const ped of this.peds) {
         if (circleHit(this.x, this.z, 0.4, ped.x, ped.z, 0.5)) {
@@ -1692,7 +1706,7 @@ export class Simulation {
       this.stride += speed2d * dt * 2.1;
       this.pace = speed2d;
       // 5) Jump + gravity, with a landing dip scaled by fall speed.
-      const ground = Math.max(0, groundHeight(this.x, this.z, this.y));
+      const ground = Math.max(0, footGround(this.x, this.z, this.y));
       if (this.jumpPressed && grounded) this.vy = 5.4;
       const fallVy = this.vy;
       this.vy -= 17 * dt; this.y = Math.max(ground, this.y + this.vy * dt);
@@ -1719,4 +1733,5 @@ export class Simulation {
     for (const place of PLACES) if (Math.hypot(this.x - place.x, this.z - place.z) < 14) this.discovered.add(place.id);
   }
 }
+
 

@@ -155,3 +155,11 @@ The included Playwright configuration uses an installed **Microsoft Edge** brows
 Phone emulation verifies layout and input logic; real iOS/Android hardware testing and frame-rate profiling are still needed before release. There is no universal 60 fps guarantee.
 
 Browser references: [orientation locking](https://developer.mozilla.org/en-US/docs/Web/API/ScreenOrientation/lock) and [multi-touch Pointer Events](https://developer.mozilla.org/en-US/docs/Web/API/Pointer_events/Multi-touch_interaction).
+
+### Ghats mountain location
+
+The mountain trails are part of the existing world scene. Drive across the west bridge to Evergreen Island, follow Darkwood Loop to its northern point, then take the signed north passage across the sea bridge. Gypsy, Thar and Pajero are parked beside the mountain entrance and use the normal E interaction, N vehicle cycling, garage and factory rendering. The existing map lists **Ghats Mountain Trails**.
+
+The city HUD and cameras are unchanged. Mountain driving hands off to Cannon-es rigid-body collision and independent raycast suspension, then returns to the road controller when leaving. WASD/arrows and Space retain their existing meanings; while driving in the mountains, L selects low range, F toggles four-wheel drive, K toggles differential locking and R recovers the vehicle. These controls add no screen overlays.
+
+`src/world/offroad/` owns deterministic heightmaps, surface traction, streamed terrain/colliders and the adapter to the existing simulation. Visual vehicle definitions live in `Vehicles.ts` and `VehicleDesigns.ts` and are built by `VehicleFactory.ts` / `DetailedVehicleModel.ts`. The procedural models and mechanical configurations are production-inspired approximations, not manufacturer-certified simulations or imported licensed assets. Mountain physics currently runs locally; the existing multiplayer protocol does not replicate wheel articulation or full chassis orientation.

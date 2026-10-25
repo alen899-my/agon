@@ -1,3 +1,5 @@
+import { onMountain, onMountainPassage, mountainLocal } from './offroad/MountainLocation';
+import { height as mountainHeight, trailDistance } from './offroad/Terrain';
 import { forestHeight, onForestRoad } from './ForestIsland';
 export { BUILD_LOTS } from '../../server/src/agents/livingWorld';
 import { VEHICLES, VEHICLE_KINDS, type VehicleKind } from './Vehicles';
@@ -32,12 +34,15 @@ export const ROAD_HALF = 8.5;
 export const RACE_CLEARANCE = 11;
 /** True when (x,z) sits on any road band (centerlines ROADS, half-width half). */
 export function onRoad(x: number, z: number, half = ROAD_HALF): boolean {
+  if (onMountain(x,z)) { const p=mountainLocal(x,z); return trailDistance(p.x,p.z)<half; }
+  if (onMountainPassage(x,z,half)) return true;
   if (x < -150) return onForestRoad(x, z, half);
   if (onF1Access(x, z, half)) return true;
   if (x > LIMIT) return onF1Track(x, z);
   return ROADS.some((line) => Math.abs(x - line) < half || Math.abs(z - line) < half);
 }
 export const PLACES: Place[] = [
+  { id: 'ghats', name: 'Ghats Mountain Trails', category: 'MOUNTAINS', x: -510, z: -640, description: 'Take the north passage from Darkwood Loop. Cross the sea bridge to the mountain trails, muddy fords and basalt climbs.' },
   { id: 'beach', name: 'Sunset Beach', category: 'BEACH', x: -510, z: 182, description: 'Take the south exit from Darkwood Loop to the coastal drive. Waves, loungers, umbrellas and beach volleyball beside the sea.' },
   { id: 'forest', name: 'Evergreen Island', category: 'FOREST', x: -350, z: 0, description: 'Cross the west sea bridge to Darkwood Loop: a continuous two-lane circuit beneath dense, looming forest.' },
   { id: 'garage', name: 'Apex Motor Works', category: 'GARAGE', x: -118, z: -14, description: 'Drive into the west workshop. Paint, parts, performance and sound. Save your build for solo and servers.' },
@@ -194,6 +199,8 @@ function bridgeHeightAt(x: number, z: number): number | null {
  *  feet strolling the promenade below never snap up onto the span.
  *  The F1 circuit east of the city reports its own spline elevation. */
 export function groundHeight(x: number, z: number, y = 0): number {
+  if (onMountain(x,z)) { const p=mountainLocal(x,z); return mountainHeight(p.x,p.z); }
+  if (onMountainPassage(x,z,10)) return 0;
   if (x < -160) return forestHeight(x, z);
   const access = f1AccessProgress(x, z);
   if (access.distance <= 10.5) return access.height;
@@ -320,3 +327,4 @@ export function intersects(x: number, z: number, radius: number, boxes: readonly
 export function seeded(seed: number): () => number {
   return () => { seed = (Math.imul(seed, 1664525) + 1013904223) | 0; return (seed >>> 0) / 4294967296; };
 }
+

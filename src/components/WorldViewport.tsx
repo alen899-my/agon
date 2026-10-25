@@ -64,6 +64,7 @@ export function WorldViewport({ engineRef, onSnapshot, onMap, theme, weather, se
           if (engine.simulation.driving) hint('EXIT VEHICLE TO ARM UP');
           else engine.cycleGun();
         }
+        if (engine.mountains.active && ['KeyR','KeyL','KeyF','KeyK'].includes(event.code)) { if(event.code==='KeyR')engine.mountains.recover(); else engine.mountains.toggle(event.code==='KeyL'?'low':event.code==='KeyF'?'four':'locked'); return; }
         if (event.code === 'KeyR') { if (engine.simulation.mode === 'table') engine.rematch(); else if (engine.simulation.mode === 'basket') engine.resetBasket(); else engine.reloadGun(); }
         if (event.code.startsWith('Digit')) {
           const n = Number(event.code.slice(5));
@@ -135,3 +136,4 @@ export function WorldViewport({ engineRef, onSnapshot, onMap, theme, weather, se
     
     {error && <div className="world-error" role="alert"><h2>Unable to render the map</h2><p>{error}</p><button className="primary-button" onClick={() => location.reload()}>RELOAD</button></div>}</>;
 }
+

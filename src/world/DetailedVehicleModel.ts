@@ -1,3 +1,4 @@
+import { addIndianOffroadBody } from './IndianOffroadBody';
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import type { KitLike, Model } from './VehicleFactory';
@@ -152,7 +153,7 @@ export function buildDetailedVehicleModel(_kit: KitLike, kind: DetailedKind): Mo
   }, 28, 20);
   for (const upper of [false, true]) p.tube('trim', Array.from({ length: 20 }, (_, i) => upper ? roofPoint(i / 19, 0) : glassBase(cf, i / 19)), 0.010);
   if (!open) {
-    p.surface('roof', roofPoint, 28, 32);
+    p.surface(kind === 'gypsy' || kind === 'thar' ? 'trim' : 'roof', roofPoint, 28, 32);
     p.surface('interior', (u, v) => roofPoint(u, v).add(V(0, -0.026, 0)), 24, 24, true);
     p.surface('glass', (u, v) => roofPoint(u, 1).lerp(glassBase(cr, u), v), 28, 20);
     for (const upper of [false, true]) p.tube('trim', Array.from({ length: 20 }, (_, i) => upper ? roofPoint(i / 19, 1) : glassBase(cr, i / 19)), 0.010);
@@ -347,6 +348,22 @@ export function buildDetailedVehicleModel(_kit: KitLike, kind: DetailedKind): Mo
   }
   if (kind === 'classic') for (const front of [true, false]) p.tube('alloy', [V(-W * 0.39, ground + 0.19, front ? -half : half), V(0, ground + 0.16, front ? -half - 0.04 : half + 0.04), V(W * 0.39, ground + 0.19, front ? -half : half)], 0.022);
 
+  if (kind === 'gypsy' || kind === 'thar' || kind === 'pajero') {
+    // Authored expedition equipment uses the same batched panel factory as the road fleet.
+    for (const side of [-1, 1]) {
+      p.tube('rubber', [V(side*(hw+.015),ground+.1,axles[0]+.45),V(side*(hw+.015),ground+.1,axles[1]-.45)], .055);
+      for (const axle of axles) {
+        p.box('rubber',side*(hw-.07),wy-.05,axle+WR+.06,.2,.38,.035);
+        p.tube('alloy',[V(side*(hw-.23),wy-.17,axle),V(side*(hw-.29),wy+.27,axle+.08)],.028);
+      }
+      if(kind!=='pajero') for(const z of [cf+.12,cf+.32]) p.box('alloy',side*(baseHW+.02),d.belt-.12,z,.028,.055,.075);
+    }
+    // Gypsy horizontal grille and Thar upright slots are separate factory profiles.
+    if(kind==='gypsy') for(let i=0;i<3;i++) p.box('alloy',0,d.nose-.19+i*.065,-half-.012,W*.4,.019,.018);
+    if(kind==='thar') p.tube('rubber',[V(hw*.92,d.belt+.1,cf),V(hw*.92,d.roof-.05,rf),V(hw*.92,d.roof+.06,rf+.14)],.045);
+    if(kind==='pajero') for(const side of [-1,1]) p.box('alloy',side*hw*.35,d.nose-.25,-half-.02,.17,.085,.025);
+  }
+  addIndianOffroadBody(p,kind,L,W,d.roof,axles,WR);
   addWorkingVehicleEquipment(p, kind, d, { L, W, cf, rf, rr, cr, ground, axles, wy, arch });
 
   const wheels = {} as Model['wheels'];
@@ -397,3 +414,4 @@ export function buildDetailedVehicleModel(_kit: KitLike, kind: DetailedKind): Mo
       authoredDoors.forEach(door => door.parts.forEach(g => g.dispose())); Object.values(materials).forEach(m => m.dispose()); },
   };
 }
+

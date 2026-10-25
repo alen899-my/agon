@@ -132,5 +132,22 @@ export function buildForestIsland(scene: THREE.Scene, kit: AssetKit): void {
   }
   kit.sign(scene, 'EVERGREEN ISLAND', -210, 4.4, -8, 14, Math.PI / 2);
   kit.sign(scene, 'DARKWOOD LOOP', -346, 3.5, -9, 10, Math.PI / 2);
+  // The north junction remains open, exactly like the forest-to-beach connection.
+  for (let z=-114; z>-640; z-=6) {
+    kit.stamp('box','pavement',-510,-.12,z,18,.2,6.15);
+    kit.stamp('box','road',-510,-.015,z,14,.06,6.15);
+    if(Math.round(-z/6)%3!==0)kit.stamp('box','white',-510,.023,z,.14,.012,4);
+    for(const side of [-1,1]) {
+      kit.stamp('box','white',-510+side*6.5,.023,z,.12,.012,6.15);
+      if(z<-165&&z>-500) {
+        kit.stamp('box','metal',-510+side*8.5,.8,z,.15,.3,6.15);
+        kit.stamp('box','metal',-510+side*8.5,.4,z,.14,.8,.14);
+      }
+    }
+    if(z<-170&&z>-500&&Math.round(-z/6)%6===0)kit.stamp('box','wall2',-510,-3,z,15,6,1);
+  }
+  kit.sign(scene,'GHATS MOUNTAIN TRAILS',-521,3.5,-123,13,0);
+  kit.sign(scene,'LOW RANGE / ROCKY CLIMBS',-521,3.5,-626,13,0);
   kit.flush(scene);
 }
+

@@ -66,6 +66,7 @@ const SIL = {
 type SilName = keyof typeof SIL;
 
 const STYLE: Record<VehicleKind, SilName> = {
+  gypsy: 'boxy', thar: 'boxy', pajero: 'suv',
   nascar: 'coupe',
   f1: 'mid',
   car: 'sedan', hatch: 'hatch', taxi: 'sedan', police: 'sedan', sport: 'fast', muscle: 'muscle', super: 'mid', convertible: 'roadster',
@@ -921,7 +922,9 @@ export function buildVehicle(kit: KitLike, kind: VehicleKind = 'car', variant = 
 
   const WR = model.WR;
   // Panels and calipers were authored around wheel centres at WR + 0.08.
-  body.position.y = -0.16;
+  const trailLift = kind === 'gypsy' ? .10 : kind === 'thar' || kind === 'pajero' ? .12 : 0;
+  group.userData.trailLift = trailLift;
+  body.position.y = -0.16 + trailLift;
   const vehicle: VehicleParts = { group, body, glazing, steeringWheel, eye: model.eye.clone(), spins, frontSteer, doors, wipers, brakeMat, headMat, blinkerMat, spin: 0,
     setOccupancy: (occupied, cockpit = false) => { driver.visible = occupied && !cockpit; },
     update: (speed, steer, dt, braking, bodyTilt, blinker = 0, time = 0, wiper = 0) => {
@@ -940,7 +943,8 @@ export function buildVehicle(kit: KitLike, kind: VehicleKind = 'car', variant = 
       group.rotation.x = bodyTilt?.pitch ?? 0;
       body.rotation.x = 0;
       body.rotation.z = THREE.MathUtils.clamp(bodyTilt?.roll ?? 0, -0.012, 0.012);
-      body.position.y = -0.16 + (Number(group.userData.rideHeight) || 0);
+      body.position.y = -0.16 + trailLift + (Number(group.userData.rideHeight) || 0);
     } };
   return vehicle;
 }
+

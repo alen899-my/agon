@@ -36,6 +36,9 @@ const truck: VehicleDesign = { ...van, family: 'truck', roof: 2.50, belt: 1.28, 
  * Game footprints/handling remain in Vehicles.ts; these are render proportions.
  */
 export const VEHICLE_DESIGNS: Record<DetailedKind, VehicleDesign> = {
+  gypsy: { ...suv, family:'boxy', roof:1.845, belt:1.00, nose:.88, tail:1.0, cowl:.34, roofFront:.355, roofRear:.94, rearGlass:.98, roofWidth:.94, waist:1, wheel:.35, tire:.21, rim:.56, axleFront:.19, axleRear:.78227, lights:'round', grille:'wide', spokes:8, spare:true, fourDoor:false },
+  thar: { ...suv, family:'boxy', roof:1.855, belt:1.14, nose:1.08, tail:1.12, cowl:.35, roofFront:.39, roofRear:.93, rearGlass:.97, roofWidth:.87, waist:.94, wheel:.39, tire:.27, rim:.58, axleFront:.18, axleRear:.7948, lights:'round', grille:'slots', spokes:5, spare:true, fourDoor:false },
+  pajero: { ...suv, roof:1.90, belt:1.15, nose:1.02, tail:1.14, cowl:.29, roofFront:.365, roofRear:.93, rearGlass:.97, roofWidth:.88, waist:.98, wheel:.38, tire:.265, rim:.62, axleFront:.20, axleRear:.76735, lights:'rect', grille:'wide', spokes:6, spare:true, rack:true, chrome:true, fourDoor:true },
   // Sports cars first: rear-engine arches, pony-car bonnet, wedges and open roadsters.
   sport: { ...coupe, lights: 'oval', grille: 'wide', roofFront: 0.43, roofRear: 0.62, rearGlass: 0.89, waist: 0.91, spokes: 10 },
   muscle: { ...coupe, family: 'notchback', cowl: 0.39, roofFront: 0.50, roofRear: 0.70, rearGlass: 0.82, roof: 1.40, belt: 0.98, nose: 0.83, tail: 0.96, lights: 'angular', scoop: true },
@@ -84,3 +87,4 @@ export const VEHICLE_DESIGNS: Record<DetailedKind, VehicleDesign> = {
   dump: { ...truck, roof: 2.57, equipment: 'dump', wheel: 0.49, tire: 0.37, rim: 0.55 },
   tanker: { ...truck, equipment: 'tank' },
 };
+

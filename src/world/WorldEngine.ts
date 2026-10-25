@@ -1,3 +1,6 @@
+import { MountainRegion } from './offroad/MountainRegion';
+import { placeGrounded } from './offroad/VehicleGrounding';
+import { onMountain } from './offroad/MountainLocation';
 import { BeachScene } from './Beach';
 import { CityVehicleLOD } from './CityVehicleLOD';
 import { buildForestIsland, createSkyEnvironment, upgradeCityMaterials } from './RealisticWorld';
@@ -323,6 +326,7 @@ export class WorldEngine {
   private readonly sceneryVisibility = new SceneryVisibility();
   private readonly cityVehicleLOD: CityVehicleLOD;
   private readonly beach: BeachScene;
+  readonly mountains: MountainRegion;
   private nextVehicleSyncAt = 0;
   private readonly liveAgentIds = new Set<string>();
   private readonly liveSiteIds = new Set<string>();
@@ -451,6 +455,7 @@ export class WorldEngine {
     for (const root of this.scene.children) this.prepareScenery(root);
     this.sceneryVisibility.register(this.scene);
     this.cityVehicleLOD = new CityVehicleLOD(this.scene);
+    this.mountains = new MountainRegion(this.scene,this.simulation,kind=>this.ensureFleetKind(kind));
     this.scene.traverse((obj) => {
       if ((obj as THREE.Mesh).userData?.showCarGlow) this.showCarGlows.push(obj as THREE.Mesh);
     });
@@ -573,6 +578,7 @@ export class WorldEngine {
       this.simulation.boostEnabled = this.race.phase === 'racing';
       const car = this.simulation.car;
       Object.assign(this.previousCar, { x: car.x, y: this.simulation.carY, z: car.z, yaw: car.yaw, cameraYaw: this.simulation.yaw, valid: true });
+      this.mountains.update();
       if (this.race.phase !== 'countdown') this.simulation.update(dt);
       if (this.simulation.active && this.race.phase !== 'countdown') this.updateBarrels(dt);
       // Drift rubber: lay twin skid marks while sliding, fade out over a minute.
@@ -2067,10 +2073,13 @@ export class WorldEngine {
   private forestBlend = 0;
   /** Apply the forest atmosphere only for this draw, leaving weather state intact. */
   private drawScene(): void {
+    const mountainView = onMountain(this.camera.position.x, this.camera.position.z);
+    const viewFar = mountainView ? (this.quality === 'low' ? 420 : 650) : QUALITY_VIEW[this.quality] + 40;
+    if (this.camera.far !== viewFar) { this.camera.far = viewFar; this.camera.updateProjectionMatrix(); }
     this.cityVehicleLOD.flush();
     this.beach.update(this.simulation.time, this.camera.position.x, this.camera.position.z, this.quality === 'low', this._nightFactor);
     const x = this.camera.position.x;
-    const target = THREE.MathUtils.smoothstep(-x, 275, 345) * (1 - THREE.MathUtils.smoothstep(this.camera.position.z, 120, 165));
+    const target = (1 - THREE.MathUtils.smoothstep(-this.camera.position.z, 155, 250)) * THREE.MathUtils.smoothstep(-x, 275, 345) * (1 - THREE.MathUtils.smoothstep(this.camera.position.z, 120, 165));
     this.forestBlend += (target - this.forestBlend) * 0.045;
     const blend = this.forestBlend;
     const fog = this.scene.fog instanceof THREE.Fog ? this.scene.fog : null;
@@ -2083,6 +2092,7 @@ export class WorldEngine {
       fog.near = THREE.MathUtils.lerp(near, Math.min(near, 20), blend);
       fog.far = THREE.MathUtils.lerp(far, Math.min(far, 112), blend);
     }
+    if (fog && onMountain(this.camera.position.x,this.camera.position.z)) { fog.near=100; fog.far=this.quality === 'low' ? 370 : 570; }
     if (sky) { this.savedSkyColor.copy(sky); sky.lerp(this.forestFogColor, blend); }
     this.renderer.toneMappingExposure *= 1 - blend * 0.19;
     this.ambient.intensity *= 1 - blend * 0.32;
@@ -2127,7 +2137,9 @@ export class WorldEngine {
     const gaitI = sim.driving ? 0 : sim.moveBlend * THREE.MathUtils.clamp(sim.pace / 4.6, 0, 1.2);
     const bob = gaitI > 0.02 ? Math.abs(Math.sin(sim.stride)) * 0.045 * Math.min(1, gaitI) : Math.sin(sim.time * 2.2) * 0.006;
     this.avatar.group.position.y += bob;
-    this.avatar.animate({ phase: sim.stride, intensity: gaitI, airborne: sim.y > 0.02 && !sim.driving, dip: sim.landDip, idle: sim.time });
+    const footSupport = onMountain(sim.x,sim.z) && sim.terrainFootHeight ? sim.terrainFootHeight(sim.x,sim.z,sim.y) : Math.max(0,groundHeight(sim.x,sim.z,sim.y));
+    this.avatar.animate({ phase: sim.stride, intensity: gaitI, airborne: sim.y > footSupport + .12 && !sim.driving, dip: sim.landDip, idle: sim.time });
+    if(!sim.driving && onMountain(x,z))this.avatar.group.position.y=Math.max(this.avatar.group.position.y,(sim.terrainFootHeight?.(x,z,y)??groundHeight(x,z,y))+.04);
     this.avatar.group.visible = !sim.driving && sim.view === 'third';
     // Combat guns, tracers, fires, blasts (+ gunshot/boom audio triggers).
     this.updateCombatFx(sim);
@@ -2200,6 +2212,7 @@ export class WorldEngine {
       pitch: sim.carPitch,
       roll: sim.skidding ? Math.sin(sim.time * 20) * 0.02 : -sim.car.steer * Math.min(0.05, Math.abs(sim.car.speed) * 0.003),
     }, sim.blinker, sim.time, wiper);
+    this.mountains.render(this.car);
     this.car.glazing.visible = !(sim.driving && sim.view === 'first');
     this.car.setOccupancy(sim.driving, sim.view === 'first');
     // Cockpit hides the 3D cowl blades (the screen overlay draws the sweep instead).
@@ -2287,7 +2300,7 @@ export class WorldEngine {
       if (tdx * tdx + tdz * tdz > vehCull2) { this.cityVehicleLOD.hide(vehicle); return; }
       if (!this.cityVehicleLOD.show(vehicle, p.kind, p.x, p.z, p.yaw, tdx * tdx + tdz * tdz, this.quality === 'low' ? 24 : this.quality === 'balanced' ? 38 : 60)) return;
       vehicle.group.visible = true;
-      vehicle.group.position.set(p.x, 0.08, p.z); vehicle.group.rotation.y = -p.yaw;
+      vehicle.group.position.set(p.x, Math.max(0,groundHeight(p.x,p.z)) + 0.08, p.z); vehicle.group.rotation.y = -p.yaw;
       vehicle.update(p.speed, p.steer, dt, p.braking, undefined, 0, sim.time, wiperAngle(sim.time + i * 0.53, this.intensity) * (sim.weather === 'rain' ? 1 : 0));
       vehicle.setOccupancy(true);
     });
@@ -2295,10 +2308,12 @@ export class WorldEngine {
       const p = sim.parked[i]; if (!p) { vehicle.group.visible = false; return; }
       const pdx = p.x - px, pdz = p.z - pz;
       if (pdx * pdx + pdz * pdz > vehCull2) { this.cityVehicleLOD.hide(vehicle); return; }
-      if (!this.cityVehicleLOD.show(vehicle, p.kind, p.x, p.z, p.yaw, pdx * pdx + pdz * pdz, this.quality === 'low' ? 20 : this.quality === 'balanced' ? 30 : 50)) return;
+      if (!this.cityVehicleLOD.show(vehicle, p.kind, p.x, p.z, p.yaw, pdx * pdx + pdz * pdz, onMountain(p.x,p.z) ? 10000 : this.quality === 'low' ? 20 : this.quality === 'balanced' ? 30 : 50)) return;
       vehicle.group.visible = true;
-      vehicle.group.position.set(p.x, 0.08, p.z); vehicle.group.rotation.y = -p.yaw;
+      vehicle.group.position.set(p.x, Math.max(0,groundHeight(p.x,p.z)) + 0.08, p.z); vehicle.group.rotation.y = -p.yaw;
     });
+    for (let i=0;i<this.parked.length;i++) { const p=sim.parked[i],v=this.parked[i]; if(p&&v.group.visible&&onMountain(p.x,p.z))placeGrounded(v,p.x,p.z,p.yaw,this.mountains.surfaceHeight); }
+    if (!sim.driving && onMountain(sim.car.x,sim.car.z)) placeGrounded(this.car,sim.car.x,sim.car.z,sim.car.yaw,this.mountains.surfaceHeight);
     // AI role agents (police cruisers): bodies resolve via CharacterFactory.
     this.syncAgentPeople(dt);
     this.syncAgentVehicles();
@@ -2525,11 +2540,13 @@ export class WorldEngine {
         this._aimScreenPos.x = 0.5; this._aimScreenPos.y = 0.5;
       }
     }
-    this.sun.position.set(x + 35, 65, z + 25); this.sun.target.position.set(x, 0, z); this.sun.target.updateMatrixWorld();
+    const lightGround = onMountain(x,z) ? Math.max(0, groundHeight(x,z)) : 0;
+    this.sun.position.set(x + 35, lightGround + 65, z + 25); this.sun.target.position.set(x, lightGround, z); this.sun.target.updateMatrixWorld();
     this.drawScene();
   };
   private refreshCharacterLook = () => { applyCharacterLook(this.avatar, readCharacterLook()); };
   destroy(): void {
+    this.mountains.dispose();
     window.removeEventListener('agon:character', this.refreshCharacterLook);
     clearCharacterLook(this.avatar);
     this.agents.dispose();
@@ -2561,3 +2578,4 @@ export class WorldEngine {
     this.scene.clear();
   }
 }
+
